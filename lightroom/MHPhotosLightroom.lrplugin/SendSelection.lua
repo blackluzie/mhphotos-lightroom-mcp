@@ -80,8 +80,16 @@ LrTasks.startAsyncTask(function()
             LrDialogs.message("MHPhotos", "Select at least one photo first.", "warning")
             return
         end
+        if #selected > MAX_PHOTOS then
+            LrDialogs.message(
+                "MHPhotos",
+                "More than 5 photos are selected. Please select at most 5 photos and retry.",
+                "warning"
+            )
+            return
+        end
         local photos = {}
-        for i = 1, math.min(#selected, MAX_PHOTOS) do
+        for i = 1, #selected do
             local photo = selected[i]
             photos[#photos + 1] = {
                 fileName = value(photo, "fileName"),
