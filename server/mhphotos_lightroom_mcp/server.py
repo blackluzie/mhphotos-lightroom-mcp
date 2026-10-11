@@ -21,6 +21,12 @@ def connection_status() -> dict[str, str | bool]:
         }
 
     result = read_status(BridgeConfig(token=token))
+    if result.get("reason") == "unauthorized":
+        return {
+            "connected": False,
+            "mode": "prototype",
+            "message": "Local bridge rejected the token. Check bridge configuration.",
+        }
     if not result.get("bridge_running"):
         return {
             "connected": False,
