@@ -1,7 +1,6 @@
 from unittest.mock import patch
 
 import pytest
-
 from mhphotos_lightroom_mcp.bridge import BridgeConfig, read_status
 
 
