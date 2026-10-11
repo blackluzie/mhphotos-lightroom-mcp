@@ -4,7 +4,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from mhphotos_lightroom_mcp.bridge import BridgeConfig, read_status
+from mhphotos_lightroom_mcp.bridge import BridgeConfig, read_selection, read_status
 
 mcp = FastMCP("MHPhotos Lightroom MCP")
 
@@ -32,6 +32,18 @@ def connection_status() -> dict[str, str | bool]:
         "mode": "prototype",
         "message": "Local bridge running; Lightroom Classic is not connected.",
     }
+
+
+@mcp.tool()
+def selected_photo_metadata() -> dict:
+    """Return only the last explicitly submitted selection, not live catalog data."""
+    token = os.environ.get("MHPHOTOS_BRIDGE_TOKEN", "")
+    if not token:
+        return {"photos": [], "reason": "bridge_not_configured"}
+    result = read_selection(BridgeConfig(token=token))
+    if not isinstance(result.get("photos"), list):
+        return {"photos": [], "reason": result.get("reason", "invalid_response")}
+    return {"photos": result["photos"], "source": "local_bridge_snapshot"}
 
 
 def main() -> None:
