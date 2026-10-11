@@ -27,9 +27,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _local_origin(self) -> bool:
         """Reject browser cross-origin requests, even with a leaked token."""
         origin = self.headers.get("Origin")
+        port = self.server.server_port
         return origin is None or origin in {
-            "http://127.0.0.1:8765",
-            "http://localhost:8765",
+            f"http://127.0.0.1:{port}",
+            f"http://localhost:{port}",
         }
 
     def do_GET(self) -> None:
