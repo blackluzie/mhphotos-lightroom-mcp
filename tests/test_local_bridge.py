@@ -96,6 +96,20 @@ def test_selection_requires_authentication(bridge):
     assert exc.value.code == 401
 
 
+def test_empty_photo_record_rejected(bridge):
+    with pytest.raises(HTTPError) as exc:
+        urlopen(
+            request(
+                bridge,
+                path="/v1/selection",
+                method="POST",
+                payload={"photos": [{}]},
+            ),
+            timeout=2,
+        )
+    assert exc.value.code == 400
+
+
 def test_empty_selection_rejected(bridge):
     with pytest.raises(HTTPError) as exc:
         urlopen(
