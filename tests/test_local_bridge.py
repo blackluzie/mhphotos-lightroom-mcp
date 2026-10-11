@@ -144,6 +144,21 @@ def test_invalid_submission_preserves_previous_selection(bridge):
         assert json.load(response) == original
 
 
+def test_non_json_content_type_rejected(bridge):
+    req = Request(
+        f"http://127.0.0.1:{bridge.server_port}/v1/selection",
+        data=b'{"photos":[{"fileName":"TEST.CR3"}]}',
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "text/plain",
+        },
+        method="POST",
+    )
+    with pytest.raises(HTTPError) as exc:
+        urlopen(req, timeout=2)
+    assert exc.value.code == 415
+
+
 def test_empty_photo_record_rejected(bridge):
     with pytest.raises(HTTPError) as exc:
         urlopen(
