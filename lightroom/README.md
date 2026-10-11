@@ -25,7 +25,7 @@ yet been tested inside Lightroom Classic.
 - Only `fileName`, `rating` and `pickStatus` are submitted.
 - The destination is `http://127.0.0.1:8765/v1/selection`, not a remote host.
 - The token is not written to Lightroom preferences by this plugin.
-- The bridge holds a snapshot in RAM; it does not modify catalog records.
+- The bridge holds a snapshot in RAM for at most five minutes; it does not modify catalog records.
 - No automatic background synchronization, image upload, GPS or full paths.
 - Do not expose the local listener to the LAN or Internet.
 
