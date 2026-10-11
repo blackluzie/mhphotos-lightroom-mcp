@@ -191,6 +191,22 @@ def test_same_origin_post_is_accepted(bridge):
         assert json.load(response)["accepted"] == 1
 
 
+def test_status_check_clears_expired_selection(bridge, monkeypatch):
+    payload = {"photos": [{"fileName": "STALE.CR3"}]}
+    with urlopen(
+        request(bridge, path="/v1/selection", method="POST", payload=payload),
+        timeout=2,
+    ):
+        pass
+    monkeypatch.setattr(
+        "mhphotos_lightroom_mcp.local_bridge.time.monotonic",
+        lambda: bridge.selection_updated_at + 301,
+    )
+    with urlopen(request(bridge), timeout=2) as response:
+        assert json.load(response)["selection_received"] is False
+    assert bridge.selection is None
+
+
 def test_short_token_rejected():
     with pytest.raises(ValueError):
         make_server("too-short")
