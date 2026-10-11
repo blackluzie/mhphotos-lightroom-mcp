@@ -1,27 +1,36 @@
-# Lightroom Classic plugin scaffold
+# Lightroom Classic plugin (experimental)
 
-This is an **inert, read-only starting point** for the Lightroom Classic Lua
-plugin. It does not yet communicate with the Python MCP server.
+This plugin can preview a limited selection of photo metadata and includes an
+**explicit, user-triggered** localhost transfer action. The Lua code has **not**
+yet been tested inside Lightroom Classic.
 
-## Install for development (when at the Mac)
+## Development installation on macOS
 
-1. Open Lightroom Classic > File > Plug-in Manager.
-2. Click **Add**, then choose `lightroom/MHPhotosLightroom.lrplugin`.
-3. In Lightroom Classic, use File > Plug-in Extras > **MHPhotos: Show Connection Status**
-   (the menu location may vary by Lightroom Classic version).
-4. Confirm the informational message. No Lightroom data is read or modified.
+1. Use a dedicated Lightroom Classic test catalog with sample photos.
+2. Start the Python bridge with a unique 32+ character token in the
+   `MHPHOTOS_BRIDGE_TOKEN` environment variable.
+3. In Lightroom Classic, open **File > Plug-in Manager**, click **Add**, and
+   select `lightroom/MHPhotosLightroom.lrplugin`.
+4. Find the MHPhotos commands in Lightroom's **Library > Plug-in Extras**
+   menu (the precise menu placement may vary by Lightroom version).
+5. Run **MHPhotos: Preview Selected Metadata** first.
+6. Only when ready, run **MHPhotos: Send Selected Metadata**, paste the same
+   local token and confirm the transfer.
+7. The Python MCP tool `selected_photo_metadata` reads the most recent
+   successfully submitted selection.
 
-## Security and next steps
+## Data and security boundaries
 
-- Use a **dedicated test catalog** for all first integration tests.
-- Do not expose a listener on public or LAN interfaces.
-- Never write Lightroom catalog SQLite files directly.
-- Next: implement a limited catalog metadata reader through documented Lightroom SDK
-  calls, then design an authenticated localhost exchange with the Python bridge.
-- The current Python `bridge.py` is only a **client**. A corresponding listener
-  does not exist yet.
+- At most five selected photos per submission.
+- Only `fileName`, `rating` and `pickStatus` are submitted.
+- The destination is `http://127.0.0.1:8765/v1/selection`, not a remote host.
+- The token is not written to Lightroom preferences by this plugin.
+- The bridge holds a snapshot in RAM; it does not modify catalog records.
+- No automatic background synchronization, image upload, GPS or full paths.
+- Do not expose the local listener to the LAN or Internet.
 
-## Notes
+## Validation status
 
-The Lua files must be validated inside Lightroom Classic on macOS; GitHub's
-Python CI cannot execute Lightroom's proprietary Lua SDK.
+Python unit and integration tests exercise the HTTP-to-MCP path, but the Lua
+plugin and Lightroom SDK integration require an actual Lightroom Classic
+installation on macOS. See `docs/integration-test-plan.md`.
