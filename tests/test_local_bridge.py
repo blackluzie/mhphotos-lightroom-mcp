@@ -96,6 +96,38 @@ def test_selection_requires_authentication(bridge):
     assert exc.value.code == 401
 
 
+def test_empty_selection_rejected(bridge):
+    with pytest.raises(HTTPError) as exc:
+        urlopen(
+            request(
+                bridge,
+                path="/v1/selection",
+                method="POST",
+                payload={"photos": []},
+            ),
+            timeout=2,
+        )
+    assert exc.value.code == 400
+
+
+def test_expired_selection_is_not_returned(bridge, monkeypatch):
+    payload = {"photos": [{"fileName": "OLD.CR3"}]}
+    with urlopen(
+        request(bridge, path="/v1/selection", method="POST", payload=payload),
+        timeout=2,
+    ):
+        pass
+    monkeypatch.setattr(
+        "mhphotos_lightroom_mcp.local_bridge.time.monotonic",
+        lambda: bridge.selection_updated_at + 301,
+    )
+    with pytest.raises(HTTPError) as exc:
+        urlopen(request(bridge, path="/v1/selection"), timeout=2)
+    assert exc.value.code == 404
+    with urlopen(request(bridge), timeout=2) as response:
+        assert json.load(response)["selection_received"] is False
+
+
 def test_short_token_rejected():
     with pytest.raises(ValueError):
         make_server("too-short")
