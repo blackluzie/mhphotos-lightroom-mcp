@@ -72,6 +72,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._respond(401, {"error": "unauthorized"})
         if self.path != "/v1/selection":
             return self._respond(404, {"error": "not_found"})
+        if self.headers.get_content_type() != "application/json":
+            return self._respond(415, {"error": "unsupported_media_type"})
         try:
             length = int(self.headers.get("Content-Length", "-1"))
         except ValueError:
