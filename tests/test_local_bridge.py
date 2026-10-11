@@ -96,6 +96,30 @@ def test_selection_requires_authentication(bridge):
     assert exc.value.code == 401
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"photos": [{"fileName": "IMG.CR3"}] * 6},
+        {"photos": [{"fileName": "x" * 81}]},
+        {"photos": [{"rating": True}]},
+        {"photos": [{"rating": 3.5}]},
+        {"photos": [{"fileName": ["IMG.CR3"]}]},
+    ],
+)
+def test_invalid_selection_values_rejected(bridge, payload):
+    with pytest.raises(HTTPError) as exc:
+        urlopen(
+            request(
+                bridge,
+                path="/v1/selection",
+                method="POST",
+                payload=payload,
+            ),
+            timeout=2,
+        )
+    assert exc.value.code == 400
+
+
 def test_empty_photo_record_rejected(bridge):
     with pytest.raises(HTTPError) as exc:
         urlopen(
