@@ -50,6 +50,7 @@ LrTasks.startAsyncTask(function()
     local result = LrDialogs.presentModalDialog({
         title = "MHPhotos: Send Selected Metadata",
         contents = f:column({
+            bind_to_object = props,
             spacing = f:control_spacing(),
             f:static_text({ title = "Send up to 5 selected photo metadata records to localhost only." }),
             f:password_field({
@@ -59,7 +60,6 @@ LrTasks.startAsyncTask(function()
             f:static_text({ title = "Paste the local MHPHOTOS_BRIDGE_TOKEN (not saved)." }),
         }),
         actionVerb = "Send",
-        bind_to_object = props,
     })
     if result ~= "ok" then
         return
@@ -70,9 +70,16 @@ LrTasks.startAsyncTask(function()
         return
     end
 
-    local ok, err = pcall(function()
+    local ok = pcall(function()
         local catalog = LrApplication.activeCatalog()
+        if not catalog then
+            error("No active catalog")
+        end
         local selected = catalog:getTargetPhotos()
+        if #selected == 0 then
+            LrDialogs.message("MHPhotos", "Select at least one photo first.", "warning")
+            return
+        end
         local photos = {}
         for i = 1, math.min(#selected, MAX_PHOTOS) do
             local photo = selected[i]
@@ -90,7 +97,7 @@ LrTasks.startAsyncTask(function()
                 { field = "Authorization", value = "Bearer " .. token },
             }
         )
-        if not response or not headers or headers.status ~= 200 then
+        if not response or not headers or tonumber(headers.status) ~= 200 then
             error("Local bridge did not accept the request")
         end
         LrDialogs.message(
