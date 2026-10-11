@@ -193,6 +193,21 @@ def test_non_json_content_type_rejected(bridge):
     assert exc.value.code == 415
 
 
+def test_malformed_json_rejected(bridge):
+    req = Request(
+        f"http://127.0.0.1:{bridge.server_port}/v1/selection",
+        data=b'{"photos":[',
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with pytest.raises(HTTPError) as exc:
+        urlopen(req, timeout=2)
+    assert exc.value.code == 400
+
+
 def test_empty_photo_record_rejected(bridge):
     with pytest.raises(HTTPError) as exc:
         urlopen(
