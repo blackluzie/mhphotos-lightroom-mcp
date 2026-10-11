@@ -11,10 +11,8 @@ local MAX_PHOTOS = 5
 local URL = "http://127.0.0.1:8765/v1/selection"
 
 local function value(photo, key)
-    local ok, result = pcall(function()
-        return photo:getRawMetadata(key)
-    end)
-    if not ok or result == nil then
+    local result = photo:getRawMetadata(key)
+    if result == nil then
         return ""
     end
     if type(result) ~= "string" and type(result) ~= "number" then
@@ -70,7 +68,7 @@ LrTasks.startAsyncTask(function()
         return
     end
 
-    local ok = pcall(function()
+    do
         local catalog = LrApplication.activeCatalog()
         if not catalog then
             error("No active catalog")
@@ -114,13 +112,6 @@ LrTasks.startAsyncTask(function()
             "MHPhotos",
             string.format("Sent metadata for %d selected photos.", #photos),
             "info"
-        )
-    end)
-    if not ok then
-        LrDialogs.message(
-            "MHPhotos",
-            "Could not send selection. Confirm local bridge is running and token matches.",
-            "warning"
         )
     end
 end)
