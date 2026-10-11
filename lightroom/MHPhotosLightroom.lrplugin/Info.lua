@@ -4,7 +4,11 @@ return {
     LrPluginName = "MHPhotos Lightroom MCP",
     LrInitPlugin = "Init.lua",
     LrShutdownPlugin = "Shutdown.lua",
-    LrExportMenuItems = {
+    LrLibraryMenuItems = {
+        {
+            title = "MHPhotos: Show Selection Diagnostics",
+            file = "SelectionDiagnostics.lua",
+        },
         {
             title = "MHPhotos: Show Connection Status",
             file = "Status.lua",
