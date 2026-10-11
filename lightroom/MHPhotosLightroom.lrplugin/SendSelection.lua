@@ -89,14 +89,16 @@ LrTasks.startAsyncTask(function()
             return
         end
         local photos = {}
-        for i = 1, #selected do
-            local photo = selected[i]
-            photos[#photos + 1] = {
-                fileName = value(photo, "fileName"),
-                rating = value(photo, "rating"),
-                pickStatus = value(photo, "pickStatus"),
-            }
-        end
+        catalog:withReadAccessDo(function()
+            for i = 1, #selected do
+                local photo = selected[i]
+                photos[#photos + 1] = {
+                    fileName = value(photo, "fileName"),
+                    rating = value(photo, "rating"),
+                    pickStatus = value(photo, "pickStatus"),
+                }
+            end
+        end)
         local body = encode(photos)
         local response, headers = LrHttp.post(
             URL, body,
