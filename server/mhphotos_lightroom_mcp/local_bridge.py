@@ -8,10 +8,12 @@ import hmac
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_BODY = 8192
 MAX_PHOTOS = 5
+SELECTION_TTL_SECONDS = 300
 FIELDS = {"fileName", "rating", "pickStatus"}
 
 
@@ -27,7 +29,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._respond(401, {"error": "unauthorized"})
         if self.path == "/v1/status":
             with self.server.state_lock:
-                has_selection = self.server.selection is not None
+                has_selection = self.server.selection is not None and (\n                    time.monotonic() - self.server.selection_updated_at\n                    < SELECTION_TTL_SECONDS\n                )
             return self._respond(200, {
                 "connected": False,
                 "bridge_running": True,
@@ -37,8 +39,7 @@ class _Handler(BaseHTTPRequestHandler):
             })
         if self.path == "/v1/selection":
             with self.server.state_lock:
-                selection = self.server.selection
-            if selection is None:
+                selection = self.server.selection\n                if selection is not None and (\n                    time.monotonic() - self.server.selection_updated_at\n                    >= SELECTION_TTL_SECONDS\n                ):\n                    self.server.selection = None\n                    selection = None\n            if selection is None:
                 return self._respond(404, {"error": "no_selection"})
             return self._respond(200, {"photos": selection})
         self._respond(404, {"error": "not_found"})
@@ -61,7 +62,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict) or set(payload) != {"photos"}:
             return self._respond(400, {"error": "invalid_payload"})
         photos = payload["photos"]
-        if not isinstance(photos, list) or len(photos) > MAX_PHOTOS:
+        if not isinstance(photos, list) or not 1 <= len(photos) <= MAX_PHOTOS:
             return self._respond(400, {"error": "invalid_photos"})
         for photo in photos:
             if not isinstance(photo, dict) or not set(photo).issubset(FIELDS):
@@ -73,7 +74,7 @@ class _Handler(BaseHTTPRequestHandler):
             ):
                 return self._respond(400, {"error": "invalid_values"})
         with self.server.state_lock:
-            self.server.selection = photos
+            self.server.selection = photos\n            self.server.selection_updated_at = time.monotonic()
         self._respond(200, {"accepted": len(photos)})
 
     def _respond(self, code: int, payload: dict) -> None:
@@ -97,7 +98,7 @@ def make_server(token: str, port: int = 8765) -> ThreadingHTTPServer:
         raise ValueError("Invalid port")
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     server.bridge_token = token
-    server.selection = None
+    server.selection = None\n    server.selection_updated_at = 0.0
     server.state_lock = threading.Lock()
     server.daemon_threads = True
     return server
