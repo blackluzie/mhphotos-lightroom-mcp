@@ -22,10 +22,14 @@ def bridge():
         thread.join(timeout=3)
 
 
-def request(bridge, token=TOKEN, path="/v1/status", method="GET"):
+def request(bridge, token=TOKEN, path="/v1/status", method="GET", payload=None):
+    headers = {"Authorization": f"Bearer {token}"}
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
     return Request(
         f"http://127.0.0.1:{bridge.server_port}{path}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
+        data=json.dumps(payload).encode() if payload is not None else None,
         method=method,
     )
 
@@ -50,10 +54,46 @@ def test_unknown_route_is_rejected(bridge):
     assert exc.value.code == 404
 
 
-def test_writes_are_rejected(bridge):
+def test_other_post_routes_are_rejected(bridge):
     with pytest.raises(HTTPError) as exc:
         urlopen(request(bridge, method="POST"), timeout=2)
-    assert exc.value.code == 405
+    assert exc.value.code == 404
+
+
+def test_selection_roundtrip(bridge):
+    payload = {"photos": [{"fileName": "IMG_0001.CR3", "rating": 5}]}
+    with urlopen(
+        request(bridge, path="/v1/selection", method="POST", payload=payload),
+        timeout=2,
+    ) as response:
+        assert json.load(response)["accepted"] == 1
+    with urlopen(request(bridge, path="/v1/selection"), timeout=2) as response:
+        assert json.load(response) == payload
+
+
+def test_selection_rejects_extra_fields(bridge):
+    payload = {"photos": [{"fileName": "test", "absolutePath": "/private"}]}
+    with pytest.raises(HTTPError) as exc:
+        urlopen(
+            request(bridge, path="/v1/selection", method="POST", payload=payload),
+            timeout=2,
+        )
+    assert exc.value.code == 400
+
+
+def test_selection_requires_authentication(bridge):
+    with pytest.raises(HTTPError) as exc:
+        urlopen(
+            request(
+                bridge,
+                token="wrong",
+                path="/v1/selection",
+                method="POST",
+                payload={"photos": []},
+            ),
+            timeout=2,
+        )
+    assert exc.value.code == 401
 
 
 def test_short_token_rejected():
