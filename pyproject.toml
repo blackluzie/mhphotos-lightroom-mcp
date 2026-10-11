@@ -9,7 +9,7 @@ description = "Experimental MCP bridge for Lightroom workflows"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-dependencies = ["mcp>=1.0,<3"]
+dependencies = ["mcp>=1.0,<2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.6,<1"]
