@@ -11,7 +11,7 @@ local MAX_PHOTOS = 5
 local URL = "http://127.0.0.1:8765/v1/selection"
 
 local function value(photo, key)
-    local result = photo:getRawMetadata(key)
+    local result = key == "fileName" and photo:getFormattedMetadata("fileName") or photo:getRawMetadata(key)
     if result == nil then
         return ""
     end
