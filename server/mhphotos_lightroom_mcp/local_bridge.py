@@ -38,10 +38,12 @@ class _Handler(BaseHTTPRequestHandler):
             return self._respond(401, {"error": "unauthorized"})
         if self.path == "/v1/status":
             with self.server.state_lock:
-                has_selection = self.server.selection is not None and (
+                if self.server.selection is not None and (
                     time.monotonic() - self.server.selection_updated_at
-                    < SELECTION_TTL_SECONDS
-                )
+                    >= SELECTION_TTL_SECONDS
+                ):
+                    self.server.selection = None
+                has_selection = self.server.selection is not None
             return self._respond(200, {
                 "connected": False,
                 "bridge_running": True,
