@@ -43,7 +43,7 @@ end
 
 LrTasks.startAsyncTask(function()
     local f = LrView.osFactory()
-    local props = LrBinding.makePropertyTable(_PLUGIN)
+    local props = LrBinding.makePropertyTable(f)
     props.token = ""
     local result = LrDialogs.presentModalDialog({
         title = "MHPhotos: Send Selected Metadata",
