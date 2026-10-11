@@ -33,16 +33,18 @@ LrTasks.startAsyncTask(function()
         local lines = {
             string.format("Selected: %d | Previewing: %d", #photos, count),
         }
-        for i = 1, count do
-            local photo = photos[i]
-            lines[#lines + 1] = string.format(
-                "%d. %s | Rating: %s | Flag: %s",
-                i,
-                safeValue(photo, "fileName"),
-                safeValue(photo, "rating"),
-                safeValue(photo, "pickStatus")
-            )
-        end
+        catalog:withReadAccessDo(function()
+            for i = 1, count do
+                local photo = photos[i]
+                lines[#lines + 1] = string.format(
+                    "%d. %s | Rating: %s | Flag: %s",
+                    i,
+                    safeValue(photo, "fileName"),
+                    safeValue(photo, "rating"),
+                    safeValue(photo, "pickStatus")
+                )
+            end
+        end)
         lines[#lines + 1] = "Read-only preview. No changes made."
         return table.concat(lines, "\n")
     end)
