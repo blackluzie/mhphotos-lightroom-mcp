@@ -24,6 +24,14 @@ class _Handler(BaseHTTPRequestHandler):
         supplied = self.headers.get("Authorization", "")
         return hmac.compare_digest(supplied, f"Bearer {self.server.bridge_token}")
 
+    def _local_origin(self) -> bool:
+        """Reject browser cross-origin requests, even with a leaked token."""
+        origin = self.headers.get("Origin")
+        return origin is None or origin in {
+            "http://127.0.0.1:8765",
+            "http://localhost:8765",
+        }
+
     def do_GET(self) -> None:
         if not self._authorized():
             return self._respond(401, {"error": "unauthorized"})
@@ -55,6 +63,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._respond(404, {"error": "not_found"})
 
     def do_POST(self) -> None:
+        if not self._local_origin():
+            return self._respond(403, {"error": "forbidden_origin"})
         if not self._authorized():
             return self._respond(401, {"error": "unauthorized"})
         if self.path != "/v1/selection":
