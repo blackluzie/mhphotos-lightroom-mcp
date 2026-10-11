@@ -7,12 +7,7 @@ local LrTasks = import "LrTasks"
 local MAX_PHOTOS = 5
 
 local function safeValue(photo, field)
-    local ok, value = pcall(function()
-        return photo:getRawMetadata(field)
-    end)
-    if not ok then
-        return "SDK error: " .. tostring(value):gsub("[%c]", " "):sub(1, 140)
-    end
+    local value = photo:getRawMetadata(field)
     if value == nil then
         return "nil"
     end
@@ -26,7 +21,7 @@ local function safeValue(photo, field)
 end
 
 LrTasks.startAsyncTask(function()
-    local ok, message = pcall(function()
+    local message = (function()
         local catalog = LrApplication.activeCatalog()
         if not catalog then
             return "No active catalog."
@@ -51,13 +46,5 @@ LrTasks.startAsyncTask(function()
         lines[#lines + 1] = "Read-only preview. No changes made."
         return table.concat(lines, "\n")
     end)
-    if ok then
-        LrDialogs.message("MHPhotos Metadata Preview", message, "info")
-    else
-        LrDialogs.message(
-            "MHPhotos Metadata Preview",
-            "Preview failed. No catalog changes were made.",
-            "warning"
-        )
-    end
+    LrDialogs.message("MHPhotos Metadata Preview", message, "info")
 end)
