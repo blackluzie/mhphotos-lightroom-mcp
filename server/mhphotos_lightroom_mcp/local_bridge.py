@@ -86,7 +86,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(photos, list) or not 1 <= len(photos) <= MAX_PHOTOS:
             return self._respond(400, {"error": "invalid_photos"})
         for photo in photos:
-            if not isinstance(photo, dict) or not set(photo).issubset(FIELDS):
+            if (not isinstance(photo, dict) or not photo
+                    or not set(photo).issubset(FIELDS)):
                 return self._respond(400, {"error": "invalid_fields"})
             if any(
                 not isinstance(value, (str, int)) or isinstance(value, bool)
