@@ -42,6 +42,23 @@ def test_authenticated_status_does_not_claim_lightroom_connection(bridge):
     assert data["lightroom_connected"] is False
 
 
+def test_selection_cannot_be_read_with_invalid_token(bridge):
+    payload = {"photos": [{"fileName": "PRIVATE.CR3"}]}
+    with urlopen(
+        request(bridge, path="/v1/selection", method="POST", payload=payload),
+        timeout=2,
+    ):
+        pass
+    with pytest.raises(HTTPError) as exc:
+        urlopen(
+            request(bridge, token="invalid", path="/v1/selection"),
+            timeout=2,
+        )
+    assert exc.value.code == 401
+    with urlopen(request(bridge, path="/v1/selection"), timeout=2) as response:
+        assert json.load(response) == payload
+
+
 def test_invalid_token_is_rejected(bridge):
     with pytest.raises(HTTPError) as exc:
         urlopen(request(bridge, token="wrong"), timeout=2)
