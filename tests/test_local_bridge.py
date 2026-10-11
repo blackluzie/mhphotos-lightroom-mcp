@@ -144,6 +144,23 @@ def test_invalid_submission_preserves_previous_selection(bridge):
         assert json.load(response) == original
 
 
+def test_oversized_request_body_rejected(bridge):
+    req = Request(
+        f"http://127.0.0.1:{bridge.server_port}/v1/selection",
+        data=b"x" * 8193,
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with pytest.raises(HTTPError) as exc:
+        urlopen(req, timeout=2)
+    assert exc.value.code == 413
+    with urlopen(request(bridge), timeout=2) as response:
+        assert json.load(response)["selection_received"] is False
+
+
 def test_non_json_content_type_rejected(bridge):
     req = Request(
         f"http://127.0.0.1:{bridge.server_port}/v1/selection",
