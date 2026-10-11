@@ -6,6 +6,10 @@ return {
     LrShutdownPlugin = "Shutdown.lua",
     LrLibraryMenuItems = {
         {
+            title = "MHPhotos: Send Selected Metadata",
+            file = "SendSelection.lua",
+        },
+        {
             title = "MHPhotos: Preview Selected Metadata",
             file = "MetadataPreview.lua",
         },
