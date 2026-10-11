@@ -128,6 +128,31 @@ def test_expired_selection_is_not_returned(bridge, monkeypatch):
         assert json.load(response)["selection_received"] is False
 
 
+def test_foreign_origin_is_rejected(bridge):
+    req = request(
+        bridge,
+        path="/v1/selection",
+        method="POST",
+        payload={"photos": [{"fileName": "SAMPLE.CR3"}]},
+    )
+    req.add_header("Origin", "https://untrusted.example")
+    with pytest.raises(HTTPError) as exc:
+        urlopen(req, timeout=2)
+    assert exc.value.code == 403
+
+
+def test_same_origin_post_is_accepted(bridge):
+    req = request(
+        bridge,
+        path="/v1/selection",
+        method="POST",
+        payload={"photos": [{"fileName": "SAMPLE.CR3"}]},
+    )
+    req.add_header("Origin", f"http://127.0.0.1:{bridge.server_port}")
+    with urlopen(req, timeout=2) as response:
+        assert json.load(response)["accepted"] == 1
+
+
 def test_short_token_rejected():
     with pytest.raises(ValueError):
         make_server("too-short")
