@@ -6,6 +6,10 @@ return {
     LrShutdownPlugin = "Shutdown.lua",
     LrLibraryMenuItems = {
         {
+            title = "MHPhotos: Preview Selected Metadata",
+            file = "MetadataPreview.lua",
+        },
+        {
             title = "MHPhotos: Show Selection Diagnostics",
             file = "SelectionDiagnostics.lua",
         },
