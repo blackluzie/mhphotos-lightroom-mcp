@@ -30,3 +30,15 @@ def test_status_when_bridge_is_unavailable(monkeypatch):
         result = connection_status()
     assert result["connected"] is False
     assert "unavailable" in result["message"]
+
+
+def test_status_when_token_is_rejected(monkeypatch):
+    monkeypatch.setenv("MHPHOTOS_BRIDGE_TOKEN", "wrong-token")
+    with patch(
+        "mhphotos_lightroom_mcp.server.read_status",
+        return_value={"connected": False, "reason": "unauthorized"},
+    ):
+        result = connection_status()
+    assert result["connected"] is False
+    assert "rejected the token" in result["message"]
+    assert "wrong-token" not in result["message"]
