@@ -33,6 +33,8 @@ def _get(config: BridgeConfig, path: str) -> dict:
         with urlopen(request, timeout=2) as response:
             payload = json.load(response)
     except HTTPError as exc:
+        if exc.code == 401:
+            return {"connected": False, "reason": "unauthorized"}
         if exc.code == 404 and path == "/v1/selection":
             return {"photos": [], "reason": "no_selection"}
         return {"connected": False, "reason": "bridge_unavailable"}
