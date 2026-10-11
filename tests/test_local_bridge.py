@@ -120,6 +120,30 @@ def test_invalid_selection_values_rejected(bridge, payload):
     assert exc.value.code == 400
 
 
+def test_invalid_submission_preserves_previous_selection(bridge):
+    original = {"photos": [{"fileName": "VALID.CR3", "rating": 5}]}
+    with urlopen(
+        request(bridge, path="/v1/selection", method="POST", payload=original),
+        timeout=2,
+    ):
+        pass
+
+    with pytest.raises(HTTPError) as exc:
+        urlopen(
+            request(
+                bridge,
+                path="/v1/selection",
+                method="POST",
+                payload={"photos": [{"absolutePath": "/private/secret.CR3"}]},
+            ),
+            timeout=2,
+        )
+    assert exc.value.code == 400
+
+    with urlopen(request(bridge, path="/v1/selection"), timeout=2) as response:
+        assert json.load(response) == original
+
+
 def test_empty_photo_record_rejected(bridge):
     with pytest.raises(HTTPError) as exc:
         urlopen(
