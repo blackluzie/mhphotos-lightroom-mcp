@@ -7,7 +7,7 @@ local LrTasks = import "LrTasks"
 local MAX_PHOTOS = 5
 
 local function safeValue(photo, field)
-    local value = photo:getRawMetadata(field)
+    local value = field == "fileName" and photo:getFormattedMetadata("fileName") or photo:getRawMetadata(field)
     if value == nil then
         return "nil"
     end
