@@ -6,6 +6,7 @@ local LrHttp = import "LrHttp"
 local LrTasks = import "LrTasks"
 local LrView = import "LrView"
 local LrBinding = import "LrBinding"
+local LrFunctionContext = import "LrFunctionContext"
 
 local MAX_PHOTOS = 5
 local URL = "http://127.0.0.1:8765/v1/selection"
@@ -42,8 +43,9 @@ local function encode(photos)
 end
 
 LrTasks.startAsyncTask(function()
+    LrFunctionContext.callWithContext("MHPhotosSendSelection", function(context)
     local f = LrView.osFactory()
-    local props = LrBinding.makePropertyTable(f)
+    local props = LrBinding.makePropertyTable(context)
     props.token = ""
     local result = LrDialogs.presentModalDialog({
         title = "MHPhotos: Send Selected Metadata",
@@ -114,4 +116,5 @@ LrTasks.startAsyncTask(function()
             "info"
         )
     end
+    end)
 end)
