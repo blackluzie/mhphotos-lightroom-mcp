@@ -10,8 +10,11 @@ local function safeValue(photo, field)
     local ok, value = pcall(function()
         return photo:getRawMetadata(field)
     end)
-    if not ok or value == nil then
-        return "n/a"
+    if not ok then
+        return "SDK error: " .. tostring(value):gsub("[%c]", " "):sub(1, 140)
+    end
+    if value == nil then
+        return "nil"
     end
     if type(value) ~= "string" and type(value) ~= "number" then
         return "n/a"
