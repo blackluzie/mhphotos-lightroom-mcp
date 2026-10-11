@@ -45,6 +45,6 @@ LrTasks.startAsyncTask(function()
         end)
         lines[#lines + 1] = "Read-only preview. No changes made."
         return table.concat(lines, "\n")
-    end)
+    end)()
     LrDialogs.message("MHPhotos Metadata Preview", message, "info")
 end)
