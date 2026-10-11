@@ -71,6 +71,29 @@ def test_unknown_route_is_rejected(bridge):
     assert exc.value.code == 404
 
 
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+def test_unsupported_methods_cannot_change_selection(bridge, method):
+    original = {"photos": [{"fileName": "KEEP.CR3"}]}
+    with urlopen(
+        request(bridge, path="/v1/selection", method="POST", payload=original),
+        timeout=2,
+    ):
+        pass
+    with pytest.raises(HTTPError) as exc:
+        urlopen(
+            request(
+                bridge,
+                path="/v1/selection",
+                method=method,
+                payload={"photos": [{"fileName": "REPLACE.CR3"}]},
+            ),
+            timeout=2,
+        )
+    assert exc.value.code == 501
+    with urlopen(request(bridge, path="/v1/selection"), timeout=2) as response:
+        assert json.load(response) == original
+
+
 def test_other_post_routes_are_rejected(bridge):
     with pytest.raises(HTTPError) as exc:
         urlopen(request(bridge, method="POST"), timeout=2)
