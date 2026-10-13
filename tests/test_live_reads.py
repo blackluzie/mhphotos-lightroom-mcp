@@ -438,3 +438,14 @@ def test_worker_status_is_explicit_and_catalog_writes_remain_disabled(monkeypatc
         result=connection_status()
     assert result['connected'] is True and result['mode']=='read_only_requests'
     assert result['catalog_writes'] is False
+
+
+def test_poll_is_online_in_same_coarse_clock_tick(monkeypatch):
+    # Windows monotonic clocks can return the same value to adjacent threads.
+    monkeypatch.setattr('mhphotos_lightroom_mcp.live_reads.time.monotonic',lambda:100.0)
+    queue=LiveReads(True)
+    assert not queue.online()
+    assert queue.poll() is None
+    assert queue.online()
+    queue.stop()
+    assert not queue.online()

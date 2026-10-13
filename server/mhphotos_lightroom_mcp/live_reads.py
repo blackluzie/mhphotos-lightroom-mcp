@@ -137,7 +137,7 @@ class LiveReads:
         self.last_poll = 0
 
     def online(self):
-        return self.enabled and self.last_poll > 0 and 0 < time.monotonic() - self.last_poll < JOB_TTL
+        return self.enabled and self.last_poll > 0 and 0 <= time.monotonic() - self.last_poll < JOB_TTL
 
     def expire(self):
         for identifier, job in list(self.jobs.items()):
