@@ -6,7 +6,6 @@ import json
 import os
 import plistlib
 import re
-import shutil
 import subprocess
 import sys
 import uuid
@@ -129,7 +128,7 @@ def install(source: Path, home: Path, platform: str, name: str) -> dict:
         for item in plugin_source.glob('*.lua'):
             if item.is_symlink():
                 raise ValueError('Linked plugin source refused')
-            shutil.copyfile(item, plugin / item.name)
+            write_new_private(plugin / item.name, item.read_bytes())
         # A Lua data file avoids shell launchers and secrets in the plugin.
         # json quoting is compatible for ordinary paths after slash normalization.
         executable = str(python).replace('\\', '/')

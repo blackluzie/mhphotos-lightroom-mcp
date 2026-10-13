@@ -49,7 +49,7 @@ def send_selection(payload: dict) -> dict:
         method="POST",
     )
 
-    with urllib.request.urlopen(request, timeout=5) as response:
+    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=5) as response:
         return json.load(response)
 
 

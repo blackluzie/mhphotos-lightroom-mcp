@@ -24,7 +24,7 @@ def bridge_status():
             method="GET",
         )
 
-        with urllib.request.urlopen(request, timeout=3) as response:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=3) as response:
             json.load(response)
             return "connected"
 

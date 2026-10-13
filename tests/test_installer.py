@@ -193,3 +193,30 @@ def test_windows_acl_failure_is_closed(home, monkeypatch):
     monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: subprocess.CompletedProcess([], 1))
     with pytest.raises(PermissionError):
         windows_acl(path)
+
+
+def test_local_credentials_bypass_environment_proxy(home, monkeypatch):
+    import threading
+
+    from mhphotos_lightroom_mcp import selection_sender
+    from mhphotos_lightroom_mcp.bridge import BridgeConfig, read_selection
+    from mhphotos_lightroom_mcp.local_bridge import make_server
+
+    token = ensure_bridge_token(home / '.mhphotos-lightroom-token')
+    monkeypatch.setenv('http_proxy', 'http://127.0.0.1:1')
+    monkeypatch.setenv('HTTP_PROXY', 'http://127.0.0.1:1')
+    monkeypatch.setenv('no_proxy', '')
+    monkeypatch.setenv('NO_PROXY', '')
+    server = make_server(token, port=0)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        monkeypatch.setattr(selection_sender, 'BRIDGE_URL',
+                            f'http://127.0.0.1:{server.server_port}/v1/selection')
+        photos = [{'fileName': 'PRIVATE.CR3', 'rating': '5', 'pickStatus': '0'}]
+        assert selection_sender.send_selection({'photos': photos}) == {'accepted': 1}
+        assert read_selection(BridgeConfig(token=token, port=server.server_port)) == {'photos': photos}
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=3)
