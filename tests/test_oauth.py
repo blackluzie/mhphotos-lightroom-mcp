@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from urllib.parse import parse_qs, urlsplit
 
@@ -283,10 +284,22 @@ def test_fail_closed_configuration(monkeypatch, tmp_path):
     path = tmp_path / ".config/mhphotos-lightroom/github-client-secret"
     path.parent.mkdir(parents=True, mode=0o700)
     path.write_text("synthetic-test-secret")
-    path.chmod(0o644)
-    with pytest.raises(ValueError, match="mode 600"):
-        create_http_server()
-    path.chmod(0o600)
+    if os.name == "nt":
+        import subprocess
+
+        from mhphotos_lightroom_mcp.private_files import windows_acl
+        windows_acl(path.parent, protect=True)
+        windows_acl(path, protect=True)
+        subprocess.run(["icacls.exe", str(path), "/grant", "*S-1-1-0:R"],
+                       check=True, capture_output=True)
+        with pytest.raises(PermissionError):
+            create_http_server()
+        windows_acl(path, protect=True)
+    else:
+        path.chmod(0o644)
+        with pytest.raises(ValueError, match="mode 600"):
+            create_http_server()
+        path.chmod(0o600)
     server = create_http_server()
     assert server.settings.host == "127.0.0.1"
     assert server.settings.auth.validate_token_resource is True
@@ -325,6 +338,9 @@ async def revocation():
 
 
 def test_public_clients_survive_restart(tmp_path):
+    if os.name == "nt":
+        from mhphotos_lightroom_mcp.private_files import windows_acl
+        windows_acl(tmp_path, protect=True)
     asyncio.run(persist_clients(tmp_path))
 
 

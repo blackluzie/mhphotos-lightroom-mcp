@@ -1,15 +1,16 @@
 """Send explicitly selected Lightroom metadata to the local bridge."""
 
 import json
-import os
-import stat
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from mhphotos_lightroom_mcp.desktop import read_bridge_token
-from mhphotos_lightroom_mcp.selection_transport import read_transfer, transport_directory
+from mhphotos_lightroom_mcp.selection_transport import (
+    read_transfer,
+    transport_directory,
+)
 
 BRIDGE_URL = "http://127.0.0.1:8765/v1/selection"
 MAX_PHOTOS = 5

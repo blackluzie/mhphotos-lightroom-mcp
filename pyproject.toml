@@ -9,12 +9,13 @@ description = "Experimental MCP bridge for Lightroom workflows"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-dependencies = ["mcp>=1.0,<2"]
+dependencies = ["mcp==1.30.0", "httpx>=0.28,<1"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.6,<1"]
 
 [project.scripts]
+mhphotos-lightroom-install = "mhphotos_lightroom_mcp.installer:main"
 mhphotos-lightroom-mcp = "mhphotos_lightroom_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]

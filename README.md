@@ -43,3 +43,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Contribut
 ## License
 
 MIT. Independent community project; not affiliated with or endorsed by Adobe.
+
+## Desktop installation
+
+See [secure macOS and Windows installation](docs/installation.md) for a side-by-side user installation with automatic local credentials. Installation leaves existing bridge services running; activation is explicit. Lightroom ratings remain read-only.

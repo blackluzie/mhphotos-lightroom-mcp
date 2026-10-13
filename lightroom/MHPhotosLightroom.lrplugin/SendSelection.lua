@@ -112,7 +112,7 @@ LrTasks.startAsyncTask(function()
             error("Cannot determine Lightroom documents directory")
         end
 
-        local home = LrPathUtils.parent(documents)
+        local home = LrPathUtils.getStandardFilePath("home") or LrPathUtils.parent(documents)
         if not home then
             error("Cannot determine user home directory")
         end
@@ -153,18 +153,44 @@ LrTasks.startAsyncTask(function()
             error("Could not write transfer file: " .. tostring(writeError))
         end
 
-        local launcher = LrPathUtils.child(
-            LrPathUtils.child(home, ".local"),
-            "bin/mhphotos-lightroom-send"
-        )
-
-        -- The transfer directory is private (0700).
-        -- Restrict the individual file before Python reads it.
-        local command =
-            "/bin/chmod 600 " .. shellQuote(filename)
-            .. " && /bin/test -f " .. shellQuote(filename)
-            .. " && /bin/sh " .. shellQuote(launcher)
-            .. " " .. shellQuote(filename)
+        local installationPath = LrPathUtils.child(_PLUGIN.path, "Installation.lua")
+        local command
+        if LrFileUtils.exists(installationPath) then
+            local installation = dofile(installationPath)
+            if type(installation) ~= "table" or type(installation.python) ~= "string" then
+                error("Invalid MHPhotos installation")
+            end
+            if WIN_ENV then
+                local function windowsQuote(path)
+                    if path:find('["%%!&|<>^()\r\n]') then
+                        error("Unsupported character in Windows transfer path")
+                    end
+                    return '"' .. path .. '"'
+                end
+                command = windowsQuote(installation.python)
+                    .. " -I -m mhphotos_lightroom_mcp.selection_sender "
+                    .. windowsQuote(filename)
+                -- Lightroom SDK requires enclosing the entire Windows command.
+                command = '"' .. command .. '"'
+            else
+                command = "/bin/chmod 600 " .. shellQuote(filename)
+                    .. " && " .. shellQuote(installation.python)
+                    .. " -I -m mhphotos_lightroom_mcp.selection_sender "
+                    .. shellQuote(filename)
+            end
+        else
+            -- Preserve the existing working macOS helper installation.
+            if WIN_ENV then
+                error("Please install MHPhotos for Windows first")
+            end
+            local launcher = LrPathUtils.child(
+                LrPathUtils.child(home, ".local"), "bin/mhphotos-lightroom-send"
+            )
+            command = "/bin/chmod 600 " .. shellQuote(filename)
+                .. " && /bin/test -f " .. shellQuote(filename)
+                .. " && /bin/sh " .. shellQuote(launcher)
+                .. " " .. shellQuote(filename)
+        end
 
         logger:info("Starting local helper")
         local exitCode = LrTasks.execute(command)

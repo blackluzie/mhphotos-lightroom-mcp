@@ -73,15 +73,27 @@ class Provider:
         self.clients = {}
         self.client_db = None
         if client_db:
-            fd = os.open(client_db, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-            info = os.fstat(fd)
-            os.close(fd)
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_uid != os.getuid()
-                or stat.S_IMODE(info.st_mode) != 0o600
-            ):
-                raise ValueError("Client database requires owner-only mode 600")
+            if os.name == "nt":
+                from mhphotos_lightroom_mcp.private_files import (
+                    validate_private,
+                    write_new_private,
+                )
+                database_path = Path(client_db)
+                validate_private(database_path.parent, directory=True)
+                try:
+                    write_new_private(database_path, b"")
+                except FileExistsError:
+                    validate_private(database_path)
+            else:
+                fd = os.open(client_db, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+                info = os.fstat(fd)
+                os.close(fd)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600
+                ):
+                    raise ValueError("Client database requires owner-only mode 600")
             self.client_db = sqlite3.connect(client_db)
             self.client_db.execute(
                 "CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, metadata TEXT NOT NULL)"
@@ -629,27 +641,35 @@ def create_http_server():
         ):
             raise ValueError("Only exact ChatGPT connector callback URLs are allowed")
     path = Path.home() / ".config/mhphotos-lightroom/github-client-secret"
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd) as handle:
-        info = os.fstat(handle.fileno())
+    if os.name == "nt":
+        from mhphotos_lightroom_mcp.private_files import validate_private
+        validate_private(path.parent, directory=True)
+        validate_private(path)
+        secret = path.read_text().strip()
+        if not secret:
+            raise ValueError("GitHub secret file is empty")
+    else:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd) as handle:
+            info = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+            ):
+                raise ValueError(
+                    "GitHub secret must be an owner-controlled regular file with mode 600"
+                )
+            secret = handle.read().strip()
+        if not secret:
+            raise ValueError("GitHub secret file is empty")
+        parent_info = path.parent.stat()
         if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.getuid()
-            or stat.S_IMODE(info.st_mode) != 0o600
+            parent_info.st_uid != os.getuid()
+            or stat.S_IMODE(parent_info.st_mode) != 0o700
+            or path.parent.is_symlink()
         ):
-            raise ValueError(
-                "GitHub secret must be an owner-controlled regular file with mode 600"
-            )
-        secret = handle.read().strip()
-    if not secret:
-        raise ValueError("GitHub secret file is empty")
-    parent_info = path.parent.stat()
-    if (
-        parent_info.st_uid != os.getuid()
-        or stat.S_IMODE(parent_info.st_mode) != 0o700
-        or path.parent.is_symlink()
-    ):
-        raise ValueError("OAuth config directory requires owner-only mode 700")
+            raise ValueError("OAuth config directory requires owner-only mode 700")
     provider = Provider(
         issuer, secret, redirects, path.parent / "oauth-clients.sqlite3"
     )
