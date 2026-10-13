@@ -12,6 +12,11 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from mhphotos_lightroom_mcp.collection_schema import (
+    MAX_COLLECTION_BODY,
+    MAX_COLLECTIONS,
+    validate_collections,
+)
 from mhphotos_lightroom_mcp.selection_schema import (
     FIELDS,
     MAX_BODY,
@@ -51,6 +56,8 @@ class _Handler(BaseHTTPRequestHandler):
                     "max_photos": MAX_PHOTOS,
                     "max_body_bytes": MAX_BODY,
                     "catalog_writes": False,
+                    "collection_overview": True,
+                    "max_collections": MAX_COLLECTIONS,
                 },
             )
         if self.path == "/v1/status":
@@ -67,6 +74,30 @@ class _Handler(BaseHTTPRequestHandler):
                     else None
                 )
                 count = len(self.server.selection) if has_selection else 0
+                if self.server.collections is not None and (
+                    time.monotonic() - self.server.collections_updated_at
+                    >= SELECTION_TTL_SECONDS
+                ):
+                    self.server.collections = None
+                has_collections = self.server.collections is not None
+                collection_age = (
+                    int(max(0, time.monotonic() - self.server.collections_updated_at))
+                    if self.server.collections_updated_at
+                    else None
+                )
+                collection_state = (
+                    "received"
+                    if has_collections
+                    else ("expired" if collection_age is not None else "none")
+                )
+                collection_count = (
+                    len(self.server.collections["collections"])
+                    if has_collections
+                    else 0
+                )
+                collection_truncated = (
+                    self.server.collections["truncated"] if has_collections else False
+                )
                 state = (
                     "received"
                     if has_selection
@@ -80,6 +111,15 @@ class _Handler(BaseHTTPRequestHandler):
                     "lightroom_connected": False,
                     "selection_received": has_selection,
                     "selection_state": state,
+                    "collection_state": collection_state,
+                    "collection_count": collection_count,
+                    "collection_age_seconds": collection_age,
+                    "collection_expires_in_seconds": max(
+                        0, SELECTION_TTL_SECONDS - collection_age
+                    )
+                    if collection_age is not None
+                    else 0,
+                    "collection_overview_truncated": collection_truncated,
                     "selection_count": count,
                     "selection_age_seconds": age,
                     "selection_expires_in_seconds": max(0, SELECTION_TTL_SECONDS - age)
@@ -90,6 +130,18 @@ class _Handler(BaseHTTPRequestHandler):
                     "mode": "prototype",
                 },
             )
+        if self.path == "/v1/collections":
+            with self.server.state_lock:
+                overview = self.server.collections
+                if overview is not None and (
+                    time.monotonic() - self.server.collections_updated_at
+                    >= SELECTION_TTL_SECONDS
+                ):
+                    self.server.collections = None
+                    overview = None
+            if overview is None:
+                return self._respond(404, {"error": "no_collections"})
+            return self._respond(200, overview)
         if self.path == "/v1/selection":
             with self.server.state_lock:
                 selection = self.server.selection
@@ -109,7 +161,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._respond(403, {"error": "forbidden_origin"})
         if not self._authorized():
             return self._respond(401, {"error": "unauthorized"})
-        if self.path != "/v1/selection":
+        if self.path not in {"/v1/selection", "/v1/collections"}:
             return self._respond(404, {"error": "not_found"})
         if self.headers.get_content_type() != "application/json":
             return self._respond(415, {"error": "unsupported_media_type"})
@@ -117,12 +169,22 @@ class _Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "-1"))
         except ValueError:
             return self._respond(400, {"error": "invalid_length"})
-        if not 0 <= length <= MAX_BODY:
+        limit = MAX_COLLECTION_BODY if self.path == "/v1/collections" else MAX_BODY
+        if not 0 <= length <= limit:
             return self._respond(413, {"error": "body_too_large"})
         try:
             payload = json.loads(self.rfile.read(length))
         except (ValueError, UnicodeDecodeError):
             return self._respond(400, {"error": "invalid_json"})
+        if self.path == "/v1/collections":
+            try:
+                collections = validate_collections(payload)
+            except ValueError as error:
+                return self._respond(400, {"error": str(error)})
+            with self.server.state_lock:
+                self.server.collections = payload
+                self.server.collections_updated_at = time.monotonic()
+            return self._respond(200, {"accepted": len(collections)})
         try:
             photos = validate_selection(payload)
         except ValueError as error:
@@ -153,6 +215,8 @@ def make_server(token: str, port: int = 8765) -> ThreadingHTTPServer:
         raise ValueError("Invalid port")
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     server.bridge_token = token
+    server.collections = None
+    server.collections_updated_at = 0.0
     server.selection = None
     server.selection_updated_at = 0.0
     server.state_lock = threading.Lock()

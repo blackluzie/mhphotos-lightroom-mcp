@@ -438,7 +438,8 @@ def attach_routes(mcp, provider):
         return HTMLResponse(
             '<!doctype html><html lang="de"><meta charset="utf-8"><title>MHPhotos Freigabe</title>'
             "<h1>Lightroom-Lesezugriff freigeben</h1><p>Der Client darf Verbindungsstatus und Metadaten "
-            "der ausdrücklich übermittelten Fotoauswahl lesen.</p><p>Rückleitung: "
+            "der ausdrücklich übermittelten Fotoauswahl und Sammlungsübersichten lesen. "
+            "Bilddateien, Sammlungsregeln und Katalogänderungen sind nicht freigegeben.</p><p>Rückleitung: "
             + target
             + "</p>"
             '<form method="post" action="/auth/consent"><input type="hidden" name="state" value="'

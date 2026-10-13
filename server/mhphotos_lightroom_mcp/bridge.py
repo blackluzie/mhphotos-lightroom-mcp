@@ -38,6 +38,8 @@ def _get(config: BridgeConfig, path: str) -> dict:
     except HTTPError as exc:
         if exc.code == 401:
             return {"connected": False, "reason": "unauthorized"}
+        if exc.code == 404 and path == "/v1/collections":
+            return {"collections": [], "reason": "no_collections"}
         if exc.code == 404 and path == "/v1/selection":
             return {"photos": [], "reason": "no_selection"}
         return {"connected": False, "reason": "bridge_unavailable"}
@@ -56,3 +58,8 @@ def read_status(config: BridgeConfig) -> dict:
 def read_selection(config: BridgeConfig) -> dict:
     """Read last submitted selection from the local in-memory bridge."""
     return _get(config, "/v1/selection")
+
+
+def read_collections(config: BridgeConfig) -> dict:
+    """Read only the user-submitted overview, never enumerate a catalog."""
+    return _get(config, "/v1/collections")

@@ -44,7 +44,9 @@ supports macOS and Windows.
 - `selected_photo_metadata`: returns only the last explicitly submitted,
   unexpired metadata snapshot.
 
-Both tools are read-only. There are no rating-change or catalog-write tools.
+- `collection_overview`: returns only an explicitly submitted collection-name hierarchy. See [Mac collections](docs/mac-collections.md).
+
+All tools are read-only. There are no rating-change or catalog-write tools.
 The local bridge binds to `127.0.0.1` and requires a private bearer credential.
 Optional Streamable HTTP/OAuth configuration is described in
 [ChatGPT OAuth](docs/chatgpt-oauth.md); the installer does not enable public access.
