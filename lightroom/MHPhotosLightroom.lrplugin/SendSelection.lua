@@ -156,7 +156,7 @@ LrTasks.startAsyncTask(function()
         local installationPath = LrPathUtils.child(_PLUGIN.path, "Installation.lua")
         local command
         if LrFileUtils.exists(installationPath) then
-            local installation = dofile(installationPath)
+            local installation = require "Installation"
             if type(installation) ~= "table" or type(installation.python) ~= "string" then
                 error("Invalid MHPhotos installation")
             end
