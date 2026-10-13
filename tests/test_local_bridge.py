@@ -4,7 +4,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
-from mhphotos_lightroom_mcp.local_bridge import make_server
+from mhphotos_lightroom_mcp.local_bridge import MAX_BODY, MAX_PHOTOS, make_server
 
 TOKEN = "test-only-token-not-for-production-123456789"
 
@@ -139,7 +139,7 @@ def test_selection_requires_authentication(bridge):
 @pytest.mark.parametrize(
     "payload",
     [
-        {"photos": [{"fileName": "IMG.CR3"}] * 6},
+        {"photos": [{"fileName": "IMG.CR3"}] * (MAX_PHOTOS + 1)},
         {"photos": [{"fileName": "x" * 81}]},
         {"photos": [{"rating": True}]},
         {"photos": [{"rating": 3.5}]},
@@ -187,7 +187,7 @@ def test_invalid_submission_preserves_previous_selection(bridge):
 def test_oversized_request_body_rejected(bridge):
     req = Request(
         f"http://127.0.0.1:{bridge.server_port}/v1/selection",
-        data=b"x" * 8193,
+        data=b"x" * (MAX_BODY + 1),
         headers={
             "Authorization": f"Bearer {TOKEN}",
             "Content-Type": "application/json",

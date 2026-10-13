@@ -12,56 +12,13 @@ local LrLogger = import "LrLogger"
 local logger = LrLogger("MHPhotosSelection")
 logger:enable("logfile")
 
-local MAX_PHOTOS = 5
+local MAX_PHOTOS = 50
 
 local function shellQuote(s)
     return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
 end
 
-local function value(photo, key)
-    local result
-
-    if key == "fileName" then
-        result = photo:getFormattedMetadata(key)
-    else
-        result = photo:getRawMetadata(key)
-    end
-
-    if type(result) ~= "string" and type(result) ~= "number" then
-        return ""
-    end
-
-    return tostring(result):gsub("[%c]", " "):sub(1, 80)
-end
-
-local function jsonString(s)
-    return '"' .. s:gsub('[%z\1-\31\\"]', function(c)
-        local escapes = {
-            ['\\'] = '\\\\',
-            ['"'] = '\\"',
-            ['\b'] = '\\b',
-            ['\f'] = '\\f',
-            ['\n'] = '\\n',
-            ['\r'] = '\\r',
-            ['\t'] = '\\t',
-        }
-        return escapes[c] or string.format("\\u%04x", string.byte(c))
-    end) .. '"'
-end
-
-local function encode(photos)
-    local parts = {}
-
-    for _, photo in ipairs(photos) do
-        parts[#parts + 1] =
-            '{"fileName":' .. jsonString(photo.fileName)
-            .. ',"rating":' .. jsonString(photo.rating)
-            .. ',"pickStatus":' .. jsonString(photo.pickStatus)
-            .. '}'
-    end
-
-    return '{"photos":[' .. table.concat(parts, ",") .. ']}'
-end
+local SelectionMetadata = require "SelectionMetadata"
 
 LrTasks.startAsyncTask(function()
     logger:info("SendSelection started")
@@ -87,7 +44,7 @@ LrTasks.startAsyncTask(function()
         if #selected > MAX_PHOTOS then
             LrDialogs.message(
                 "MHPhotos",
-                "Please select no more than 5 photos.",
+                string.format("Please select no more than %d photos.", MAX_PHOTOS),
                 "warning"
             )
             return
@@ -98,11 +55,7 @@ LrTasks.startAsyncTask(function()
         logger:info("Step 3: Reading metadata")
         catalog:withReadAccessDo(function()
             for _, photo in ipairs(selected) do
-                photos[#photos + 1] = {
-                    fileName = value(photo, "fileName"),
-                    rating = value(photo, "rating"),
-                    pickStatus = value(photo, "pickStatus"),
-                }
+                photos[#photos + 1] = SelectionMetadata.read(photo)
             end
         end)
 
@@ -146,7 +99,7 @@ LrTasks.startAsyncTask(function()
             error("Could not open transfer file: " .. tostring(openError))
         end
 
-        local written, writeError = handle:write(encode(photos))
+        local written, writeError = handle:write(SelectionMetadata.encode(photos))
         handle:close()
 
         if not written then

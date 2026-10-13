@@ -6,19 +6,15 @@ local LrTasks = import "LrTasks"
 
 local MAX_PHOTOS = 5
 
-local function safeValue(photo, field)
-    local value = field == "fileName" and photo:getFormattedMetadata("fileName") or photo:getRawMetadata(field)
-    if value == nil then
-        return "nil"
-    end
-    if type(value) ~= "string" and type(value) ~= "number" then
-        return "n/a"
-    end
-    local text = tostring(value)
-    -- Keep dialogs small and avoid control characters in displayed values.
-    text = text:gsub("[%c]", " ")
-    return text:sub(1, 80)
-end
+local Metadata = require "SelectionMetadata"
+local details = {
+    { "dateTimeOriginalISO8601", "Capture time" },
+    { "cameraMake", "Camera make" }, { "cameraModel", "Camera" },
+    { "lens", "Lens" }, { "shutterSpeed", "Shutter" }, { "aperture", "Aperture" },
+    { "isoSpeedRating", "ISO" }, { "focalLength", "Focal length" },
+    { "dimensions", "Original dimensions" }, { "croppedDimensions", "Cropped dimensions" },
+    { "fileType", "File type" },
+}
 
 LrTasks.startAsyncTask(function()
     local message = (function()
@@ -33,14 +29,19 @@ LrTasks.startAsyncTask(function()
         }
         catalog:withReadAccessDo(function()
             for i = 1, count do
-                local photo = photos[i]
+                local photo = Metadata.read(photos[i])
                 lines[#lines + 1] = string.format(
                     "%d. %s | Rating: %s | Flag: %s",
                     i,
-                    safeValue(photo, "fileName"),
-                    safeValue(photo, "rating"),
-                    safeValue(photo, "pickStatus")
+                    photo.fileName,
+                    photo.rating,
+                    photo.pickStatus
                 )
+                for _, field in ipairs(details) do
+                    if photo[field[1]] then
+                        lines[#lines + 1] = "    " .. field[2] .. ": " .. photo[field[1]]
+                    end
+                end
             end
         end)
         lines[#lines + 1] = "Read-only preview. No changes made."
