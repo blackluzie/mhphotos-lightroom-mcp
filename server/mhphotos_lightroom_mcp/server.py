@@ -113,6 +113,41 @@ def selected_photo_summary() -> dict:
 
 
 @mcp.tool()
+def selected_photo_filter(
+    file_name: str | None = None, camera_model: str | None = None,
+    lens: str | None = None, file_type: str | None = None,
+    rating: str | None = None, pick_status: str | None = None,
+) -> dict:
+    """Filter only the last submitted photo selection (maximum 50 photos).
+    Filters are combined with AND. Name/camera/lens use case-insensitive literal
+    substrings; file type is case-insensitive exact text. Rating and pick status
+    match exact submitted values (e.g. "0", "5", "-1"). An empty rating/flag
+    matches an explicitly empty value, not an absent field or zero. At least one
+    filter is required. No catalog search, file access, or metadata writes occur.
+    """
+    from mhphotos_lightroom_mcp.selection_filter import (
+        filter_selection,
+        validate_filters,
+    )
+
+    filters = {key: value for key, value in {
+        "file_name": file_name, "camera_model": camera_model, "lens": lens,
+        "file_type": file_type, "rating": rating, "pick_status": pick_status,
+    }.items() if value is not None}
+    try:
+        validate_filters(filters)
+    except ValueError:
+        return {"photos": [], "photo_count": 0, "reason": "invalid_filter_request"}
+    snapshot = selected_photo_metadata()
+    if snapshot.get("reason"):
+        return {"photos": [], "photo_count": 0, "reason": snapshot["reason"]}
+    try:
+        return filter_selection(snapshot.get("photos", []), filters)
+    except ValueError:
+        return {"photos": [], "photo_count": 0, "reason": "invalid_response"}
+
+
+@mcp.tool()
 def collection_overview() -> dict:
     """Read the last user-submitted collection-name hierarchy, not a live catalog."""
     token = os.environ.get("MHPHOTOS_BRIDGE_TOKEN", "")
@@ -249,7 +284,8 @@ def register_http_tools(http_server: FastMCP) -> None:
     from mhphotos_lightroom_mcp.oauth import SCOPE
 
     for tool in (
-        connection_status, selected_photo_metadata, selected_photo_summary, collection_overview,
+        connection_status, selected_photo_metadata, selected_photo_summary,
+        selected_photo_filter, collection_overview,
         collection_overview_page, collection_search,
     ):
         http_server.add_tool(

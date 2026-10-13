@@ -377,7 +377,7 @@ def test_http_tool_descriptors():
     tools = asyncio.run(server.list_tools())
     assert {tool.name for tool in tools} == {
         "connection_status",
-        "selected_photo_metadata", "selected_photo_summary",
+        "selected_photo_metadata", "selected_photo_summary", "selected_photo_filter",
         "collection_overview",
         "collection_overview_page",
         "collection_search",
