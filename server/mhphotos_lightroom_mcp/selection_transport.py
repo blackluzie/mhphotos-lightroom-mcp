@@ -5,7 +5,11 @@ import os
 import tempfile
 from pathlib import Path
 
-from mhphotos_lightroom_mcp.private_files import private_directory, validate_private
+from mhphotos_lightroom_mcp.private_files import (
+    private_directory,
+    validate_private,
+    windows_acl,
+)
 
 MAX_BYTES = 8192
 PREFIX = "selection-"
@@ -39,6 +43,8 @@ def create_transfer(payload: dict) -> Path:
 
     try:
         with os.fdopen(fd, "wb") as handle:
+            if os.name == "nt":
+                windows_acl(path, protect=True)
             handle.write(data)
         return path
     except Exception:

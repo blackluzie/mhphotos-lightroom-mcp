@@ -97,7 +97,7 @@ def write_new_private(path: Path, data: bytes) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'wb') as handle:
         if os.name == 'nt':
-            windows_acl(path)
+            windows_acl(path, protect=True)
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())

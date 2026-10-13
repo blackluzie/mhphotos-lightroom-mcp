@@ -125,7 +125,7 @@ def install(source: Path, home: Path, platform: str, name: str) -> dict:
                         ('from mhphotos_lightroom_mcp.desktop import main; '
                          'from mcp.server.fastmcp import FastMCP')], check=True)
         plugin = Path(plan['plugin'])
-        plugin.mkdir(mode=0o700)
+        private_directory(plugin)
         for item in plugin_source.glob('*.lua'):
             if item.is_symlink():
                 raise ValueError('Linked plugin source refused')
