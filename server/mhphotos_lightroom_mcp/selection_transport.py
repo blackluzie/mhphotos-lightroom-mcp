@@ -10,6 +10,7 @@ from mhphotos_lightroom_mcp.private_files import (
     validate_private,
     windows_acl,
 )
+from mhphotos_lightroom_mcp.runtime_profile import transfer_path
 from mhphotos_lightroom_mcp.selection_schema import MAX_BODY
 
 MAX_BYTES = MAX_BODY
@@ -19,7 +20,7 @@ SUFFIX = ".json"
 
 def transport_directory() -> Path:
     """Return a private directory for Lightroom metadata transfers."""
-    path = Path.home() / ".mhphotos-lightroom" / "transfers"
+    path = transfer_path()
     private_directory(path.parent)
     private_directory(path)
 

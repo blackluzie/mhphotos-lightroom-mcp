@@ -20,6 +20,10 @@ function Transfer.send(payload)
     local home = LrPathUtils.getStandardFilePath("home")
     if not home then error("No user home") end
     local directory = LrPathUtils.child(LrPathUtils.child(home, ".mhphotos-lightroom"), "transfers")
+    if installation.profileRoot then
+        directory = LrPathUtils.child(installation.profileRoot, "transfers")
+        if not LrFileUtils.exists(directory) then error("Private profile transfers missing") end
+    end
     if not LrFileUtils.exists(directory) then error("Private transfer directory missing") end
     local filename = LrPathUtils.child(directory,
         "selection-" .. tostring(os.time()) .. "-" .. tostring(math.random(100000,999999)) .. ".json")
@@ -38,6 +42,13 @@ function Transfer.send(payload)
             command = "/bin/chmod 600 " .. shellQuote(filename) .. " && "
                 .. shellQuote(installation.python)
                 .. " -I -m mhphotos_lightroom_mcp.collection_sender " .. shellQuote(filename)
+        end
+        if installation.profileRoot then
+            if WIN_ENV then error("Mac test profile is macOS only") end
+            command = "/bin/chmod 600 " .. shellQuote(filename) .. " && "
+                .. shellQuote(installation.python)
+                .. " -I -m mhphotos_lightroom_mcp.profile_runner "
+                .. shellQuote(installation.profileRoot) .. " collections " .. shellQuote(filename)
         end
         return LrTasks.execute(command)
     end)

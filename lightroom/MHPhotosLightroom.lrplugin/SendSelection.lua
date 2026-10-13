@@ -21,6 +21,8 @@ end
 local SelectionMetadata = require "SelectionMetadata"
 
 LrTasks.startAsyncTask(function()
+    local installationPath = LrPathUtils.child(_PLUGIN.path, "Installation.lua")
+    local installation = LrFileUtils.exists(installationPath) and require "Installation" or nil
     logger:info("SendSelection started")
         logger:info("Step 1: Getting catalog")
         local catalog = LrApplication.activeCatalog()
@@ -74,6 +76,9 @@ LrTasks.startAsyncTask(function()
             "transfers"
         )
 
+        if installation and installation.profileRoot then
+            privateDir = LrPathUtils.child(installation.profileRoot, "transfers")
+        end
         if not LrFileUtils.exists(privateDir) then
             error("Private transfer directory is missing")
         end
@@ -106,10 +111,8 @@ LrTasks.startAsyncTask(function()
             error("Could not write transfer file: " .. tostring(writeError))
         end
 
-        local installationPath = LrPathUtils.child(_PLUGIN.path, "Installation.lua")
         local command
         if LrFileUtils.exists(installationPath) then
-            local installation = require "Installation"
             if type(installation) ~= "table" or type(installation.python) ~= "string" then
                 error("Invalid MHPhotos installation")
             end
@@ -143,6 +146,14 @@ LrTasks.startAsyncTask(function()
                 .. " && /bin/test -f " .. shellQuote(filename)
                 .. " && /bin/sh " .. shellQuote(launcher)
                 .. " " .. shellQuote(filename)
+        end
+
+        if installation and installation.profileRoot then
+            if WIN_ENV then error("Mac test profile is macOS only") end
+            command = "/bin/chmod 600 " .. shellQuote(filename)
+                .. " && " .. shellQuote(installation.python)
+                .. " -I -m mhphotos_lightroom_mcp.profile_runner "
+                .. shellQuote(installation.profileRoot) .. " send " .. shellQuote(filename)
         end
 
         logger:info("Starting local helper")
