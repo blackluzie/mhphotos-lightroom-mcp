@@ -11,22 +11,27 @@ _ACL_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $p = $env:MHPHOTOS_PRIVATE_PATH
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$item = Get-Item -LiteralPath $p -Force
+if ([System.IO.Directory]::Exists($p)) {
+    $item = [System.IO.DirectoryInfo]::new($p)
+} else {
+    $item = [System.IO.FileInfo]::new($p)
+    if (!$item.Exists) { throw 'Missing file' }
+}
 if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw 'Reparse point' }
 if ($env:MHPHOTOS_PRIVATE_SET -eq '1') {
-    if ($item.PSIsContainer) {
-        $acl = New-Object System.Security.AccessControl.DirectorySecurity
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    if ($item -is [System.IO.DirectoryInfo]) {
+        $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
     } else {
-        $acl = New-Object System.Security.AccessControl.FileSecurity
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')
+        $acl = [System.Security.AccessControl.FileSecurity]::new()
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
     }
     $acl.SetOwner($sid)
     $acl.SetAccessRuleProtection($true, $false)
     $acl.AddAccessRule($rule)
-    Set-Acl -LiteralPath $p -AclObject $acl
+    $item.SetAccessControl($acl)
 }
-$acl = Get-Acl -LiteralPath $p
+$acl = $item.GetAccessControl()
 if ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'Owner' }
 $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
 $allowed = $false

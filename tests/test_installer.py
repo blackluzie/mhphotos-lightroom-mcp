@@ -40,13 +40,8 @@ def test_unsafe_credential_is_never_repaired(home):
     path = home / '.mhphotos-lightroom-token'
     path.write_text('a' * 64)
     if os.name == 'nt':
-        # Inherited ACL grants other identities on the Windows runner.
-        script = "$p=$env:MHPHOTOS_TEST_PATH; $a=Get-Acl -LiteralPath $p; " + (
-            "$r=New-Object System.Security.AccessControl.FileSystemAccessRule("
-            "'S-1-1-0','Read','Allow'); $a.AddAccessRule($r); Set-Acl -LiteralPath $p -AclObject $a"
-        )
-        subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
-                       env=dict(os.environ, MHPHOTOS_TEST_PATH=str(path)), check=True)
+        subprocess.run(['icacls.exe', str(path), '/grant', '*S-1-1-0:R'],
+                       check=True, capture_output=True)
     else:
         path.chmod(0o644)
     before = path.read_bytes()
