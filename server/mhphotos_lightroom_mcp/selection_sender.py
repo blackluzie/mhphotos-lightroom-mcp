@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 
 from mhphotos_lightroom_mcp.desktop import read_bridge_token
+from mhphotos_lightroom_mcp.runtime_profile import bridge_token_path, bridge_url
 from mhphotos_lightroom_mcp.selection_schema import (
     BASE_FIELDS,
     MAX_BODY,
@@ -17,7 +18,7 @@ from mhphotos_lightroom_mcp.selection_transport import (
     transport_directory,
 )
 
-BRIDGE_URL = "http://127.0.0.1:8765/v1/selection"
+BRIDGE_URL = bridge_url("selection")
 
 
 def send_selection(payload: dict) -> dict:
@@ -26,7 +27,7 @@ def send_selection(payload: dict) -> dict:
     if len(data) > MAX_BODY:
         raise ValueError("Transfer payload too large")
 
-    token = read_bridge_token(Path.home() / ".mhphotos-lightroom-token")
+    token = read_bridge_token(bridge_token_path())
 
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     # Negotiate only when optional metadata is present. Old bridges return 404

@@ -12,9 +12,10 @@ from mhphotos_lightroom_mcp.collection_schema import (
     validate_collections,
 )
 from mhphotos_lightroom_mcp.pairing import read_bridge_token
+from mhphotos_lightroom_mcp.runtime_profile import bridge_token_path, bridge_url
 from mhphotos_lightroom_mcp.selection_transport import read_transfer
 
-BRIDGE_URL = "http://127.0.0.1:8765/v1/collections"
+BRIDGE_URL = bridge_url("collections")
 
 
 def send_collections(payload: dict) -> dict:
@@ -22,7 +23,7 @@ def send_collections(payload: dict) -> dict:
     data = json.dumps(payload).encode("utf-8")
     if len(data) > MAX_COLLECTION_BODY:
         raise ValueError("Collection overview too large")
-    token = read_bridge_token(Path.home() / ".mhphotos-lightroom-token")
+    token = read_bridge_token(bridge_token_path())
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     request = urllib.request.Request(
         BRIDGE_URL.rsplit("/", 1)[0] + "/capabilities",
