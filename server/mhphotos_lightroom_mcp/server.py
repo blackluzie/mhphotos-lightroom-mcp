@@ -1,10 +1,12 @@
 """MCP tools for a future read-only Lightroom Classic integration."""
 
+import asyncio
 import hashlib
 import json
 import os
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ImageContent, TextContent, ToolAnnotations
 
 from mhphotos_lightroom_mcp.bridge import (
     BridgeConfig,
@@ -60,6 +62,9 @@ def connection_status() -> dict:
             state, "Local bridge running; Lightroom Classic is not connected."
         ),
     }
+    if result.get("lightroom_worker_online") is True:
+        status.update(connected=True, mode="read_only_requests",
+                      message="Authenticated read-only request worker online. No catalog writes.")
     # Preserve compatibility with old bridges while exposing bounded diagnostics.
     for key in (
         "selection_state",
@@ -72,6 +77,8 @@ def connection_status() -> dict:
         "collection_age_seconds",
         "collection_expires_in_seconds",
         "collection_overview_truncated",
+        "live_reads_enabled",
+        "lightroom_worker_online",
     ):
         if key in result:
             status[key] = result[key]
@@ -275,6 +282,72 @@ def collection_search(
         result["kind"] = kind
         result["snapshot_count"] = len(records)
     return result
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
+async def lightroom_collections(query: str = "") -> dict:
+    """Read current collection names/paths from the explicitly enabled Mac worker.
+    Optional literal case-insensitive name/ancestor filter, maximum 100 matches.
+    No manual send is required. Lightroom must be open and its read-only worker
+    enabled. Available only through the isolated test profile, not public HTTP.
+    """
+    from mhphotos_lightroom_mcp.live_worker_io import post_live
+
+    if not isinstance(query, str) or len(query) > 80 or any(ord(c)<32 or ord(c)==127 for c in query):
+        return {"collections": [], "reason": "invalid_live_request"}
+    try:
+        result = await asyncio.to_thread(post_live, "read", {"operation": "collections"}, timeout=35)
+    except (OSError, ValueError):
+        return {"collections": [], "reason": "live_bridge_unavailable"}
+    if result.get("error"):
+        return {"collections": [], "reason": result["error"]}
+    paths, matches = {}, []
+    for record in result["collections"]:
+        path = [*paths.get(record.get("parentId"), []), record["name"]]
+        paths[record["id"]] = path
+        if query.strip().casefold() in " / ".join(path).casefold():
+            matches.append({**record, "collection_path": path})
+    return {"collections": matches[:100], "match_count": len(matches),
+            "truncated": result["truncated"], "more_matches": len(matches)>100,
+            "session_id": result["session_id"], "source": "live_lightroom_read", "catalog_writes": False}
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+async def lightroom_collection_photos(
+    collection_path: list[str], offset: int = 0, limit: int = 10,
+    include_previews: bool = True, session_id: str | None = None,
+) -> list[TextContent | ImageContent]:
+    """Read current photos and JPEG previews from an exact collection name path.
+    Maximum 10 photos with previews or 50 without. Pass returned session_id for
+    further pages to reject a switched/reopened catalog. Each page is a fresh
+    read; Lightroom's membership/order may change between calls. No image edits,
+    rating writes or presets are executed. Requires the enabled private worker.
+    """
+    from mhphotos_lightroom_mcp.live_reads import validate_request
+    from mhphotos_lightroom_mcp.live_worker_io import post_live
+
+    request = {"operation": "collection_photos", "path": collection_path,
+               "offset": offset, "limit": limit, "previews": include_previews,
+               "session_id": session_id}
+    try:
+        validate_request(request)
+    except (ValueError, UnicodeError):
+        return [TextContent(type="text", text=json.dumps({"photos": [], "reason": "invalid_live_request"}))]
+    try:
+        result = await asyncio.to_thread(post_live, "read", request, timeout=35)
+    except (OSError, ValueError):
+        result = {"error": "live_bridge_unavailable"}
+    if result.get("error"):
+        return [TextContent(type="text", text=json.dumps({"photos": [], "reason": result["error"]}))]
+    previews = result.pop("previews")
+    result.update(source="live_lightroom_read", catalog_writes=False)
+    result["preview_status"] = [{"index":p["index"], "status":p.get("error", "available")} for p in previews]
+    content = [TextContent(type="text", text=json.dumps(result, ensure_ascii=True))]
+    for preview in previews:
+        if "jpeg" in preview:
+            content.append(TextContent(type="text", text="Preview for photo " + str(offset + preview["index"])))
+            content.append(ImageContent(type="image", data=preview["jpeg"], mimeType="image/jpeg"))
+    return content
 
 
 def register_http_tools(http_server: FastMCP) -> None:

@@ -5,6 +5,8 @@ return {
     LrInitPlugin = "Init.lua",
     LrShutdownPlugin = "Shutdown.lua",
     LrLibraryMenuItems = {
+        { title = "MHPhotos: Start Read-only Connection", file = "StartReadOnly.lua" },
+        { title = "MHPhotos: Stop Read-only Connection", file = "StopReadOnly.lua" },
         {
             title = "MHPhotos: Preview and Send Collection Overview",
             file = "CollectionOverview.lua",

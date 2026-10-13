@@ -12,10 +12,13 @@ def main() -> None:
         "collections",
         "status",
         "mcp",
+        "poll",
+        "reply",
+        "worker-stop",
     }:
         raise ValueError("Expected profile root and mode")
     mode = sys.argv[2]
-    if len(sys.argv) != (4 if mode in {"send", "collections"} else 3):
+    if len(sys.argv) != (4 if mode in {"send", "collections", "poll", "reply"} else 3):
         raise ValueError("Invalid profile arguments")
     os.environ["MHPHOTOS_PROFILE_ROOT"] = sys.argv[1]
     from mhphotos_lightroom_mcp.pairing import read_bridge_token
@@ -26,12 +29,21 @@ def main() -> None:
     if mode == "bridge":
         from mhphotos_lightroom_mcp.local_bridge import make_server
 
-        server = make_server(token, port=port)
+        server = make_server(token, port=port, live_reads=True)
         print(f"MHPhotos Mac test bridge on 127.0.0.1:{port}", flush=True)
         try:
             server.serve_forever()
         finally:
             server.server_close()
+    elif mode == "worker-stop":
+        from mhphotos_lightroom_mcp.live_worker_io import post_live
+
+        post_live("stop", {})
+    elif mode in {"poll", "reply"}:
+        from mhphotos_lightroom_mcp.live_worker_io import main as run
+
+        sys.argv = [sys.argv[0], mode, sys.argv[3]]
+        run()
     elif mode == "status":
         from mhphotos_lightroom_mcp.bridge import BridgeConfig, read_status
 

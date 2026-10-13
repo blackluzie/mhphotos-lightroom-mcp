@@ -17,6 +17,7 @@ from mhphotos_lightroom_mcp.collection_schema import (
     MAX_COLLECTIONS,
     validate_collections,
 )
+from mhphotos_lightroom_mcp.live_reads import MAX_LIVE_BODY, LiveReads
 from mhphotos_lightroom_mcp.selection_schema import (
     FIELDS,
     MAX_BODY,
@@ -58,6 +59,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "catalog_writes": False,
                     "collection_overview": True,
                     "max_collections": MAX_COLLECTIONS,
+                    "live_reads": self.server.live_reads.enabled,
                 },
             )
         if self.path == "/v1/status":
@@ -128,6 +130,8 @@ class _Handler(BaseHTTPRequestHandler):
                     "protocol_version": PROTOCOL_VERSION,
                     "catalog_writes": False,
                     "mode": "prototype",
+                    "live_reads_enabled": self.server.live_reads.enabled,
+                    "lightroom_worker_online": self.server.live_reads.online(),
                 },
             )
         if self.path == "/v1/collections":
@@ -161,6 +165,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._respond(403, {"error": "forbidden_origin"})
         if not self._authorized():
             return self._respond(401, {"error": "unauthorized"})
+        if self.path.startswith("/v1/live/"):
+            return self._live_post()
         if self.path not in {"/v1/selection", "/v1/collections"}:
             return self._respond(404, {"error": "not_found"})
         if self.headers.get_content_type() != "application/json":
@@ -194,6 +200,38 @@ class _Handler(BaseHTTPRequestHandler):
             self.server.selection_updated_at = time.monotonic()
         self._respond(200, {"accepted": len(photos)})
 
+    def _live_post(self):
+        if self.path not in {"/v1/live/read", "/v1/live/poll", "/v1/live/reply", "/v1/live/stop"}:
+            return self._respond(404, {"error": "not_found"})
+        if not self.server.live_reads.enabled:
+            return self._respond(403, {"error": "live_reads_disabled"})
+        if self.headers.get_content_type() != "application/json":
+            return self._respond(415, {"error": "unsupported_media_type"})
+        try:
+            length = int(self.headers.get("Content-Length", "-1"))
+            limit = MAX_LIVE_BODY if self.path == "/v1/live/reply" else 4096
+            if not 0 <= length <= limit:
+                return self._respond(413, {"error": "body_too_large"})
+            data = json.loads(self.rfile.read(length))
+            if self.path == "/v1/live/read":
+                result = self.server.live_reads.submit(data)
+            elif self.path == "/v1/live/stop":
+                if data != {}:
+                    raise ValueError("invalid_live_request")
+                result = self.server.live_reads.stop()
+            elif self.path == "/v1/live/poll":
+                if data != {}:
+                    raise ValueError("invalid_live_request")
+                result = {"request": self.server.live_reads.poll()}
+            else:
+                if not isinstance(data, dict) or set(data) != {"id", "result"} or not isinstance(data["id"], str):
+                    raise ValueError("invalid_live_result")
+                self.server.live_reads.reply(data["id"], data["result"])
+                result = {"accepted": True}
+        except (ValueError, UnicodeError):
+            return self._respond(400, {"error": "invalid_live_payload"})
+        return self._respond(200, result)
+
     def _respond(self, code: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
@@ -207,13 +245,14 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-def make_server(token: str, port: int = 8765) -> ThreadingHTTPServer:
+def make_server(token: str, port: int = 8765, *, live_reads: bool = False) -> ThreadingHTTPServer:
     """Create an authenticated listener bound strictly to IPv4 loopback."""
     if len(token) < 32:
         raise ValueError("Bridge token must contain at least 32 characters")
     if not 0 <= port <= 65535:
         raise ValueError("Invalid port")
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
+    server.live_reads = LiveReads(enabled=live_reads)
     server.bridge_token = token
     server.collections = None
     server.collections_updated_at = 0.0
