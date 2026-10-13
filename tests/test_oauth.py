@@ -378,6 +378,7 @@ def test_http_tool_descriptors():
     assert {tool.name for tool in tools} == {
         "connection_status",
         "selected_photo_metadata",
+        "collection_overview",
     }
     for tool in tools:
         assert tool.annotations.readOnlyHint is True

@@ -36,3 +36,5 @@ plugin and Lightroom SDK integration require an actual Lightroom Classic
 installation on macOS. See `docs/integration-test-plan.md`.
 
 See [Mac read-only functions](../docs/mac-readonly-functions.md) for the optional capture fields, preview and compatibility rules.
+
+The collection-overview menu previews names/hierarchy and requires an explicit Send action; see [Mac collections](../docs/mac-collections.md). No collection edits are enabled.

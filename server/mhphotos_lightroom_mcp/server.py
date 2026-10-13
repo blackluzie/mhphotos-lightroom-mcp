@@ -4,7 +4,12 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from mhphotos_lightroom_mcp.bridge import BridgeConfig, read_selection, read_status
+from mhphotos_lightroom_mcp.bridge import (
+    BridgeConfig,
+    read_collections,
+    read_selection,
+    read_status,
+)
 
 mcp = FastMCP("MHPhotos Lightroom MCP")
 
@@ -56,6 +61,11 @@ def connection_status() -> dict:
         "selection_age_seconds",
         "selection_expires_in_seconds",
         "protocol_version",
+        "collection_state",
+        "collection_count",
+        "collection_age_seconds",
+        "collection_expires_in_seconds",
+        "collection_overview_truncated",
     ):
         if key in result:
             status[key] = result[key]
@@ -77,13 +87,31 @@ def selected_photo_metadata() -> dict:
     return snapshot
 
 
+@mcp.tool()
+def collection_overview() -> dict:
+    """Read the last user-submitted collection-name hierarchy, not a live catalog."""
+    token = os.environ.get("MHPHOTOS_BRIDGE_TOKEN", "")
+    if not token:
+        return {"collections": [], "reason": "bridge_not_configured"}
+    result = read_collections(BridgeConfig(token=token))
+    if not isinstance(result.get("collections"), list):
+        return {"collections": [], "reason": result.get("reason", "invalid_response")}
+    if result.get("reason"):
+        return {"collections": [], "reason": result["reason"]}
+    return {
+        "collections": result["collections"],
+        "truncated": result.get("truncated", False),
+        "source": "local_bridge_snapshot",
+    }
+
+
 def register_http_tools(http_server: FastMCP) -> None:
-    """Publish the two read-only tools with explicit ChatGPT permissions."""
+    """Publish the read-only tools with explicit ChatGPT permissions."""
     from mcp.types import ToolAnnotations
 
     from mhphotos_lightroom_mcp.oauth import SCOPE
 
-    for tool in (connection_status, selected_photo_metadata):
+    for tool in (connection_status, selected_photo_metadata, collection_overview):
         http_server.add_tool(
             tool,
             annotations=ToolAnnotations(
