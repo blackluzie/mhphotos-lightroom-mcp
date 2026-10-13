@@ -94,6 +94,25 @@ def selected_photo_metadata() -> dict:
 
 
 @mcp.tool()
+def selected_photo_summary() -> dict:
+    """Summarize only the last explicitly submitted photo selection.
+    Group existing camera, lens, file-type, rating and pick-status display values;
+    missing values are counted separately. Ratings and flags are read only.
+    No filenames or new metadata are returned, and no catalog access occurs.
+    Expired/unavailable snapshots return photo_count zero with a reason.
+    """
+    from mhphotos_lightroom_mcp.selection_summary import summarize_selection
+
+    snapshot = selected_photo_metadata()
+    if snapshot.get("reason"):
+        return {"photo_count": 0, "reason": snapshot["reason"]}
+    try:
+        return summarize_selection(snapshot.get("photos", []))
+    except ValueError:
+        return {"photo_count": 0, "reason": "invalid_response"}
+
+
+@mcp.tool()
 def collection_overview() -> dict:
     """Read the last user-submitted collection-name hierarchy, not a live catalog."""
     token = os.environ.get("MHPHOTOS_BRIDGE_TOKEN", "")
@@ -230,7 +249,7 @@ def register_http_tools(http_server: FastMCP) -> None:
     from mhphotos_lightroom_mcp.oauth import SCOPE
 
     for tool in (
-        connection_status, selected_photo_metadata, collection_overview,
+        connection_status, selected_photo_metadata, selected_photo_summary, collection_overview,
         collection_overview_page, collection_search,
     ):
         http_server.add_tool(
