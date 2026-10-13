@@ -364,7 +364,8 @@ async def persist_clients(tmp_path):
     assert await second.load_refresh_token(client, tokens.refresh_token) is None
     removed = Provider(ORIGIN, "synthetic", [], path)
     assert await removed.get_client("saved-client") is None
-    assert path.stat().st_mode & 0o777 == 0o600
+    from mhphotos_lightroom_mcp.private_files import validate_private
+    validate_private(path)
 
 
 def test_http_tool_descriptors():
