@@ -14,7 +14,7 @@ scan or automatic upload is added to the existing selection command.
 
 ## Boundaries
 
-- At most **100 entries**, at most **eight hierarchy levels**, at most **32 KiB**
+- At most **1,000 entries**, at most **eight hierarchy levels**, at most **1 MiB**
   encoded JSON. Collection names are bounded and truncated without splitting UTF-8.
 - `truncated: true` explicitly identifies traversal limits/cycles. The overview
   is a bounded snapshot, not a complete or continuously connected catalog.
@@ -57,7 +57,9 @@ HTTP/MCP tests cover authentication, forbidden origins, malformed graphs,
 unknown/private fields, byte limits, unsupported bridges, file cleanup,
 independent expiry and the absence of PUT/PATCH/DELETE mutation routes.
 
-A real check inside Lightroom Classic with the new plugin is still required.
+A real check in the separate Mac test profile retrieved 576 entries across six
+MCP pages without source truncation. See [paging](mac-collection-pages.md) and
+[search](mac-collection-search.md) for the current read tools.
 The running bridge and installed plugin/helper are left unchanged. Ratings,
 collection editing and other catalogue writes remain disabled. Windows manual
 integration checks remain deferred while Mac development is prioritized.

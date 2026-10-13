@@ -533,3 +533,105 @@ def test_registered_mcp_tool_validates_and_returns_page(runtime):
         assert page['offset'] == 37
         assert page['collections'][0]['id'] == 'node38'
     asyncio.run(run())
+
+
+def test_search_names_ancestors_and_kind_without_mutation(runtime):
+    from mhphotos_lightroom_mcp.server import collection_search
+
+    server, _ = runtime
+    collection_sender.send_collections(OVERVIEW)
+    result = collection_search('TRAVEL')
+    assert result['total_count'] == 3
+    assert result['snapshot_count'] == 3
+    assert result['collections'][1]['collection_path'] == ['Travel', 'Favorites']
+    smart = collection_search('favorites', kind='smart_collection')
+    assert smart['total_count'] == 1
+    assert smart['collections'][0]['kind'] == 'smart_collection'
+    assert collection_search('', kind='collection_set')['total_count'] == 1
+    assert collection_search('not found')['total_count'] == 0
+    assert server.collections == OVERVIEW
+
+
+def test_search_unicode_literal_matching_and_duplicate_names(runtime):
+    from mhphotos_lightroom_mcp.server import collection_search
+
+    payload = {'collections': [
+        {'id': 'node1', 'name': 'Straße', 'kind': 'collection_set'},
+        {'id': 'node2', 'name': 'Äpfel.*', 'kind': 'collection', 'parentId': 'node1'},
+        {'id': 'node3', 'name': 'Äpfel.*', 'kind': 'collection'},
+    ], 'truncated': False}
+    collection_sender.send_collections(payload)
+    assert collection_search('STRASSE')['total_count'] == 2
+    assert collection_search('äPFEL')['total_count'] == 2
+    assert collection_search('.*')['total_count'] == 2
+    assert collection_search('^Ä')['total_count'] == 0
+
+
+def test_search_pages_are_bound_to_query_filter_and_full_snapshot(runtime):
+    from mhphotos_lightroom_mcp.server import collection_search
+
+    payload = large_overview(250)
+    collection_sender.send_collections(payload)
+    first = collection_search('Ä', limit=100)
+    second = collection_search('Ä', offset=100, snapshot_id=first['snapshot_id'])
+    last = collection_search('Ä', offset=200, snapshot_id=first['snapshot_id'])
+    assert len(first['collections']) == len(second['collections']) == 100
+    assert len(last['collections']) == 50 and last['next_offset'] is None
+    assert collection_search('different', offset=100, snapshot_id=first['snapshot_id'])['reason'] == 'snapshot_changed'
+    assert collection_search('Ä', kind='collection_set', offset=100, snapshot_id=first['snapshot_id'])['reason'] == 'snapshot_changed'
+    # An unmatched new entry still changes the snapshot identity.
+    payload['collections'].append({'id':'node251', 'name':'Other', 'kind':'collection'})
+    collection_sender.send_collections(payload)
+    assert collection_search('Ä', offset=100, snapshot_id=first['snapshot_id'])['reason'] == 'snapshot_changed'
+
+
+@pytest.mark.parametrize('query,kind', [
+    ('',None), ('   ',None), ('x'*81,None), ('bad\nquery',None),
+    ('x','unknown'), ('x',[]), (None,None), ('\x7f',None),
+])
+def test_invalid_search_never_contacts_bridge(monkeypatch, query, kind):
+    from mhphotos_lightroom_mcp.server import collection_search
+    with patch('mhphotos_lightroom_mcp.server.read_collections') as fetch:
+        assert collection_search(query, kind)['reason'] == 'invalid_search_request'
+    fetch.assert_not_called()
+
+
+def test_search_obeys_source_truncation_and_expiry(runtime):
+    from mhphotos_lightroom_mcp.server import collection_search
+
+    server, _ = runtime
+    payload = {**OVERVIEW, 'truncated': True}
+    collection_sender.send_collections(payload)
+    assert collection_search('none')['truncated'] is True
+    with server.state_lock:
+        server.collections_updated_at -= 301
+    assert collection_search('Travel')['reason'] == 'no_collections'
+
+
+def test_search_without_credentials_or_with_malformed_snapshot(monkeypatch):
+    from mhphotos_lightroom_mcp.server import collection_search
+
+    monkeypatch.delenv('MHPHOTOS_BRIDGE_TOKEN', raising=False)
+    with patch('mhphotos_lightroom_mcp.server.read_collections') as fetch:
+        assert collection_search('name')['reason'] == 'bridge_not_configured'
+    fetch.assert_not_called()
+    monkeypatch.setenv('MHPHOTOS_BRIDGE_TOKEN', 'test')
+    with patch('mhphotos_lightroom_mcp.server.read_collections', return_value={'collections': []}):
+        assert collection_search('name')['reason'] == 'invalid_response'
+
+
+def test_registered_mcp_search_tool(runtime):
+    import asyncio
+
+    from mhphotos_lightroom_mcp.server import mcp
+
+    collection_sender.send_collections(OVERVIEW)
+    async def run():
+        result = await mcp.call_tool('collection_search', {
+            'query': 'TRAVEL', 'kind': 'smart_collection',
+        })
+        content = result[0] if isinstance(result, tuple) else result
+        data = json.loads(next(c.text for c in content if c.type == 'text'))
+        assert data['total_count'] == 1
+        assert data['collections'][0]['collection_path'] == ['Travel', 'Favorites']
+    asyncio.run(run())

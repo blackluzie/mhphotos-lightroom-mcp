@@ -380,6 +380,7 @@ def test_http_tool_descriptors():
         "selected_photo_metadata",
         "collection_overview",
         "collection_overview_page",
+        "collection_search",
     }
     for tool in tools:
         assert tool.annotations.readOnlyHint is True
