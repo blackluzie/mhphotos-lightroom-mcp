@@ -1,5 +1,7 @@
 """MCP tools for a future read-only Lightroom Classic integration."""
 
+import hashlib
+import json
 import os
 
 from mcp.server.fastmcp import FastMCP
@@ -98,11 +100,63 @@ def collection_overview() -> dict:
         return {"collections": [], "reason": result.get("reason", "invalid_response")}
     if result.get("reason"):
         return {"collections": [], "reason": result["reason"]}
+    if len(result["collections"]) > 100:
+        return _collection_page(result, 0, 100, None)
     return {
         "collections": result["collections"],
         "truncated": result.get("truncated", False),
         "source": "local_bridge_snapshot",
     }
+
+
+def _collection_page(result: dict, offset: int, limit: int, snapshot_id: str | None) -> dict:
+    records = result["collections"]
+    identifier = hashlib.sha256(
+        json.dumps(result, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if snapshot_id is not None and snapshot_id != identifier:
+        return {"collections": [], "reason": "snapshot_changed"}
+    if offset > len(records):
+        return {"collections": [], "reason": "invalid_offset"}
+    end = min(offset + limit, len(records))
+    return {
+        "collections": records[offset:end],
+        "truncated": result.get("truncated", False),
+        "source": "local_bridge_snapshot",
+        "snapshot_id": identifier,
+        "total_count": len(records),
+        "offset": offset,
+        "next_offset": end if end < len(records) else None,
+    }
+
+
+@mcp.tool()
+def collection_overview_page(
+    offset: int = 0, limit: int = 100, snapshot_id: str | None = None
+) -> dict:
+    """Read up to 100 submitted collection names. For later pages pass the
+    snapshot_id and next_offset from the previous page. A new submission or
+    expiry requires restarting at offset zero. Parent IDs may refer to earlier
+    pages. truncated means Lightroom omitted entries, not that more pages exist.
+    """
+    if (
+        type(offset) is not int or offset < 0
+        or type(limit) is not int or not 1 <= limit <= 100
+        or (snapshot_id is not None and (
+            not isinstance(snapshot_id, str) or len(snapshot_id) != 64
+            or any(c not in "0123456789abcdef" for c in snapshot_id)
+        ))
+        or (offset > 0 and snapshot_id is None)
+    ):
+        return {"collections": [], "reason": "invalid_page_request"}
+    token = os.environ.get("MHPHOTOS_BRIDGE_TOKEN", "")
+    if not token:
+        return {"collections": [], "reason": "bridge_not_configured"}
+    result = read_collections(BridgeConfig(token=token))
+    if not isinstance(result.get("collections"), list) or result.get("reason"):
+        return {"collections": [], "reason": result.get("reason", "invalid_response")}
+    return _collection_page(result, offset, limit, snapshot_id)
+
 
 
 def register_http_tools(http_server: FastMCP) -> None:
@@ -111,7 +165,7 @@ def register_http_tools(http_server: FastMCP) -> None:
 
     from mhphotos_lightroom_mcp.oauth import SCOPE
 
-    for tool in (connection_status, selected_photo_metadata, collection_overview):
+    for tool in (connection_status, selected_photo_metadata, collection_overview, collection_overview_page):
         http_server.add_tool(
             tool,
             annotations=ToolAnnotations(

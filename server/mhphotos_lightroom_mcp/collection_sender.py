@@ -62,7 +62,7 @@ def main() -> None:
         if len(sys.argv) != 2:
             raise ValueError("Expected private transfer file")
         path = Path(sys.argv[1])
-        payload = read_transfer(path)
+        payload = read_transfer(path, max_bytes=MAX_COLLECTION_BODY)
         try:
             result = send_collections(payload)
             print(json.dumps(result))
