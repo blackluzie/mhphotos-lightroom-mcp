@@ -12,6 +12,10 @@ from mhphotos_lightroom_mcp.bridge import (
     read_selection,
     read_status,
 )
+from mhphotos_lightroom_mcp.collection_schema import (
+    COLLECTION_KINDS,
+    validate_collections,
+)
 
 mcp = FastMCP("MHPhotos Lightroom MCP")
 
@@ -109,10 +113,16 @@ def collection_overview() -> dict:
     }
 
 
-def _collection_page(result: dict, offset: int, limit: int, snapshot_id: str | None) -> dict:
+def _collection_page(
+    result: dict, offset: int, limit: int, snapshot_id: str | None,
+    *, identity: dict | None = None,
+) -> dict:
     records = result["collections"]
     identifier = hashlib.sha256(
-        json.dumps(result, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()
+        json.dumps(
+            identity if identity is not None else result,
+            sort_keys=True, ensure_ascii=True, separators=(",", ":"),
+        ).encode()
     ).hexdigest()
     if snapshot_id is not None and snapshot_id != identifier:
         return {"collections": [], "reason": "snapshot_changed"}
@@ -139,15 +149,7 @@ def collection_overview_page(
     expiry requires restarting at offset zero. Parent IDs may refer to earlier
     pages. truncated means Lightroom omitted entries, not that more pages exist.
     """
-    if (
-        type(offset) is not int or offset < 0
-        or type(limit) is not int or not 1 <= limit <= 100
-        or (snapshot_id is not None and (
-            not isinstance(snapshot_id, str) or len(snapshot_id) != 64
-            or any(c not in "0123456789abcdef" for c in snapshot_id)
-        ))
-        or (offset > 0 and snapshot_id is None)
-    ):
+    if not _valid_collection_page(offset, limit, snapshot_id):
         return {"collections": [], "reason": "invalid_page_request"}
     token = os.environ.get("MHPHOTOS_BRIDGE_TOKEN", "")
     if not token:
@@ -158,6 +160,68 @@ def collection_overview_page(
     return _collection_page(result, offset, limit, snapshot_id)
 
 
+def _valid_collection_page(offset: int, limit: int, snapshot_id: str | None) -> bool:
+    return not (
+        type(offset) is not int or offset < 0
+        or type(limit) is not int or not 1 <= limit <= 100
+        or (snapshot_id is not None and (
+            not isinstance(snapshot_id, str) or len(snapshot_id) != 64
+            or any(c not in "0123456789abcdef" for c in snapshot_id)
+        ))
+        or (offset > 0 and snapshot_id is None)
+    )
+
+
+@mcp.tool()
+def collection_search(
+    query: str, kind: str | None = None, offset: int = 0, limit: int = 100,
+    snapshot_id: str | None = None,
+) -> dict:
+    """Search names and ancestor names in the submitted collection snapshot.
+    Case-insensitive literal substring; no regex or live catalog access.
+    kind optionally selects collection, smart_collection or collection_set.
+    Results include collection_path (ancestor names followed by the name).
+    Use the same query/kind and returned snapshot_id/next_offset for later pages.
+    An empty query is allowed only with a kind filter. Source truncation and
+    five-minute expiry apply even when the search itself returns no matches.
+    """
+    if (
+        not isinstance(query, str) or len(query) > 80
+        or any(ord(c) < 32 or ord(c) == 127 for c in query)
+        or (kind is not None and (not isinstance(kind, str) or kind not in COLLECTION_KINDS))
+        or (not query.strip() and kind is None)
+    ):
+        return {"collections": [], "reason": "invalid_search_request"}
+    if not _valid_collection_page(offset, limit, snapshot_id):
+        return {"collections": [], "reason": "invalid_page_request"}
+    token = os.environ.get("MHPHOTOS_BRIDGE_TOKEN", "")
+    if not token:
+        return {"collections": [], "reason": "bridge_not_configured"}
+    overview = read_collections(BridgeConfig(token=token))
+    if overview.get("reason"):
+        return {"collections": [], "reason": overview["reason"]}
+    try:
+        records = validate_collections(overview)
+    except ValueError:
+        return {"collections": [], "reason": "invalid_response"}
+    normalized = query.strip().casefold()
+    paths, matches = {}, []
+    for record in records:
+        path = [*paths.get(record.get("parentId"), []), record["name"]]
+        paths[record["id"]] = path
+        if (kind is None or record["kind"] == kind) and normalized in " / ".join(path).casefold():
+            matches.append({**record, "collection_path": path})
+    result = _collection_page(
+        {"collections": matches, "truncated": overview["truncated"]},
+        offset, limit, snapshot_id,
+        identity={"overview": overview, "query": normalized, "kind": kind},
+    )
+    if not result.get("reason"):
+        result["query"] = query.strip()
+        result["kind"] = kind
+        result["snapshot_count"] = len(records)
+    return result
+
 
 def register_http_tools(http_server: FastMCP) -> None:
     """Publish the read-only tools with explicit ChatGPT permissions."""
@@ -165,7 +229,10 @@ def register_http_tools(http_server: FastMCP) -> None:
 
     from mhphotos_lightroom_mcp.oauth import SCOPE
 
-    for tool in (connection_status, selected_photo_metadata, collection_overview, collection_overview_page):
+    for tool in (
+        connection_status, selected_photo_metadata, collection_overview,
+        collection_overview_page, collection_search,
+    ):
         http_server.add_tool(
             tool,
             annotations=ToolAnnotations(
