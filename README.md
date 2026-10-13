@@ -44,7 +44,9 @@ supports macOS and Windows.
 - `selected_photo_metadata`: returns only the last explicitly submitted,
   unexpired metadata snapshot.
 
-- `collection_overview`: returns only an explicitly submitted collection-name hierarchy. See [Mac collections](docs/mac-collections.md).
+- `collection_overview`: returns the first page of an explicitly submitted collection-name hierarchy. See [Mac collections](docs/mac-collections.md).
+- `collection_overview_page`: reads larger submitted overviews in bounded, snapshot-consistent pages. See [paging](docs/mac-collection-pages.md).
+- `collection_search`: searches submitted names and hierarchy with optional collection-type filters. See [search](docs/mac-collection-search.md).
 
 All tools are read-only. There are no rating-change or catalog-write tools.
 The local bridge binds to `127.0.0.1` and requires a private bearer credential.
