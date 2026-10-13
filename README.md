@@ -1,45 +1,65 @@
 # MHPhotos Lightroom MCP
 
-Open-source Model Context Protocol integration for Adobe Lightroom Classic and extensible photography workflows.
+Open-source, read-only Model Context Protocol integration for Adobe Lightroom
+Classic. The Lightroom plugin explicitly sends metadata for up to five selected
+photos to an authenticated local bridge. No catalog files or original images are
+transferred, and Lightroom ratings cannot be changed.
 
-> **Early prototype:** The server starts, but no Lightroom connection is implemented yet. Do not use it with a production catalog.
+**Prototype:** macOS selection transfer works locally. The installer supports
+macOS and Windows; Windows Lightroom SDK execution and service logon startup
+still need manual release verification. `connection_status` does not claim a
+live Lightroom catalog connection. Selection snapshots expire after five minutes.
 
-## Quick start (prototype only)
+## Desktop installation
 
-```bash
+See [secure macOS and Windows installation](docs/installation.md). Preview a plan
+first, then explicitly install into a separate user directory. Credentials are
+created automatically or safely reused; no Lightroom token entry is required.
+Installation does not register or restart a service, replace the active plugin,
+or change a tunnel. Activation and rollback are documented separately.
+
+Python 3.11+ and a reviewed, complete source checkout are required. This is a
+source installer, not a signed native application distribution.
+
+## Development
+
+```sh
 git clone https://github.com/blackluzie/mhphotos-lightroom-mcp.git
 cd mhphotos-lightroom-mcp
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[dev]'
-pytest
-mhphotos-lightroom-mcp
+python -m pip install -e '.[dev]'
+python -m pytest -q
+python -m ruff check server tests
 ```
 
-The only MCP tool currently exposed is `connection_status`, which always reports disconnected. It never accesses or changes your photos.
+On Windows, use `py -3` to create the environment and run commands with
+`.venv\Scripts\python.exe`. Core tests also run on Linux; the desktop installer
+supports macOS and Windows.
+
+## MCP tools
+
+- `connection_status`: reports local bridge readiness, without claiming direct
+  access to a Lightroom catalog.
+- `selected_photo_metadata`: returns only the last explicitly submitted,
+  unexpired metadata snapshot.
+
+Both tools are read-only. There are no rating-change or catalog-write tools.
+The local bridge binds to `127.0.0.1` and requires a private bearer credential.
+Optional Streamable HTTP/OAuth configuration is described in
+[ChatGPT OAuth](docs/chatgpt-oauth.md); the installer does not enable public access.
 
 ## Architecture
 
-- `server/`: Python MCP server
-- `plugin/`: planned Lightroom Classic SDK (Lua) plugin
-- `adapters/`: planned optional adapters, including cloud only if Adobe APIs allow it
-- `tests/`: automated tests
-- `docs/architecture.md`: architecture and safety
+- `server/`: MCP server, local bridge, private file transport and installer.
+- `lightroom/`: Lightroom Classic SDK plugin.
+- `tests/`: automated security and integration tests.
+- `docs/`: protocol, installation and integration documentation.
 
-## Roadmap
+Never directly write to Lightroom's catalog SQLite database. Additional catalog
+operations, exports and cloud adapters remain future work.
 
-1. Design a local, authenticated bridge and mock adapter.
-2. Add read-only Lightroom Classic SDK commands for photos, collections and metadata.
-3. Add permission-gated edits and exports.
-4. Assess Lightroom Cloud API access separately.
-5. Add optional MHPhotos publishing tools.
+## Contributing and license
 
-Lightroom Classic catalogs should be stored locally, even if originals live on mounted NAS volumes. Never directly write to the catalog SQLite database.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Contributions welcome.
-
-## License
-
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 MIT. Independent community project; not affiliated with or endorsed by Adobe.
