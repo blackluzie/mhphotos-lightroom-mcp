@@ -12,7 +12,7 @@ license = "MIT"
 dependencies = ["mcp==1.30.0", "httpx>=0.28,<1"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "ruff>=0.6,<1"]
+dev = ["pytest>=8,<10", "ruff>=0.6,<1", "lupa>=2,<3"]
 
 [project.scripts]
 mhphotos-lightroom-install = "mhphotos_lightroom_mcp.installer:main"

@@ -1,14 +1,14 @@
 # MHPhotos Lightroom MCP
 
 Open-source, read-only Model Context Protocol integration for Adobe Lightroom
-Classic. The Lightroom plugin explicitly sends metadata for up to five selected
+Classic. The Lightroom plugin explicitly sends metadata for up to 50 selected
 photos to an authenticated local bridge. No catalog files or original images are
 transferred, and Lightroom ratings cannot be changed.
 
 **Prototype:** macOS selection transfer works locally. The installer supports
 macOS and Windows; Windows Lightroom SDK execution and service logon startup
 still need manual release verification. `connection_status` does not claim a
-live Lightroom catalog connection. Selection snapshots expire after five minutes.
+live Lightroom catalog connection. Selection snapshots expire after five minutes. Extended capture metadata, larger selections and detailed snapshot status are described in [Mac read-only functions](docs/mac-readonly-functions.md).
 
 ## Desktop installation
 

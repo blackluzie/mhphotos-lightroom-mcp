@@ -68,7 +68,7 @@ No activation or service switch is performed by this installer.
 
 In Lightroom Classic's Plug-in Manager, add the new plugin directory from the
 plan when ready to switch. The original plugin and legacy macOS helper remain
-usable. The new plugin explicitly transfers at most five selected photos through
+usable. The new plugin explicitly transfers at most 50 selected photos with the new helper/bridge through
 a private local file; the Python helper reads the credential itself, sends only
 the permitted metadata and deletes accepted transfer files. Ratings are read-only:
 there is no catalog-write operation or rating-change tool.

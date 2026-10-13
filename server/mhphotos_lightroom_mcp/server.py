@@ -10,7 +10,7 @@ mcp = FastMCP("MHPhotos Lightroom MCP")
 
 
 @mcp.tool()
-def connection_status() -> dict[str, str | bool]:
+def connection_status() -> dict:
     """Report local bridge readiness without claiming Lightroom catalog access."""
     token = os.environ.get("MHPHOTOS_BRIDGE_TOKEN", "")
     if not token:
@@ -33,11 +33,33 @@ def connection_status() -> dict[str, str | bool]:
             "mode": "prototype",
             "message": "Local bridge unavailable. No Lightroom catalog access.",
         }
-    return {
+    state = result.get("selection_state")
+    messages = {
+        "received": "Local bridge running; a submitted Lightroom selection is available. No live catalog connection.",
+        "expired": "Local bridge running; the last selection expired. Send the selection from Lightroom again.",
+        "none": "Local bridge running; no selection received yet. Send selected photos from Lightroom.",
+    }
+    status = {
         "connected": False,
         "mode": "prototype",
-        "message": "Local bridge running; Lightroom Classic is not connected.",
+        "bridge_running": True,
+        "selection_received": bool(result.get("selection_received")),
+        "catalog_writes": False,
+        "message": messages.get(
+            state, "Local bridge running; Lightroom Classic is not connected."
+        ),
     }
+    # Preserve compatibility with old bridges while exposing bounded diagnostics.
+    for key in (
+        "selection_state",
+        "selection_count",
+        "selection_age_seconds",
+        "selection_expires_in_seconds",
+        "protocol_version",
+    ):
+        if key in result:
+            status[key] = result[key]
+    return status
 
 
 @mcp.tool()
@@ -49,7 +71,10 @@ def selected_photo_metadata() -> dict:
     result = read_selection(BridgeConfig(token=token))
     if not isinstance(result.get("photos"), list):
         return {"photos": [], "reason": result.get("reason", "invalid_response")}
-    return {"photos": result["photos"], "source": "local_bridge_snapshot"}
+    snapshot = {"photos": result["photos"], "source": "local_bridge_snapshot"}
+    if result.get("reason"):
+        snapshot["reason"] = result["reason"]
+    return snapshot
 
 
 def register_http_tools(http_server: FastMCP) -> None:

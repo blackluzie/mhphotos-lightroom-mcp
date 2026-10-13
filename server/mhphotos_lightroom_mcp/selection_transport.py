@@ -10,8 +10,9 @@ from mhphotos_lightroom_mcp.private_files import (
     validate_private,
     windows_acl,
 )
+from mhphotos_lightroom_mcp.selection_schema import MAX_BODY
 
-MAX_BYTES = 8192
+MAX_BYTES = MAX_BODY
 PREFIX = "selection-"
 SUFFIX = ".json"
 

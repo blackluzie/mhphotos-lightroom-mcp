@@ -15,7 +15,11 @@ from mhphotos_lightroom_mcp.private_files import (
     validate_private,
     windows_acl,
 )
-from mhphotos_lightroom_mcp.selection_transport import create_transfer, read_transfer
+from mhphotos_lightroom_mcp.selection_transport import (
+    MAX_BYTES,
+    create_transfer,
+    read_transfer,
+)
 
 
 @pytest.fixture
@@ -72,7 +76,7 @@ def test_transfer_native_permissions_and_limits(home):
     path = create_transfer(payload)
     validate_private(path)
     assert read_transfer(path) == payload
-    path.write_bytes(b'x' * 8193)
+    path.write_bytes(b'x' * (MAX_BYTES + 1))
     with pytest.raises(ValueError, match='large'):
         read_transfer(path)
     with pytest.raises(ValueError, match='path'):

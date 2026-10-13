@@ -2,6 +2,7 @@
 
 No direct catalog access. Only an authenticated local client can submit data.
 """
+
 from __future__ import annotations
 
 import hmac
@@ -11,14 +12,19 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-MAX_BODY = 8192
-MAX_PHOTOS = 5
+from mhphotos_lightroom_mcp.selection_schema import (
+    FIELDS,
+    MAX_BODY,
+    MAX_PHOTOS,
+    PROTOCOL_VERSION,
+    validate_selection,
+)
+
 SELECTION_TTL_SECONDS = 300
-FIELDS = {"fileName", "rating", "pickStatus"}
 
 
 class _Handler(BaseHTTPRequestHandler):
-    server_version = "MHPhotosBridge/0.2"
+    server_version = "MHPhotosBridge/0.3"
 
     def _authorized(self) -> bool:
         supplied = self.headers.get("Authorization", "")
@@ -36,6 +42,17 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not self._authorized():
             return self._respond(401, {"error": "unauthorized"})
+        if self.path == "/v1/capabilities":
+            return self._respond(
+                200,
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "metadata_fields": sorted(FIELDS),
+                    "max_photos": MAX_PHOTOS,
+                    "max_body_bytes": MAX_BODY,
+                    "catalog_writes": False,
+                },
+            )
         if self.path == "/v1/status":
             with self.server.state_lock:
                 if self.server.selection is not None and (
@@ -44,13 +61,35 @@ class _Handler(BaseHTTPRequestHandler):
                 ):
                     self.server.selection = None
                 has_selection = self.server.selection is not None
-            return self._respond(200, {
-                "connected": False,
-                "bridge_running": True,
-                "lightroom_connected": False,
-                "selection_received": has_selection,
-                "mode": "prototype",
-            })
+                age = (
+                    int(max(0, time.monotonic() - self.server.selection_updated_at))
+                    if self.server.selection_updated_at
+                    else None
+                )
+                count = len(self.server.selection) if has_selection else 0
+                state = (
+                    "received"
+                    if has_selection
+                    else ("expired" if age is not None else "none")
+                )
+            return self._respond(
+                200,
+                {
+                    "connected": False,
+                    "bridge_running": True,
+                    "lightroom_connected": False,
+                    "selection_received": has_selection,
+                    "selection_state": state,
+                    "selection_count": count,
+                    "selection_age_seconds": age,
+                    "selection_expires_in_seconds": max(0, SELECTION_TTL_SECONDS - age)
+                    if age is not None
+                    else 0,
+                    "protocol_version": PROTOCOL_VERSION,
+                    "catalog_writes": False,
+                    "mode": "prototype",
+                },
+            )
         if self.path == "/v1/selection":
             with self.server.state_lock:
                 selection = self.server.selection
@@ -84,21 +123,10 @@ class _Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length))
         except (ValueError, UnicodeDecodeError):
             return self._respond(400, {"error": "invalid_json"})
-        if not isinstance(payload, dict) or set(payload) != {"photos"}:
-            return self._respond(400, {"error": "invalid_payload"})
-        photos = payload["photos"]
-        if not isinstance(photos, list) or not 1 <= len(photos) <= MAX_PHOTOS:
-            return self._respond(400, {"error": "invalid_photos"})
-        for photo in photos:
-            if (not isinstance(photo, dict) or not photo
-                    or not set(photo).issubset(FIELDS)):
-                return self._respond(400, {"error": "invalid_fields"})
-            if any(
-                not isinstance(value, (str, int)) or isinstance(value, bool)
-                or len(str(value)) > 80
-                for value in photo.values()
-            ):
-                return self._respond(400, {"error": "invalid_values"})
+        try:
+            photos = validate_selection(payload)
+        except ValueError as error:
+            return self._respond(400, {"error": str(error)})
         with self.server.state_lock:
             self.server.selection = photos
             self.server.selection_updated_at = time.monotonic()

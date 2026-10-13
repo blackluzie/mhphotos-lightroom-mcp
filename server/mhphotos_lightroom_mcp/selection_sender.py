@@ -7,41 +7,78 @@ import urllib.request
 from pathlib import Path
 
 from mhphotos_lightroom_mcp.desktop import read_bridge_token
+from mhphotos_lightroom_mcp.selection_schema import (
+    BASE_FIELDS,
+    MAX_BODY,
+    validate_selection,
+)
 from mhphotos_lightroom_mcp.selection_transport import (
     read_transfer,
     transport_directory,
 )
 
 BRIDGE_URL = "http://127.0.0.1:8765/v1/selection"
-MAX_PHOTOS = 5
-ALLOWED_FIELDS = {"fileName", "rating", "pickStatus"}
 
 
 def send_selection(payload: dict) -> dict:
-    photos = payload.get("photos")
+    photos = validate_selection(payload, require_base=True)
+    data = json.dumps(payload).encode("utf-8")
+    if len(data) > MAX_BODY:
+        raise ValueError("Transfer payload too large")
 
-    if not isinstance(photos, list) or not 1 <= len(photos) <= MAX_PHOTOS:
-        raise ValueError("Expected between 1 and 5 photos")
+    token = read_bridge_token(Path.home() / ".mhphotos-lightroom-token")
 
-    for photo in photos:
-        if not isinstance(photo, dict) or set(photo) != ALLOWED_FIELDS:
-            raise ValueError("Invalid photo fields")
-
-        if not all(
-            isinstance(value, (str, int))
-            and not isinstance(value, bool)
-            and len(str(value)) <= 80
-            for value in photo.values()
-        ):
-            raise ValueError("Invalid metadata value")
-
-    token = read_bridge_token(
-        Path.home() / ".mhphotos-lightroom-token"
-    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    # Negotiate only when optional metadata is present. Old bridges return 404
+    # for capabilities: retain the original three fields and disclose fallback.
+    metadata_mode = "basic"
+    if len(photos) > 5 or any(set(photo) - BASE_FIELDS for photo in photos):
+        capabilities_request = urllib.request.Request(
+            BRIDGE_URL.rsplit("/", 1)[0] + "/capabilities",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        try:
+            with opener.open(capabilities_request, timeout=5) as response:
+                capabilities = json.load(response)
+            if (
+                not isinstance(capabilities, dict)
+                or capabilities.get("protocol_version") != 2
+                or not isinstance(capabilities.get("metadata_fields"), list)
+                or not all(
+                    isinstance(field, str) for field in capabilities["metadata_fields"]
+                )
+            ):
+                raise ValueError("Invalid bridge capabilities")
+            supported = set(capabilities["metadata_fields"])
+            limit = capabilities.get("max_photos")
+            if (
+                not isinstance(limit, int)
+                or isinstance(limit, bool)
+                or len(photos) > limit
+            ):
+                raise ValueError("Bridge selection limit exceeded")
+            if not all(set(photo) <= supported for photo in photos):
+                raise ValueError("Bridge does not support requested metadata")
+            metadata_mode = "extended"
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            if len(photos) > 5:
+                raise ValueError(
+                    "Legacy bridge supports at most five photos; update the bridge first"
+                ) from error
+            payload = {
+                "photos": [
+                    {key: value for key, value in photo.items() if key in BASE_FIELDS}
+                    for photo in photos
+                ]
+            }
+            data = json.dumps(payload).encode("utf-8")
+            metadata_mode = "basic_legacy_bridge"
 
     request = urllib.request.Request(
         BRIDGE_URL,
-        data=json.dumps(payload).encode("utf-8"),
+        data=data,
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {token}",
@@ -49,8 +86,12 @@ def send_selection(payload: dict) -> dict:
         method="POST",
     )
 
-    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=5) as response:
-        return json.load(response)
+    with opener.open(request, timeout=5) as response:
+        result = json.load(response)
+    # Preserve the legacy response shape for basic selections.
+    if metadata_mode != "basic":
+        result["metadata_mode"] = metadata_mode
+    return result
 
 
 def main() -> None:

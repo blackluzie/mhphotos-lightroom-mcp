@@ -21,7 +21,7 @@ yet been tested inside Lightroom Classic.
 
 ## Data and security boundaries
 
-- At most five selected photos per submission.
+- At most 50 selected photos per submission with the new helper/bridge; older bridges accept at most five.
 - Only `fileName`, `rating` and `pickStatus` are submitted.
 - The destination is `http://127.0.0.1:8765/v1/selection`, not a remote host.
 - The token is read from the owner-local token file and is not written to Lightroom preferences.
@@ -34,3 +34,5 @@ yet been tested inside Lightroom Classic.
 Python unit and integration tests exercise the HTTP-to-MCP path, but the Lua
 plugin and Lightroom SDK integration require an actual Lightroom Classic
 installation on macOS. See `docs/integration-test-plan.md`.
+
+See [Mac read-only functions](../docs/mac-readonly-functions.md) for the optional capture fields, preview and compatibility rules.
