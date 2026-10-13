@@ -1,6 +1,6 @@
 -- Collection names and hierarchy only. Never fetch photos or search rules.
 local Collections = {}
-local MAX_NODES, MAX_DEPTH = 100, 8
+local MAX_NODES, MAX_DEPTH = 1000, 8
 
 local function nameOf(node)
     local name = node:getName()

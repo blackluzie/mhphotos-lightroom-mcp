@@ -78,13 +78,13 @@ def test_lua_count_limit_and_unicode(module):
     lua, metadata = module
     catalog = lua.execute("""
 local values={}
-for i=1,101 do values[i]=collection(string.rep('x',79)..'ä_END',false) end
+for i=1,1001 do values[i]=collection(string.rep('x',79)..'ä_END',false) end
 return container('catalog',values,{})
 """)
     overview = json.loads(metadata.encode(metadata.read(catalog)))
-    assert len(overview["collections"]) == 100
+    assert len(overview["collections"]) == 1000
     assert overview["truncated"] is True
-    assert "Showing first 15 entries; sending all 100 listed entries." in metadata.preview(metadata.read(catalog))
+    assert "Showing first 15 entries; sending all 1000 listed entries." in metadata.preview(metadata.read(catalog))
     assert overview["collections"][0]["name"] == "x" * 79
     validate_collections(overview)
 
@@ -212,7 +212,7 @@ def test_authentication_required(runtime, method):
         [{"id": "node1", "name": "Private", "kind": "published_collection"}],
         [
             {"id": f"node{i}", "name": "Extra", "kind": "collection"}
-            for i in range(1, 102)
+            for i in range(1, 1002)
         ],
     ],
 )
@@ -243,10 +243,11 @@ def test_collection_byte_limit_and_origin_boundary(runtime):
     request = Request(
         f"http://127.0.0.1:{server.server_port}/v1/collections",
         method="POST",
-        data=b"x" * (MAX_COLLECTION_BODY + 1),
+        data=b"",
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
+            "Content-Length": str(MAX_COLLECTION_BODY + 1),
         },
     )
     with pytest.raises(HTTPError) as error:
@@ -416,3 +417,119 @@ def test_server_rejects_hierarchy_beyond_eight_levels(runtime):
     with pytest.raises(ValueError, match="depth"):
         collection_sender.send_collections(payload)
     assert server.collections is None
+
+
+def large_overview(count=1000):
+    return {
+        'collections': [
+            {'id': f'node{i}', 'name': 'Ä' * 40, 'kind': 'collection_set',
+             **({'parentId': 'node1'} if i > 1 else {})}
+            for i in range(1, count + 1)
+        ],
+        'truncated': False,
+    }
+
+
+def test_large_private_file_and_all_mcp_pages(runtime, monkeypatch, capsys):
+    from mhphotos_lightroom_mcp.selection_transport import transport_directory
+    from mhphotos_lightroom_mcp.server import collection_overview_page
+
+    payload = large_overview()
+    path = transport_directory() / 'selection-large.json'
+    path.write_text(json.dumps(payload))
+    import os
+
+    from mhphotos_lightroom_mcp.private_files import windows_acl
+    if os.name == 'nt':
+        windows_acl(path, protect=True)
+    else:
+        path.chmod(0o600)
+    from mhphotos_lightroom_mcp.selection_transport import read_transfer
+    with pytest.raises(ValueError, match='too large'):
+        read_transfer(path)
+    assert path.stat().st_size > 65536
+    monkeypatch.setattr(sys, 'argv', ['send', str(path)])
+    collection_sender.main()
+    assert json.loads(capsys.readouterr().out) == {'accepted': 1000}
+    assert not path.exists()
+    first = collection_overview()
+    assert len(first['collections']) == 100
+    assert first['total_count'] == 1000
+    assert first['truncated'] is False
+    records = []
+    page = collection_overview_page()
+    identifier = page['snapshot_id']
+    while True:
+        assert page['snapshot_id'] == identifier
+        assert len(page['collections']) <= 100
+        records.extend(page['collections'])
+        if page['next_offset'] is None:
+            break
+        page = collection_overview_page(page['next_offset'], 100, identifier)
+    assert records == payload['collections']
+
+
+def test_pages_cannot_mix_changed_or_expired_snapshots(runtime):
+    from mhphotos_lightroom_mcp.server import collection_overview_page
+
+    server, _ = runtime
+    payload = large_overview(201)
+    collection_sender.send_collections(payload)
+    first = collection_overview_page(limit=37)
+    assert first['next_offset'] == 37
+    payload['collections'][0]['name'] = 'Changed'
+    collection_sender.send_collections(payload)
+    assert collection_overview_page(37, 37, first['snapshot_id'])['reason'] == 'snapshot_changed'
+    latest = collection_overview_page()
+    with server.state_lock:
+        server.collections_updated_at -= 301
+    assert collection_overview_page(100, 100, latest['snapshot_id'])['reason'] == 'no_collections'
+
+
+@pytest.mark.parametrize('offset,limit,identifier', [
+    (-1,100,None), (True,100,None), (0,True,None), (0,101,None),
+    (0,0,None), (1,100,None), (0,100,'invalid'), (0,100,'g'*64),
+])
+def test_invalid_pages_do_not_contact_bridge(monkeypatch, offset, limit, identifier):
+    from mhphotos_lightroom_mcp.server import collection_overview_page
+    with patch('mhphotos_lightroom_mcp.server.read_collections') as fetch:
+        assert collection_overview_page(offset, limit, identifier)['reason'] == 'invalid_page_request'
+    fetch.assert_not_called()
+
+
+def test_page_end_and_truncation_are_independent(runtime):
+    from mhphotos_lightroom_mcp.server import collection_overview_page
+    payload = large_overview(101)
+    payload['truncated'] = True
+    collection_sender.send_collections(payload)
+    first = collection_overview_page()
+    last = collection_overview_page(100, 100, first['snapshot_id'])
+    assert len(last['collections']) == 1
+    assert last['next_offset'] is None
+    assert last['truncated'] is True
+    assert collection_overview_page(102, 100, first['snapshot_id'])['reason'] == 'invalid_offset'
+    assert collection_overview_page(101, 100, first['snapshot_id'])['collections'] == []
+
+
+def test_registered_mcp_tool_validates_and_returns_page(runtime):
+    import asyncio
+
+    from mhphotos_lightroom_mcp.server import mcp
+
+    collection_sender.send_collections(large_overview(201))
+    async def run():
+        result = await mcp.call_tool('collection_overview_page', {'offset': 0, 'limit': 37})
+        # Decode the registered MCP tool response, including argument validation.
+        content = result[0] if isinstance(result, tuple) else result
+        structured = json.loads(next(c.text for c in content if c.type == "text"))
+        assert structured['total_count'] == 201
+        assert len(structured['collections']) == 37
+        following = await mcp.call_tool('collection_overview_page', {
+            'offset': structured['next_offset'], 'limit': 37,
+            'snapshot_id': structured['snapshot_id'],
+        })
+        content = following[0] if isinstance(following, tuple) else following
+        page = json.loads(next(c.text for c in content if c.type == "text"))
+        assert page['offset'] == 37
+        assert page['collections'][0]['id'] == 'node38'
+    asyncio.run(run())

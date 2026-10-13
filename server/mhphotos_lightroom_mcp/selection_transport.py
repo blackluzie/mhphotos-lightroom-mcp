@@ -54,7 +54,7 @@ def create_transfer(payload: dict) -> Path:
         raise
 
 
-def read_transfer(path: Path) -> dict:
+def read_transfer(path: Path, *, max_bytes: int = MAX_BYTES) -> dict:
     """Read a private transfer file and remove it after processing."""
     directory = transport_directory()
 
@@ -68,11 +68,11 @@ def read_transfer(path: Path) -> dict:
     validate_private(path)
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     with os.fdopen(fd, "rb") as handle:
-        if os.fstat(handle.fileno()).st_size > MAX_BYTES:
+        if os.fstat(handle.fileno()).st_size > max_bytes:
             raise ValueError("Transfer payload too large")
-        data = handle.read(MAX_BYTES + 1)
+        data = handle.read(max_bytes + 1)
 
-    if len(data) > MAX_BYTES:
+    if len(data) > max_bytes:
         raise ValueError("Transfer payload too large")
 
     payload = json.loads(data)

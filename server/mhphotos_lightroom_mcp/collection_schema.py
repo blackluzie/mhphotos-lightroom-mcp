@@ -2,11 +2,11 @@
 
 import re
 
-MAX_COLLECTIONS = 100
+MAX_COLLECTIONS = 1000
 MAX_COLLECTION_DEPTH = 8
-MAX_COLLECTION_BODY = 32768
+MAX_COLLECTION_BODY = 1048576
 COLLECTION_KINDS = frozenset({"collection", "smart_collection", "collection_set"})
-_ID = re.compile(r"node[1-9][0-9]{0,2}")
+_ID = re.compile(r"node[1-9][0-9]{0,3}")
 
 
 def validate_collections(payload: object) -> list:
