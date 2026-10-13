@@ -45,6 +45,7 @@ supports macOS and Windows.
   unexpired metadata snapshot.
 
 - `selected_photo_summary`: summarizes submitted camera/lens/file-type values, ratings and flags without changing them. See [selection summary](docs/mac-selection-summary.md).
+- `selected_photo_filter`: filters only submitted photos by literal metadata values. See [photo filters](docs/mac-photo-filters.md).
 - `collection_overview`: returns the first page of an explicitly submitted collection-name hierarchy. See [Mac collections](docs/mac-collections.md).
 - `collection_overview_page`: reads larger submitted overviews in bounded, snapshot-consistent pages. See [paging](docs/mac-collection-pages.md).
 - `collection_search`: searches submitted names and hierarchy with optional collection-type filters. See [search](docs/mac-collection-search.md).
