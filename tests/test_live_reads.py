@@ -449,3 +449,40 @@ def test_poll_is_online_in_same_coarse_clock_tick(monkeypatch):
     assert queue.online()
     queue.stop()
     assert not queue.online()
+
+
+@pytest.mark.parametrize('failure', ['poll_helper', 'request_parse', 'reply_helper'])
+def test_worker_failure_stops_and_reports_only_fixed_stage(failure):
+    lua=LuaRuntime()
+    lua.globals().failure=failure
+    lua.globals().request_text=command(operation='collections',path=(),limit=0)
+    lua.execute("""
+WIN_ENV=false; mode=nil; reported=nil
+require=function(name)
+ if name=='LiveRead' then return {
+  parse=function(text) if failure=='request_parse' then error('PRIVATE') end; return {id=string.rep('a',32)} end,
+  execute=function() return '{"collections":[],"truncated":false}' end} end
+ return {python='/venv/python',profileRoot='/private/profile'}
+end
+io.open=function(path,mode) return {read=function() return request_text end,close=function() end,write=function() return true end} end
+import=function(name)
+ if name=='LrTasks' then return {pcall=pcall,
+  execute=function(command)
+   if command:find(' poll ',1,true) and failure=='poll_helper' then return 1 end
+   if command:find(' reply ',1,true) and failure=='reply_helper' then return 1 end
+   return 0
+  end,
+  startAsyncTask=function(task) savedTask=task end,sleep=function() end} end
+ if name=='LrFileUtils' then return {exists=function(path) return path:sub(-10)=='/transfers' end,delete=function() end} end
+ if name=='LrPathUtils' then return {child=function(a,b) return a..'/'..b end} end
+ if name=='LrDialogs' then return {confirm=function() return 'ok' end,
+  message=function(title,text,kind) if kind=='warning' then reported=text end end} end
+ return {activeCatalog=function() return {} end}
+end
+""")
+    plugin=Path(__file__).resolve().parents[1]/'lightroom/MHPhotosLightroom.lrplugin'
+    worker=lua.execute((plugin/'LiveWorker.lua').read_text())
+    worker.start()
+    lua.globals().savedTask()
+    assert not worker.running
+    assert lua.globals().reported==f'Read-only connection stopped at {failure}. Please report this code. No catalog writes.'

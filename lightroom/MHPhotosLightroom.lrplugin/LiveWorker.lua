@@ -46,12 +46,15 @@ function Worker.start()
                     ..' '..mode..' '..quote(filename))
             end
             if not Files.exists(filename) then
-                Tasks.pcall(function()
+                local stage='poll_helper'
+                local success=Tasks.pcall(function()
                     if execute('poll')~=0 then error('Poll failed') end
+                    stage='request_file'
                     local file=io.open(filename,'r')
                     if not file then error('Missing request') end
                     local text=file:read(2049); file:close(); Files.delete(filename)
                     if text=='' then return end
+                    stage='request_parse'
                     local request=Live.parse(text)
                     local ok,result=Tasks.pcall(function()
                         if not Worker.running or generation~=Worker.generation then return '{"error":"worker_stopped"}' end
@@ -61,14 +64,21 @@ function Worker.start()
                     end)
                     if not ok then result='{"error":"sdk_error"}' end
                     if not Worker.running or generation~=Worker.generation then result='{"error":"worker_stopped"}' end
+                    stage='reply_file'
                     local output=io.open(filename,'w')
                     if not output then error('Cannot create response') end
                     local written=output:write('{"id":"'..request.id..'","result":'..result..'}')
                     output:close()
                     if not written then error('Cannot write response') end
-                    execute('reply')
+                    stage='reply_helper'
+                    if execute('reply')~=0 then error('Reply failed') end
                 end)
                 if Files.exists(filename) then Files.delete(filename) end
+                if not success then
+                    Worker.running=false
+                    Dialogs.message('MHPhotos Read-only Connection',
+                        'Read-only connection stopped at '..stage..'. Please report this code. No catalog writes.', 'warning')
+                end
             end
             Tasks.sleep(2)
         end
