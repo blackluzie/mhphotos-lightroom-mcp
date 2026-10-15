@@ -40,11 +40,12 @@ bounded. A fresh RGB canvas is encoded without embedded EXIF, ICC or comments.
 No raw exception text or private filesystem paths are returned on rendering
 failure, and the renderer writes no files.
 
-Use the sheet for visual comparison, then request a candidate's larger individual
-preview with `lightroom_collection_photos`, using the same path/session and its
-`collection_offset`. Check the fresh metadata before associating it with an
-earlier sheet. No automatic best-photo ranking, catalog selection, collection
-changes, ratings, Develop operations or presets are performed.
+Use the sheet for visual comparison, then request a candidate's individual
+preview with `lightroom_collection_candidate_preview`. Pass the sheet's
+`collection_path` and `session_id`, and the label's `collection_offset` and
+`metadata_fingerprint`. See [candidate previews](mac-candidate-previews.md).
+No automatic best-photo ranking, catalog selection, collection changes, ratings,
+Develop operations or presets are performed.
 
 Tests cover partial/missing previews, index mappings, pixel order, maximum image
 size, metadata removal, invalid/non-JPEG/oversize input, native MCP images,

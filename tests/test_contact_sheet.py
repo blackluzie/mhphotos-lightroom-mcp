@@ -92,7 +92,10 @@ def test_native_tool_returns_one_sheet_and_unambiguous_position_mapping():
     assert isinstance(result[1], ImageContent) and result[1].mimeType == 'image/jpeg'
     metadata = json.loads(result[0].text)
     assert metadata['catalog_writes'] is False and metadata['contact_sheet']['available'] is True
-    assert metadata['contact_sheet']['labels'] == [
+    labels = metadata['contact_sheet']['labels']
+    assert all(len(label['metadata_fingerprint']) == 64 for label in labels)
+    assert len({label['metadata_fingerprint'] for label in labels}) == 3
+    assert [{k: v for k, v in label.items() if k != 'metadata_fingerprint'} for label in labels] == [
         {'photo_number': 21, 'collection_offset': 20, 'preview_status': 'available'},
         {'photo_number': 22, 'collection_offset': 21, 'preview_status': 'preview_timeout'},
         {'photo_number': 23, 'collection_offset': 22, 'preview_status': 'available'},

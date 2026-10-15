@@ -58,7 +58,9 @@ and are not exposed by the existing public HTTP connector.
 by filename, exportable keywords, title/caption and non-private location labels;
 see [photo metadata search](docs/mac-live-photo-search.md).
 `lightroom_collection_contact_sheet` combines up to ten current previews into one
-numbered review image; see [contact sheets](docs/mac-contact-sheets.md). See
+numbered review image; see [contact sheets](docs/mac-contact-sheets.md).
+`lightroom_collection_candidate_preview` retrieves an individual preview after
+comparing its current metadata with the sheet; see [candidate previews](docs/mac-candidate-previews.md). See
 [direct Mac reads](docs/mac-live-reads.md).
 
 All tools are read-only. There are no rating-change or catalog-write tools.
