@@ -486,3 +486,35 @@ end
     lua.globals().savedTask()
     assert not worker.running
     assert lua.globals().reported==f'Read-only connection stopped at {failure}. Please report this code. No catalog writes.'
+
+
+@pytest.mark.parametrize('idle_result', [None, ''])
+def test_worker_idle_poll_does_not_parse_eof_or_stop_with_warning(idle_result, tmp_path):
+    lua=LuaRuntime()
+    empty=tmp_path/'empty.txt'
+    empty.write_bytes(b'')
+    lua.globals().empty_path=str(empty)
+    assert lua.execute("local f=assert(io.open(empty_path,'r')); local v=f:read(2049); f:close(); return v") is None
+    lua.globals().idle_result=idle_result
+    lua.execute("""
+WIN_ENV=false; parsed=false; warning=false
+require=function(name)
+ if name=='LiveRead' then return {parse=function() parsed=true; error('Idle must not parse') end} end
+ return {python='/venv/python',profileRoot='/private/profile'}
+end
+io.open=function() return {read=function() return idle_result end,close=function() end} end
+import=function(name)
+ if name=='LrTasks' then return {pcall=pcall,execute=function() return 0 end,
+  startAsyncTask=function(task) savedTask=task end,sleep=function() worker.running=false end} end
+ if name=='LrFileUtils' then return {exists=function(path) return path:sub(-10)=='/transfers' end,delete=function() end} end
+ if name=='LrPathUtils' then return {child=function(a,b) return a..'/'..b end} end
+ if name=='LrDialogs' then return {confirm=function() return 'ok' end,
+  message=function(title,text,kind) if kind=='warning' then warning=true end end} end
+ return {activeCatalog=function() error('Idle must not read catalog') end}
+end
+""")
+    plugin=Path(__file__).resolve().parents[1]/'lightroom/MHPhotosLightroom.lrplugin'
+    lua.globals().worker=lua.execute((plugin/'LiveWorker.lua').read_text())
+    lua.globals().worker.start()
+    lua.globals().savedTask()
+    assert not lua.globals().parsed and not lua.globals().warning

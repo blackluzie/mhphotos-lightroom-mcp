@@ -52,8 +52,10 @@ function Worker.start()
                     stage='request_file'
                     local file=io.open(filename,'r')
                     if not file then error('Missing request') end
-                    local text=file:read(2049); file:close(); Files.delete(filename)
-                    if text=='' then return end
+                    local text,readError=file:read(2049); file:close(); Files.delete(filename)
+                    if readError then error('Cannot read request') end
+                    -- Lua returns nil at EOF for the empty idle-poll file.
+                    if text==nil or text=='' then return end
                     stage='request_parse'
                     local request=Live.parse(text)
                     local ok,result=Tasks.pcall(function()
