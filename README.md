@@ -2,7 +2,7 @@
 
 Open-source Model Context Protocol integration for Adobe Lightroom Classic and extensible photography workflows.
 
-> **Early prototype:** The server starts, but no Lightroom connection is implemented yet. Do not use it with a production catalog.
+> **Early prototype:** The server runs against a built-in **mock catalog** only. No Lightroom connection is implemented yet. Do not use it with a production catalog.
 
 ## Quick start (prototype only)
 
@@ -16,7 +16,16 @@ pytest
 mhphotos-lightroom-mcp
 ```
 
-The only MCP tool currently exposed is `connection_status`, which always reports disconnected. It never accesses or changes your photos.
+Read-only MCP tools (backed by a mock adapter with sample data; they never access or change real photos):
+
+| Tool | Purpose |
+|------|---------|
+| `connection_status` | Adapter mode and connection state (`mock`) |
+| `list_collections` | Collections with id, name, photo count |
+| `list_photos` | Photos (optionally per collection), paginated, `limit` capped at 100 |
+| `get_photo_metadata` | Rating, flag, keywords, capture time, camera |
+
+A real Lightroom bridge will plug in later as another `CatalogAdapter` (`server/mhphotos_lightroom_mcp/adapters.py`).
 
 ## Architecture
 
@@ -28,7 +37,7 @@ The only MCP tool currently exposed is `connection_status`, which always reports
 
 ## Roadmap
 
-1. Design a local, authenticated bridge and mock adapter.
+1. ~~Mock adapter with read-only tools~~ (done); design a local, authenticated bridge.
 2. Add read-only Lightroom Classic SDK commands for photos, collections and metadata.
 3. Add permission-gated edits and exports.
 4. Assess Lightroom Cloud API access separately.
