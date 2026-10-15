@@ -68,7 +68,8 @@ end
 Live.base64=base64
 
 local pending, pendingCount={},0
--- Start requests together so rendering gets one bounded batch deadline.
+local MAX_PENDING_PREVIEWS=2
+-- Bound SDK rendering across pages as well as within each page.
 local function requestPreview(photo,index,catalog)
     -- Repeated explicit reads must not queue duplicate rendering for this photo.
     -- A slot belongs to its catalog object, never just a name or read position.
@@ -79,7 +80,7 @@ local function requestPreview(photo,index,catalog)
         end
     end
     local slot={index=index,finished=false,photo=photo,catalog=catalog}
-    if pendingCount>=10 then slot.finished=true; slot.reason='preview_unavailable'; return slot end
+    if pendingCount>=MAX_PENDING_PREVIEWS then return nil end
     pending[slot]=true; pendingCount=pendingCount+1
     local ok,handle=Tasks.pcall(function()
         return photo:requestJpegThumbnail(512,512,function(data)
@@ -108,7 +109,14 @@ local function finishPreviews(slots, startedAt)
     -- Keep a finite iteration cap as a second bound if the clock moves backwards.
     for _=1,300 do
         local finished=true
-        for _,slot in ipairs(slots) do if not slot.finished then finished=false; break end end
+        for index,slot in ipairs(slots) do
+            local elapsed=os.time()-startedAt
+            if slot.queued and elapsed>=0 and elapsed<15 then
+                local active=requestPreview(slot.photo,slot.index,slot.catalog)
+                if active then slots[index]=active; slot=active end
+            end
+            if not slot.finished then finished=false end
+        end
         local elapsed=os.time()-startedAt
         if finished or elapsed<0 or elapsed>=15 then break end
         Tasks.sleep(0.05)
@@ -142,12 +150,7 @@ function Live.execute(catalog,request)
     for i=request.offset+1,math.min(#photos,request.offset+request.limit) do
         records[#records+1]=Metadata.read(photos[i])
         if request.previews then
-            local elapsed=os.time()-startedAt
-            if elapsed<0 or elapsed>=15 then
-                previews[#previews+1]={index=#records,finished=true,reason='preview_timeout'}
-            else
-                previews[#previews+1]=requestPreview(photos[i],#records,catalog)
-            end
+            previews[#previews+1]={index=#records,photo=photos[i],catalog=catalog,queued=true}
         end
     end
     if request.previews then previews=finishPreviews(previews,startedAt) end

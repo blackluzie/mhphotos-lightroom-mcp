@@ -69,7 +69,7 @@ explicit. No matching/ranking automatically writes ratings, picks or Develop dat
   EXIF/XMP/comments/ICC data. Originals are untouched. These are previews, not
   full-resolution files or a color-proofed export.
 - The SDK thumbnail handle is retained until callback, including timeout cases;
-  outstanding late callbacks are bounded to ten. A missing/slow/large preview
+  outstanding late callbacks are bounded to two. A missing/slow/large preview
   returns a per-photo error, not a fabricated image.
 
 ## Later editing and presets
@@ -109,7 +109,7 @@ turning one request timeout into a session-wide disconnect.
 An explicit read reuses a still-pending thumbnail request for the same SDK photo
 object and catalog object. It does not enqueue another rendering request or use
 a collection position/name as photo identity. The current read still collects
-fresh metadata and assigns current page indices. The ten-pending-request cap and
+fresh metadata and assigns current page indices. The two-pending-request cap and
 page budget remain in force. A callback arriving during the later explicit wait
 can satisfy that read. A callback arriving with no active consumer discards its
 bytes and releases the slot; a future read starts afresh. No completed JPEG cache,
@@ -117,3 +117,20 @@ automatic retries, background catalog scan or extra metadata access is added.
 Repeated callbacks after completion are ignored. Catalog changes never reuse an
 old catalog's pending slot. SDK callbacks that never complete can still occupy
 bounded slots; the tool does not claim it can cancel Lightroom rendering.
+
+### Gentle preview scheduling
+
+A page still supports ten photos, but launches at most two SDK thumbnail requests
+at once, globally across pages. Other requested photos wait in that page's bounded
+queue. Each completed callback frees a slot for the next queued photo, within the
+same fifteen-second page budget. Expiry does not start further work: pending and
+not-yet-started photos report explicit `preview_timeout` status in their original
+positions. Requests from an expired page continue to count against the cap until
+the SDK callback releases them. Repeated explicit reads still reuse pending work
+for the same photo/catalog object. Fast callbacks can deliver all ten photos;
+slow callbacks may reduce completion per page. No automatic retry, cancellation,
+cache, catalog write or timeout increase is introduced.
+
+This reduces the plugin's rendering concurrency; it cannot guarantee responsive
+Lightroom under system-wide memory pressure, slow original storage or blocked SDK
+calls. On-device performance comparison remains required before claiming a cure.
