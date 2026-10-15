@@ -774,3 +774,16 @@ return container('catalog',{collection('pending',photos)},{})
     assert [p['fileName'] for p in result['photos']]==['other','pending']
     assert result['previews']==[{'index':1,'jpeg':'YWJj'},{'index':2,'jpeg':'ZGVm'}]
     assert lua.globals().started==1
+
+
+def test_lua_duplicate_completion_does_not_replace_first_image(lua_live):
+    lua,live=lua_live
+    catalog=lua.execute("""
+local p=photo('duplicate callback')
+p.requestJpegThumbnail=function(self,w,h,callback)
+ callback('abc'); callback('replacement bytes'); return {}
+end
+return container('catalog',{collection('pending',{p})},{})
+""")
+    result=json.loads(live.execute(catalog,live.parse(command(path=('pending',),limit=1,previews=True))))
+    assert result['previews']==[{'index':1,'jpeg':'YWJj'}]
