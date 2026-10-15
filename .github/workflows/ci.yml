@@ -8,11 +8,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Isolate bounded diagnostic runs from older unresponsive workflow jobs.
+  group: ci-v2-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -32,7 +34,7 @@ jobs:
           python -m pip show mcp
           python -c "from mcp.server.fastmcp import FastMCP; print('MCP import OK')"
       - name: Tests
-        run: python -m pytest -q
+        run: python -u -m pytest -v --durations=10 -o faulthandler_timeout=120
       - name: Lint
         run: python -m ruff check server tests
       - name: Native isolated installation smoke test

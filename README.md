@@ -56,7 +56,9 @@ JPEG previews. Enable its worker once in Lightroom. These new tools are stdio-on
 and are not exposed by the existing public HTTP connector.
 `lightroom_collection_photo_search` searches bounded current collection metadata
 by filename, exportable keywords, title/caption and non-private location labels;
-see [photo metadata search](docs/mac-live-photo-search.md). See
+see [photo metadata search](docs/mac-live-photo-search.md).
+`lightroom_collection_contact_sheet` combines up to ten current previews into one
+numbered review image; see [contact sheets](docs/mac-contact-sheets.md). See
 [direct Mac reads](docs/mac-live-reads.md).
 
 All tools are read-only. There are no rating-change or catalog-write tools.
