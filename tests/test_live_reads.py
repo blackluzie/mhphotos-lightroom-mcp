@@ -186,7 +186,8 @@ def test_mcp_live_reads_and_native_images():
 def lua_live():
     lua=LuaRuntime(unpack_returned_tuples=True)
     lua.execute("""
-import=function(name) assert(name=='LrTasks'); return {pcall=pcall,sleep=function() end} end
+taskApi={pcall=pcall,sleep=function() end}
+import=function(name) assert(name=='LrTasks'); return taskApi end
 function photo(name)
  return {getFormattedMetadata=function(self,key) if key=='fileName' then return name end end,
  getRawMetadata=function(self,key) if key=='pickStatus' then return 0 end end,
@@ -518,3 +519,55 @@ end
     lua.globals().worker.start()
     lua.globals().savedTask()
     assert not lua.globals().parsed and not lua.globals().warning
+
+
+def test_lua_preview_batch_starts_all_requests_and_waits_for_delayed_render(lua_live):
+    lua,live=lua_live
+    catalog=lua.execute("""
+elapsed=0; started=0; callbacks={}; handles=setmetatable({},{__mode='v'})
+local photos={}
+for i=1,10 do
+ local p=photo('delayed')
+ p.requestJpegThumbnail=function(self,w,h,callback)
+  started=started+1; callbacks[started]=callback
+  local handle={}; handles[started]=handle; return handle
+ end
+ photos[i]=p
+end
+taskApi.sleep=function(seconds)
+ assert(started==10)
+ elapsed=elapsed+seconds
+ collectgarbage('collect')
+ for i=1,10 do assert(handles[i]~=nil) end
+ if elapsed>=5 then for _,callback in ipairs(callbacks) do callback('abc') end end
+end
+return container('catalog',{collection('delayed',photos)},{})
+""")
+    result=json.loads(live.execute(catalog,live.parse(command(path=('delayed',),previews=True))))
+    assert len(result['previews'])==10
+    assert all(p['jpeg']=='YWJj' for p in result['previews'])
+    assert 5<=lua.globals().elapsed<6
+    lua.execute("collectgarbage('collect')")
+    assert len(list(lua.globals().handles.items()))==0
+
+
+def test_lua_preview_page_has_one_deadline_and_late_callbacks_release_slots(lua_live):
+    lua,live=lua_live
+    catalog=lua.execute("""
+elapsed=0; callbacks={}
+local photos={}
+for i=1,10 do
+ local p=photo('late')
+ p.requestJpegThumbnail=function(self,w,h,callback) callbacks[#callbacks+1]=callback; return {} end
+ photos[i]=p
+end
+taskApi.sleep=function(seconds) elapsed=elapsed+seconds end
+return container('catalog',{collection('late',photos)},{})
+""")
+    request=live.parse(command(path=('late',),previews=True))
+    result=json.loads(live.execute(catalog,request))
+    assert all(p['error']=='preview_timeout' for p in result['previews'])
+    assert 14.9<lua.globals().elapsed<15.1
+    lua.execute("for _,callback in ipairs(callbacks) do callback('late bytes') end; callbacks={}")
+    result=json.loads(live.execute(catalog,request))
+    assert all(p['error']=='preview_timeout' for p in result['previews'])

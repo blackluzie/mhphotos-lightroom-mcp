@@ -68,30 +68,51 @@ end
 Live.base64=base64
 
 local pending, pendingCount={},0
-local function preview(photo,index)
-    if pendingCount>=10 then return '{"index":'..index..',"error":"preview_unavailable"}' end
-    local slot={}
+-- Start requests together so rendering gets one bounded batch deadline.
+local function requestPreview(photo,index)
+    local slot={index=index,finished=false}
+    if pendingCount>=10 then slot.finished=true; slot.reason='preview_unavailable'; return slot end
     pending[slot]=true; pendingCount=pendingCount+1
-    local finished,bytes=false,nil
     local ok,handle=Tasks.pcall(function()
         return photo:requestJpegThumbnail(512,512,function(data)
-            bytes=data; finished=true
+            slot.finished=true
+            slot.handle=nil
+            if not slot.abandoned then
+                if type(data)~='string' or #data==0 then slot.reason='preview_unavailable'
+                elseif #data>512000 then slot.reason='preview_size_limit'
+                else slot.bytes=data end
+            end
             if pending[slot] then pending[slot]=nil; pendingCount=pendingCount-1 end
         end)
     end)
     if not ok then
         if pending[slot] then pending[slot]=nil; pendingCount=pendingCount-1 end
-        return '{"index":'..index..',"error":"preview_unavailable"}'
+        slot.finished=true; slot.reason='preview_unavailable'
+    elseif not slot.finished then
+        slot.handle=handle
     end
-    slot.handle=handle
-    for _=1,40 do if finished then break end; Tasks.sleep(0.05) end
-    local reason
-    if not finished then reason='preview_timeout'
-    elseif type(bytes)~='string' or #bytes==0 then reason='preview_unavailable'
-    elseif #bytes>512000 then reason='preview_size_limit' end
-    if finished then slot.handle=nil end
-    if reason then return '{"index":'..index..',"error":"'..reason..'"}' end
-    return '{"index":'..index..',"jpeg":"'..base64(bytes)..'"}'
+    return slot
+end
+
+local function finishPreviews(slots)
+    -- At most fifteen seconds for the entire page, not fifteen per image.
+    for _=1,300 do
+        local finished=true
+        for _,slot in ipairs(slots) do if not slot.finished then finished=false; break end end
+        if finished then break end
+        Tasks.sleep(0.05)
+    end
+    local encoded={}
+    for _,slot in ipairs(slots) do
+        if not slot.finished then slot.reason='preview_timeout'; slot.abandoned=true end
+        if slot.reason then
+            encoded[#encoded+1]='{"index":'..slot.index..',"error":"'..slot.reason..'"}'
+        else
+            encoded[#encoded+1]='{"index":'..slot.index..',"jpeg":"'..base64(slot.bytes)..'"}'
+        end
+        slot.bytes=nil
+    end
+    return encoded
 end
 
 function Live.execute(catalog,request)
@@ -108,8 +129,9 @@ function Live.execute(catalog,request)
     local records,previews={},{}
     for i=request.offset+1,math.min(#photos,request.offset+request.limit) do
         records[#records+1]=Metadata.read(photos[i])
-        if request.previews then previews[#previews+1]=preview(photos[i],#records) end
+        if request.previews then previews[#previews+1]=requestPreview(photos[i],#records) end
     end
+    if request.previews then previews=finishPreviews(previews) end
     local encoded=Metadata.encode(records)
     return encoded:sub(1,-2)..',"total_count":'..#photos..',"offset":'..request.offset
         ..',"has_more":'..tostring(request.offset+#records<#photos)
