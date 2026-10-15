@@ -5,7 +5,7 @@ import threading
 import urllib.error
 import urllib.request
 
-from mhphotos_lightroom_mcp.adapters import MockAdapter, NotFoundError
+from mhphotos_lightroom_mcp.adapters import MockAdapter, NotFoundError, PhotoFilter
 
 
 def _post(base, token, path, payload, timeout=15):
@@ -57,7 +57,8 @@ class FakePlugin:
         if name == "list_collections":
             return {"collections": [c.summary() for c in b.list_collections()]}
         if name == "list_photos":
-            photos, total = b.list_photos(a["collection_id"], a["limit"], a["offset"])
+            filters = PhotoFilter(**a["filters"]) if a.get("filters") else None
+            photos, total = b.list_photos(a["collection_id"], a["limit"], a["offset"], filters)
             return {"total": total, "photos": [p.metadata() for p in photos]}
         if name == "get_photo":
             return b.get_photo(a["photo_id"]).metadata()

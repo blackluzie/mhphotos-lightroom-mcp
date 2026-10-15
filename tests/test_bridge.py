@@ -95,6 +95,8 @@ async def test_roundtrip_reads(bridge, plugin):
     assert {c["name"] for c in colls} == {"Portraits", "Landschaft", "Leer"}
     page = await server.list_photos(collection_id="c1", limit=2)
     assert page["total"] == 3 and len(page["photos"]) == 2
+    found = await server.list_photos(min_rating=5, year=2026)  # filters travel through the bridge
+    assert [p["id"] for p in found["photos"]] == ["p1"]
     meta = await server.get_photo_metadata("p4")
     assert meta["camera"] == "Nikon Z8"
     assert "error" in await server.get_photo_metadata("nope")  # not_found mapped

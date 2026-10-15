@@ -68,6 +68,18 @@ eq(m.flag, 'picked'); eq(m.keywords[2], 'b'); eq(m.camera, 'Canon'); eq(m.captur
 eq(Commands.run('get_photo', { photo_id = 'u2' }).flag, 'none')
 eq(select(2, pcall(Commands.run, 'get_photo', { photo_id = 'zzz' })).code, 'not_found')
 
+-- filters (p1: 5 stars, picked, kw a/b, 2001-01-01; p2: unrated, none, 2001-01-02)
+local function ids(r) local o = {} for _, x in ipairs(r.photos) do o[#o + 1] = x.id end return table.concat(o, ',') end
+eq(ids(Commands.run('list_photos', { filters = { min_rating = 5 } })), 'u1')
+eq(ids(Commands.run('list_photos', { filters = { captured_from = '2001-01-02' } })), 'u2')
+eq(ids(Commands.run('list_photos', { filters = { captured_to = '2001-01-01' } })), 'u1')
+eq(ids(Commands.run('list_photos', { filters = { keyword = 'A' } })), 'u1')
+eq(ids(Commands.run('list_photos', { filters = { flag = 'none' } })), 'u2')
+local fr = Commands.run('list_photos', { filters = { min_rating = 5, flag = 'none' } })
+eq(fr.total, 0)
+eq(Commands.run('list_photos', { filters = {} }).total, 2)
+eq(Commands.run('list_photos', { filters = { min_rating = 1 }, limit = 1, offset = 0 }).total, 1)
+
 -- writes
 Commands.run('set_rating', { photo_ids = { 'u1', 'u2' }, rating = 3 })
 eq(p1.raw.rating, 3); eq(p2.raw.rating, 3)

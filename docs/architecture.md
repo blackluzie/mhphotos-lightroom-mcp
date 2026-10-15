@@ -85,6 +85,16 @@ operator's environment (https required, plain http only for localhost); the toke
 returned in results; files over the inbox limit of 24 MB are skipped and reported. The
 exported files stay in the export folder.
 
+## MHPhotos app tools
+Beyond the upload, the server talks to the MHPhotos admin API (same URL/token as the
+upload): `GET /api/admin/galleries`, `GET /api/admin/lightroom-import` (inbox with AI
+suggestions), `POST .../{id}/analyze` (queued AI analysis), `PATCH .../{id}`
+`{action: "approve", ...}` (**this publishes to the public site**) and
+`GET /api/admin/instagram-library`. `mhphotos_publish` is gated by
+`MHPHOTOS_ALLOW_PUBLISH=1` plus `confirm=true`, shows a full preview first, skips items that
+are already public, rejected, untitled or without a valid category, and never creates new
+categories. See [workflows.md](workflows.md).
+
 ## Adapter layer
 The server talks only to the `CatalogAdapter` protocol (`adapters.py`). `MockAdapter`
 gives deterministic data for development and CI; `BridgeAdapter` forwards to the plugin.

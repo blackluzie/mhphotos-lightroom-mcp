@@ -88,9 +88,32 @@ function Commands.list_collections()
   return { collections = out }
 end
 
+-- Filter criteria (all optional, all must match): min_rating, captured_from, captured_to
+-- (YYYY-MM-DD, inclusive), keyword (exact, case-insensitive), flag.
+local function matchesFilters(photo, f)
+  if f.min_rating and (photo:getRawMetadata('rating') or 0) < f.min_rating then return false end
+  if f.captured_from or f.captured_to then
+    local day = isoTime(photo:getRawMetadata('dateTimeOriginal')):sub(1, 10)
+    if day == '' then return false end
+    if f.captured_from and day < f.captured_from then return false end
+    if f.captured_to and day > f.captured_to then return false end
+  end
+  if f.flag and pickStatusToFlag(photo:getRawMetadata('pickStatus')) ~= f.flag then return false end
+  if f.keyword then
+    local want, found = f.keyword:lower(), false
+    for _, kw in ipairs(photo:getRawMetadata('keywords') or {}) do
+      if kw:getName():lower() == want then found = true; break end
+    end
+    if not found then return false end
+  end
+  return true
+end
+
 function Commands.list_photos(args)
   local limit = math.max(1, math.min(tonumber(args.limit) or 25, MAX_PAGE))
   local offset = math.max(0, tonumber(args.offset) or 0)
+  local filters = args.filters
+  if filters and next(filters) == nil then filters = nil end
   local source
   if args.collection_id then
     local coll = catalog():getCollectionByLocalIdentifier(tonumber(args.collection_id))
@@ -98,6 +121,14 @@ function Commands.list_photos(args)
     source = coll:getPhotos()
   else
     source = catalog():getAllPhotos()
+  end
+  if filters then
+    -- Filtering walks every photo once (fine for thousands, slow for 100k+).
+    local kept = {}
+    for _, p in ipairs(source) do
+      if matchesFilters(p, filters) then kept[#kept + 1] = p end
+    end
+    source = kept
   end
   local photos = {}
   for i = offset + 1, math.min(offset + limit, #source) do

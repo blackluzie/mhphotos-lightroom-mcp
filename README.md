@@ -22,11 +22,16 @@ Tools (default backend is a **mock catalog**; nothing touches real photos until 
 |------|---------|:-:|
 | `connection_status` | Adapter mode, connection, enabled permissions | |
 | `list_collections` | Collections with id, name, photo count | |
-| `list_photos` | Photos (optionally per collection), paginated, `limit` capped at 100 | |
+| `list_photos` | Search photos: `min_rating`, `year` or `captured_from`/`captured_to`, `keyword`, `flag`, optional collection; paginated, `limit` capped at 100 | |
 | `get_photo_metadata` | Rating, flag, keywords, capture time, camera | |
 | `set_rating` / `set_flag` / `add_keywords` | Edit metadata (dry run unless `confirm=true`) | `MHPHOTOS_ALLOW_WRITES=1` |
 | `export_photos` | JPEG export to an operator-set folder (dry run unless `confirm=true`) | `MHPHOTOS_EXPORT_DIR=/abs/path` |
+| `mhphotos_galleries` / `mhphotos_inbox` / `mhphotos_instagram_posts` | Read MHPhotos categories, Foto-Inbox with AI suggestions, your Instagram posts | `MHPHOTOS_INBOX_URL`, `MHPHOTOS_ADMIN_TOKEN` |
+| `mhphotos_analyze_inbox` | Ask MHPhotos for AI title/description/category suggestions (changes nothing public) | same |
+| `mhphotos_publish` | Publish inbox items on the **public** MHPhotos site (dry run unless `confirm=true`) | same + `MHPHOTOS_ALLOW_PUBLISH=1` |
 | `send_to_mhphotos_inbox` | Export and send to the MHPhotos Foto-Inbox for review, nothing goes public (dry run unless `confirm=true`) | `MHPHOTOS_INBOX_URL`, `MHPHOTOS_ADMIN_TOKEN`, `MHPHOTOS_EXPORT_DIR` |
+
+Example workflows (5-star photos of 2026 to mhphotos.de, Instagram posts): see [docs/workflows.md](docs/workflows.md).
 
 ## Use with real Lightroom Classic
 1. Install the plugin in `plugin/mhphotos.lrdevplugin` (see [plugin/README.md](plugin/README.md)).

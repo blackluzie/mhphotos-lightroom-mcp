@@ -16,6 +16,34 @@ MAX_BATCH = 100
 FLAGS = ("none", "picked", "rejected")
 
 
+@dataclass(frozen=True)
+class PhotoFilter:
+    """All set criteria must match. Dates are YYYY-MM-DD (inclusive)."""
+
+    min_rating: int | None = None
+    captured_from: str | None = None
+    captured_to: str | None = None
+    keyword: str | None = None
+    flag: str | None = None
+
+    def to_args(self) -> dict[str, Any]:
+        return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
+
+    def matches(self, photo: Photo) -> bool:
+        if self.min_rating is not None and photo.rating < self.min_rating:
+            return False
+        day = photo.capture_time[:10]
+        if self.captured_from is not None and (not day or day < self.captured_from):
+            return False
+        if self.captured_to is not None and (not day or day > self.captured_to):
+            return False
+        if self.keyword is not None and self.keyword.lower() not in {
+            k.lower() for k in photo.keywords
+        }:
+            return False
+        return not (self.flag is not None and photo.flag != self.flag)
+
+
 class NotFoundError(LookupError):
     """Requested collection or photo does not exist."""
 
@@ -80,7 +108,11 @@ class CatalogAdapter(Protocol):
     def list_collections(self) -> list[Collection]: ...
 
     def list_photos(
-        self, collection_id: str | None, limit: int, offset: int
+        self,
+        collection_id: str | None,
+        limit: int,
+        offset: int,
+        filters: PhotoFilter | None = None,
     ) -> tuple[list[Photo], int]:
         """Return (page, total). collection_id=None means the whole catalog."""
 
@@ -104,11 +136,11 @@ class MockAdapter:
     def __init__(self) -> None:
         photos = [
             Photo("p1", "IMG_0001.dng", 5, "picked", ("portrait", "studio"),
-                  "2025-05-01T10:15:00", "Canon EOS R5"),
+                  "2026-05-01T10:15:00", "Canon EOS R5"),
             Photo("p2", "IMG_0002.dng", 3, "none", ("portrait",),
-                  "2025-05-01T10:17:30", "Canon EOS R5"),
+                  "2026-05-01T10:17:30", "Canon EOS R5"),
             Photo("p3", "IMG_0003.dng", 1, "rejected", (),
-                  "2025-05-02T08:00:00", "Canon EOS R5"),
+                  "2026-05-02T08:00:00", "Canon EOS R5"),
             Photo("p4", "DSC_0100.nef", 4, "none", ("landscape", "sunrise"),
                   "2025-06-12T05:42:10", "Nikon Z8"),
             Photo("p5", "DSC_0101.nef", 0, "none", ("landscape",),
@@ -127,7 +159,7 @@ class MockAdapter:
     def list_collections(self) -> list[Collection]:
         return list(self._collections)
 
-    def list_photos(self, collection_id, limit, offset):
+    def list_photos(self, collection_id, limit, offset, filters=None):
         if collection_id is None:
             ids = list(self._photos)
         else:
@@ -135,7 +167,10 @@ class MockAdapter:
             if coll is None:
                 raise NotFoundError(f"Collection not found: {collection_id}")
             ids = list(coll.photo_ids)
-        return [self._photos[i] for i in ids[offset : offset + limit]], len(ids)
+        photos = [self._photos[i] for i in ids]
+        if filters is not None:
+            photos = [p for p in photos if filters.matches(p)]
+        return photos[offset : offset + limit], len(photos)
 
     def get_photo(self, photo_id: str) -> Photo:
         try:

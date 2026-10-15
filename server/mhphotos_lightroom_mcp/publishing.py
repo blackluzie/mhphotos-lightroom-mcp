@@ -1,7 +1,8 @@
-"""Send exported photos to the MHPhotos Foto-Inbox (review queue, nothing goes public).
+"""Client for the MHPhotos admin API (Foto-Inbox, galleries, Instagram library).
 
-Target: POST {base}/api/admin/lightroom-import (multipart, header X-Admin-Token).
-Items land with status "wartet" and are approved inside the MHPhotos app.
+Uploads land in the Foto-Inbox with status "wartet" (review queue). Only ``approve``
+puts a photo on the public site, and the MCP server gates it separately.
+Auth: header X-Admin-Token, token and URL come from the operator's environment.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Any
 
 URL_ENV = "MHPHOTOS_INBOX_URL"
 TOKEN_ENV = "MHPHOTOS_ADMIN_TOKEN"
+PUBLISH_ENV = "MHPHOTOS_ALLOW_PUBLISH"
 MAX_FILE_BYTES = 24 * 1024 * 1024  # the inbox rejects larger originals
 ENDPOINT = "/api/admin/lightroom-import"
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -99,3 +101,63 @@ def upload(cfg: InboxConfig, path: Path, meta: dict[str, Any], timeout: float = 
         "status": "duplicate" if payload.get("duplicate") else "uploaded",
         "inbox_id": item.get("id"),
     }
+
+
+def publishing_enabled() -> bool:
+    """Operator opt-in for putting photos on the public site."""
+    return os.environ.get(PUBLISH_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+def publish_disabled_message() -> str:
+    return f"Publishing to the public site is disabled. The operator must set {PUBLISH_ENV}=1."
+
+
+def api(
+    cfg: InboxConfig,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+    timeout: float = 60.0,
+) -> tuple[int, dict[str, Any]]:
+    """JSON call to the MHPhotos admin API. Never raises; status 0 = not reachable."""
+    data = None if body is None else json.dumps(body).encode()
+    headers = {"X-Admin-Token": cfg.token, "Accept": "application/json"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(cfg.base_url.rstrip("/") + path, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read() or b"{}")
+        except ValueError:
+            payload = {}
+        return exc.code, payload if isinstance(payload, dict) else {}
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0, {"error": "MHPhotos app not reachable"}
+
+
+def _quote(item_id: str) -> str:
+    return urllib.parse.quote(item_id, safe="")
+
+
+def galleries(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", "/api/admin/galleries")
+
+
+def inbox_items(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", ENDPOINT)
+
+
+def request_analysis(cfg: InboxConfig, item_id: str) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "POST", f"{ENDPOINT}/{_quote(item_id)}/analyze", {})
+
+
+def approve(cfg: InboxConfig, item_id: str, fields: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """Puts the item on the public site (this is the step that publishes)."""
+    return api(cfg, "PATCH", f"{ENDPOINT}/{_quote(item_id)}", {"action": "approve", **fields})
+
+
+def instagram_library(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", "/api/admin/instagram-library", timeout=120.0)

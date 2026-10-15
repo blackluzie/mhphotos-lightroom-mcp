@@ -23,6 +23,11 @@ ALL_TOOLS = {
     "add_keywords",
     "export_photos",
     "send_to_mhphotos_inbox",
+    "mhphotos_galleries",
+    "mhphotos_inbox",
+    "mhphotos_analyze_inbox",
+    "mhphotos_publish",
+    "mhphotos_instagram_posts",
 }
 
 

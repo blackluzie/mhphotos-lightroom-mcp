@@ -20,6 +20,7 @@ Run in this order and tick off each step:
 - [ ] `connection_status` → `connected: true, mode: bridge`
 - [ ] `list_collections` matches Lightroom (names, counts; sets appear as `Set/Name`)
 - [ ] `list_photos` (whole catalog, one collection, paging with limit/offset)
+- [ ] `list_photos` filters: `min_rating=5`, `year=…`, `keyword=…`, `flag=picked` (results match what Lightroom shows)
 - [ ] `get_photo_metadata`: filename, rating, flag, keywords, camera correct;
       `capture_time` plausible (see note below)
 - [ ] Edits disabled by default: `set_rating … confirm=true` → `code: disabled`

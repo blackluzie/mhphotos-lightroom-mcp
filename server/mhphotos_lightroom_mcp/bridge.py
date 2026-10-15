@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from .adapters import Collection, NotFoundError, Photo
+from .adapters import Collection, NotFoundError, Photo, PhotoFilter
 
 MAX_BODY = 1_000_000
 DEFAULT_PORT = 47831
@@ -257,9 +257,15 @@ class BridgeAdapter:
             for c in data["collections"]
         ]
 
-    def list_photos(self, collection_id, limit, offset):
+    def list_photos(self, collection_id, limit, offset, filters=None):
         data = self._call(
-            "list_photos", {"collection_id": collection_id, "limit": limit, "offset": offset}
+            "list_photos",
+            {
+                "collection_id": collection_id,
+                "limit": limit,
+                "offset": offset,
+                "filters": filters.to_args() if isinstance(filters, PhotoFilter) else {},
+            },
         )
         return [Photo.from_dict(p) for p in data["photos"]], int(data["total"])
 
