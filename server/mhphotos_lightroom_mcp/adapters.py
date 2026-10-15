@@ -6,7 +6,6 @@ only reachable through the permission gate in ``permissions.py``.
 
 from __future__ import annotations
 
-import base64
 import dataclasses
 import math
 from dataclasses import dataclass, field
@@ -14,7 +13,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 # Optional metadata the plugin may report (exposure, lens, place, GPS).
-EXTRA_KEYS = ("iso", "aperture", "shutter_speed", "focal_length_mm", "lens", "location", "gps")
+EXTRA_KEYS = (
+    "iso", "aperture", "shutter_speed", "focal_length_mm", "lens", "location", "gps",
+    "title", "caption", "color_label", "virtual_copy_of",
+)
 MAX_PAGE_SIZE = 100
 MAX_BATCH = 100
 FLAGS = ("none", "picked", "rejected")
@@ -83,9 +85,13 @@ class Collection:
     photo_ids: tuple[str, ...] = ()
     photo_count: int | None = None
 
-    def summary(self) -> dict[str, Any]:
-        count = self.photo_count if self.photo_count is not None else len(self.photo_ids)
-        return {"id": self.id, "name": self.name, "photo_count": count}
+    def summary(self, include_counts: bool = False) -> dict[str, Any]:
+        out: dict[str, Any] = {"id": self.id, "name": self.name}
+        if include_counts:
+            out["photo_count"] = (
+                self.photo_count if self.photo_count is not None else len(self.photo_ids)
+            )
+        return out
 
 
 @dataclass(frozen=True)
@@ -135,7 +141,10 @@ class CatalogAdapter(Protocol):
     def is_connected(self) -> bool: ...
 
     # --- reads ---
-    def list_collections(self) -> list[Collection]: ...
+    def list_collections(self, include_counts: bool = False) -> list[Collection]: ...
+
+    def selftest(self) -> dict[str, Any]:
+        """Read-only self check of every read command. {"checks": [{name, ok, detail}]}"""
 
     def list_photos(
         self,
@@ -175,11 +184,17 @@ class CatalogAdapter(Protocol):
     def create_preset(self, name: str, settings: dict[str, Any]) -> dict[str, Any]: ...
 
 
-# 1x1 placeholder JPEG for the mock (not a real preview).
-_MOCK_JPEG = base64.b64decode(
-    "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////"
-    "wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
-)
+def _mock_preview(photo_id: str, size: int) -> bytes:
+    """A real JPEG (flat colour derived from the id) so image handling can be tested."""
+    import io
+
+    from PIL import Image as PILImage
+
+    h = sum((i + 1) * ord(c) for i, c in enumerate(photo_id))
+    colour = (40 + h * 53 % 180, 40 + h * 97 % 180, 40 + h * 193 % 180)
+    out = io.BytesIO()
+    PILImage.new("RGB", (size * 3 // 2, size), colour).save(out, "JPEG", quality=80)
+    return out.getvalue()
 
 
 class MockAdapter:
@@ -238,8 +253,14 @@ class MockAdapter:
     def is_connected(self) -> bool:
         return True
 
-    def list_collections(self) -> list[Collection]:
+    def list_collections(self, include_counts: bool = False) -> list[Collection]:
         return list(self._collections)
+
+    def selftest(self) -> dict[str, Any]:
+        return {
+            "environment": "mock",
+            "checks": [{"name": "mock adapter", "ok": True, "detail": "no Lightroom involved"}],
+        }
 
     def list_photos(self, collection_id, limit, offset, filters=None):
         if collection_id is None:
@@ -262,7 +283,7 @@ class MockAdapter:
 
     def get_preview(self, photo_id: str, size: int) -> bytes:
         self.get_photo(photo_id)
-        return _MOCK_JPEG
+        return _mock_preview(photo_id, size)
 
     def get_develop_settings(self, photo_id: str) -> dict[str, Any]:
         self.get_photo(photo_id)

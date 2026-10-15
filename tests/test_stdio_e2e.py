@@ -15,6 +15,7 @@ from .fake_plugin import FakePlugin
 
 ALL_TOOLS = {
     "connection_status",
+    "lightroom_selftest",
     "list_collections",
     "list_photos",
     "get_photo_metadata",

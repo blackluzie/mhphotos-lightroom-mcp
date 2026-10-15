@@ -56,13 +56,15 @@ class FakePlugin:
     def _run(self, name, a):
         b = self.backing
         if name == "list_collections":
-            return {"collections": [c.summary() for c in b.list_collections()]}
+            return {"collections": [c.summary(a.get("include_counts", False)) for c in b.list_collections()]}
         if name == "list_photos":
             filters = PhotoFilter(**a["filters"]) if a.get("filters") else None
             photos, total = b.list_photos(a["collection_id"], a["limit"], a["offset"], filters)
             return {"total": total, "photos": [p.metadata() for p in photos]}
         if name == "get_photo":
             return b.get_photo(a["photo_id"]).metadata()
+        if name == "selftest":
+            return {"environment": "fake", "checks": [{"name": "fake plugin", "ok": True, "detail": ""}]}
         if name == "get_preview":
             return {"image_base64": base64.b64encode(b.get_preview(a["photo_id"], a["size"])).decode()}
         if name == "get_develop_settings":

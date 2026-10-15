@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,10 +41,55 @@ class InboxConfig:
         return urllib.parse.urlparse(self.base_url).netloc
 
 
+TOKEN_FILE_ENV = "MHPHOTOS_ADMIN_TOKEN_FILE"
+KEYCHAIN_SERVICE = "mhphotos-admin-token"
+_keychain_cache: dict[str, str | None] = {}
+
+
+def _keychain_token() -> str | None:
+    """macOS Keychain entry (service 'mhphotos-admin-token'); cached per process."""
+    if "v" in _keychain_cache:
+        return _keychain_cache["v"]
+    value = None
+    if sys.platform == "darwin":
+        try:
+            res = subprocess.run(
+                ["/usr/bin/security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            value = res.stdout.strip() if res.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            value = None
+    _keychain_cache["v"] = value or None
+    return _keychain_cache["v"]
+
+
+def resolve_token() -> tuple[str | None, str]:
+    """Admin token and where it came from: env var, file, or macOS Keychain (never logged)."""
+    token = os.environ.get(TOKEN_ENV, "").strip()
+    if token:
+        return token, f"environment variable {TOKEN_ENV}"
+    file_name = os.environ.get(TOKEN_FILE_ENV, "").strip()
+    if file_name:
+        path = Path(file_name).expanduser()
+        try:
+            if path.is_absolute() and path.is_file():
+                value = path.read_text().strip()
+                if value:
+                    return value, f"file {path}"
+        except OSError:
+            pass
+        return None, f"file {path} (unreadable or empty)"
+    value = _keychain_token()
+    if value:
+        return value, f"macOS Keychain ({KEYCHAIN_SERVICE})"
+    return None, "not set"
+
+
 def inbox_config() -> InboxConfig | None:
     """Operator-provided target. https only (plain http just for localhost)."""
     url = os.environ.get(URL_ENV, "").strip()
-    token = os.environ.get(TOKEN_ENV, "").strip()
+    token, _ = resolve_token()
     if not url or not token:
         return None
     parsed = urllib.parse.urlparse(url)
@@ -55,7 +102,8 @@ def inbox_config() -> InboxConfig | None:
 def disabled_message() -> str:
     return (
         f"Publishing is disabled. The operator must set {URL_ENV} (https URL of the "
-        f"MHPhotos app) and {TOKEN_ENV}, plus MHPHOTOS_EXPORT_DIR."
+        f"MHPhotos app) and the admin token ({TOKEN_ENV}, {TOKEN_FILE_ENV} or the macOS "
+        f"Keychain entry '{KEYCHAIN_SERVICE}'), plus MHPHOTOS_EXPORT_DIR."
     )
 
 

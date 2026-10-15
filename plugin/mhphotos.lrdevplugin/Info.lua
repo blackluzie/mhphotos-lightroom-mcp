@@ -7,6 +7,7 @@ return {
   LrShutdownPlugin = 'Shutdown.lua',
   LrLibraryMenuItems = {
     { title = 'MHPhotos MCP: Status', file = 'Status.lua' },
+    { title = 'MHPhotos MCP: Selbsttest (nur lesen)', file = 'SelfTestMenu.lua' },
   },
   VERSION = { major = 0, minor = 1, revision = 0, build = 1 },
 }

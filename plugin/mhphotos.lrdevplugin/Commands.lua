@@ -5,6 +5,7 @@
 local LrApplication = import 'LrApplication'
 local LrTasks = import 'LrTasks'
 local LrStringUtils = import 'LrStringUtils'
+local LrDate = import 'LrDate'
 
 local Commands = {}
 
@@ -94,7 +95,14 @@ local function findAll(ids)
   return photos
 end
 
+-- Filtered id lists are cached briefly so paging through results does not rescan the catalog.
+-- Any write command clears the cache.
+local filterCache = {}
+local CACHE_TTL = 60
+local function invalidateCache() filterCache = {} end
+
 local function writeAccess(name, fn)
+  invalidateCache()
   local result = catalog():withWriteAccessDo(name, fn, { timeout = 15 })
   if result ~= 'executed' then
     error('write_blocked: Lightroom did not grant catalog write access (' .. tostring(result) .. ')', 0)
@@ -102,22 +110,21 @@ local function writeAccess(name, fn)
 end
 
 -- ---------------------------------------------------------------- reads
-local function walkCollections(parent, prefix, out)
+local function walkCollections(parent, prefix, out, withCounts)
   for _, c in ipairs(parent:getChildCollections() or {}) do
-    out[#out + 1] = {
-      id = tostring(c.localIdentifier),
-      name = prefix .. c:getName(),
-      photo_count = #(c:getPhotos() or {}),
-    }
+    local entry = { id = tostring(c.localIdentifier), name = prefix .. c:getName() }
+    -- counting walks every photo of the collection: only on request (slow for smart collections)
+    if withCounts then entry.photo_count = #(c:getPhotos() or {}) end
+    out[#out + 1] = entry
   end
   for _, set in ipairs(parent:getChildCollectionSets() or {}) do
-    walkCollections(set, prefix .. set:getName() .. '/', out)
+    walkCollections(set, prefix .. set:getName() .. '/', out, withCounts)
   end
 end
 
-function Commands.list_collections()
+function Commands.list_collections(args)
   local out = {}
-  walkCollections(catalog(), '', out)
+  walkCollections(catalog(), '', out, args and args.include_counts == true)
   return { collections = out }
 end
 
@@ -149,6 +156,15 @@ local function matchesFilters(photo, f)
   return true
 end
 
+local function cacheKey(args)
+  local parts = { tostring(args.collection_id) }
+  local names = {}
+  for k in pairs(args.filters) do names[#names + 1] = k end
+  table.sort(names)
+  for _, k in ipairs(names) do parts[#parts + 1] = k .. '=' .. tostring(args.filters[k]) end
+  return table.concat(parts, '|')
+end
+
 function Commands.list_photos(args)
   local limit = math.max(1, math.min(tonumber(args.limit) or 25, MAX_PAGE))
   local offset = math.max(0, tonumber(args.offset) or 0)
@@ -163,12 +179,19 @@ function Commands.list_photos(args)
     source = catalog():getAllPhotos()
   end
   if filters then
-    -- Filtering walks every photo once (fine for thousands, slow for 100k+).
-    local kept = {}
-    for _, p in ipairs(source) do
-      if matchesFilters(p, filters) then kept[#kept + 1] = p end
+    -- Filtering walks every photo once (fine for thousands, slow for 100k+); cached for paging.
+    local key = cacheKey({ collection_id = args.collection_id, filters = filters })
+    local hit = filterCache[key]
+    if hit and os.time() - hit.at <= CACHE_TTL then
+      source = hit.photos
+    else
+      local kept = {}
+      for _, p in ipairs(source) do
+        if matchesFilters(p, filters) then kept[#kept + 1] = p end
+      end
+      filterCache[key] = { at = os.time(), photos = kept }
+      source = kept
     end
-    source = kept
   end
   local photos = {}
   for i = offset + 1, math.min(offset + limit, #source) do
@@ -342,6 +365,72 @@ function Commands.create_preset(args)
   for _ in pairs(args.settings) do count = count + 1 end
   LrApplication.addDevelopPresetForPlugin(_PLUGIN, name, args.settings)
   return { created = name, folder = 'MHPhotos MCP Bridge', parameters = count }
+end
+
+-- ---------------------------------------------------------------- self test (read only)
+-- Exercises every read command on a few photos and reports each result, so API mismatches
+-- show up as exact messages instead of guesswork. Never changes anything.
+function Commands.selftest()
+  local checks = {}
+  local function check(name, fn)
+    local t0 = LrDate.currentTime()
+    local ok, res = pcall(fn)
+    local detail = res
+    if not ok then
+      detail = type(res) == 'table' and ((res.code or '') .. ' ' .. tostring(res.message)) or tostring(res)
+    end
+    checks[#checks + 1] = {
+      name = name, ok = ok, detail = tostring(detail or ''),
+      ms = math.floor((LrDate.currentTime() - t0) * 1000),
+    }
+    return ok, res
+  end
+
+  local env = 'unknown'
+  pcall(function() env = 'Lightroom ' .. tostring(LrApplication.versionString()) end)
+
+  local first = {}
+  check('catalog access', function() return #catalog():getAllPhotos() .. ' photos in catalog' end)
+  check('list_collections', function()
+    return #Commands.list_collections({}).collections .. ' collections'
+  end)
+  check('list_collections with counts', function()
+    return #Commands.list_collections({ include_counts = true }).collections .. ' collections counted'
+  end)
+  check('list_photos', function()
+    local r = Commands.list_photos({ limit = 3 })
+    first = r.photos
+    return r.total .. ' total, ' .. #r.photos .. ' listed'
+  end)
+  check('list_photos with filters', function()
+    local r = Commands.list_photos({ limit = 1, filters = { min_rating = 1, captured_from = '1990-01-01' } })
+    return r.total .. ' photos rated 1+ with capture date'
+  end)
+  if #first == 0 then
+    checks[#checks + 1] = { name = 'photo checks', ok = false, detail = 'catalog has no photos to test', ms = 0 }
+  else
+    for i = 1, #first do
+      check('get_photo #' .. i, function()
+        local m = Commands.get_photo({ photo_id = first[i].id })
+        return m.filename .. ' flag=' .. tostring(m.flag) .. ' keywords=' .. #m.keywords
+          .. ' camera=' .. tostring(m.camera) .. ' location=' .. tostring(m.location)
+          .. ' gps=' .. tostring(m.gps ~= nil) .. ' iso=' .. tostring(m.iso)
+      end)
+    end
+    check('get_preview (256 px)', function()
+      return #Commands.get_preview({ photo_id = first[1].id, size = 256 }).image_base64 .. ' base64 characters'
+    end)
+    check('get_develop_settings', function()
+      local n = 0
+      for _ in pairs(Commands.get_develop_settings({ photo_id = first[1].id }).settings) do n = n + 1 end
+      return n .. ' scalar settings'
+    end)
+  end
+  check('list_presets', function() return #Commands.list_presets().presets .. ' presets' end)
+
+  local failed = 0
+  for _, c in ipairs(checks) do if not c.ok then failed = failed + 1 end end
+  return { environment = env, checks = checks, passed = #checks - failed, failed = failed }
 end
 
 function Commands.run(name, args)

@@ -66,10 +66,12 @@ local folders = {
 _PLUGIN = { id = 'plugin' }
 function import(name)
   if name == 'LrTasks' then return { sleep = function() end } end
+  if name == 'LrDate' then return { currentTime = function() return os.clock() end } end
   if name == 'LrStringUtils' then return { encodeBase64 = function(d) return 'B64(' .. d .. ')' end } end
   if name == 'LrApplication' then
     return {
       activeCatalog = function() return catalogProxy end,
+      versionString = function() return '15.0' end,
       developPresetFolders = function() return folders end,
       addDevelopPresetForPlugin = function(plugin, title, settings) createdPreset = { plugin, title, settings } end,
     }
@@ -84,8 +86,10 @@ local Commands = require 'Commands'
 
 -- reads
 local cols = Commands.run('list_collections').collections
-eq(#cols, 2); eq(cols[1].name, 'Fav'); eq(cols[1].photo_count, 1)
-eq(cols[2].name, 'Set/Inner'); eq(cols[2].id, '8'); eq(cols[2].photo_count, 2)
+eq(#cols, 2); eq(cols[1].name, 'Fav'); eq(cols[2].name, 'Set/Inner'); eq(cols[2].id, '8')
+eq(cols[1].photo_count, nil)  -- counts are only computed on request (slow on big catalogs)
+local counted = Commands.run('list_collections', { include_counts = true }).collections
+eq(counted[1].photo_count, 1); eq(counted[2].photo_count, 2)
 
 local page = Commands.run('list_photos', { limit = 1, offset = 1 })
 eq(page.total, 2); eq(#page.photos, 1); eq(page.photos[1].id, 'u2'); eq(page.photos[1].rating, 0)
@@ -175,5 +179,34 @@ local r = Commands.run('export_photos', { photo_ids = { 'u1' }, dest_dir = '/tmp
 eq(r.exported[1], 'IMG_1.jpg'); eq(exported.exportSettings.LR_export_destinationPathPrefix, '/tmp/out')
 eq(exported.exportSettings.LR_format, 'JPEG')
 eq(pcall(Commands.run, 'export_photos', { photo_ids = { 'u1' } }), false)
+
+
+-- filter cache: the filter is evaluated once per photo, paging reuses it, a write clears it
+local ratingReads = 0
+for _, p in ipairs({ p1, p2 }) do
+  local orig = p.getRawMetadata
+  p.getRawMetadata = function(self, k) if k == 'rating' then ratingReads = ratingReads + 1 end return orig(self, k) end
+end
+local function reads(fn) local before = ratingReads; fn(); return ratingReads - before end
+local listOnce = function() Commands.run('list_photos', { filters = { min_rating = 1 }, limit = 1 }) end
+local first = reads(listOnce)   -- scans both photos, then lists one
+local second = reads(listOnce)  -- served from the cache: only the listed row is read
+assert(first >= 3 and second == 1, 'cache miss ' .. first .. ' hit ' .. second)
+Commands.run('set_flag', { photo_ids = { 'u2' }, flag = 'none' })  -- any write clears the cache
+local third = reads(listOnce)
+assert(third >= 3, 'cache must be rebuilt after a write, reads=' .. third)
+
+
+-- self test: all green on the fake, and a failing API call is reported without stopping the rest
+local st = Commands.run('selftest')
+eq(st.failed, 0); assert(st.passed >= 8, 'expected at least 8 checks'); eq(st.environment, 'Lightroom 15.0')
+local origDev = p1.getDevelopSettings
+p1.getDevelopSettings = function() error('getDevelopSettings exploded') end
+local st2 = Commands.run('selftest')
+eq(st2.failed, 1)
+for _, c in ipairs(st2.checks) do
+  if not c.ok then eq(c.name, 'get_develop_settings'); assert(c.detail:find('exploded'), c.detail) end
+end
+p1.getDevelopSettings = origDev
 
 print('commands ok')

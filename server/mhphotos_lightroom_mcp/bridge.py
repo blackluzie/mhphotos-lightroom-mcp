@@ -186,7 +186,7 @@ class Bridge:
                 if not self._authorized():
                     return self._send(401, {"error": "unauthorized"})
                 if self.path == "/v1/health":
-                    return self._send(200, {"ok": True})
+                    return self._send(200, {"ok": True, "plugin_connected": bridge.is_connected()})
                 self._send(404, {"error": "not found"})
 
             def do_POST(self) -> None:
@@ -251,12 +251,19 @@ class BridgeAdapter:
     def is_connected(self) -> bool:
         return self._bridge.is_connected()
 
-    def list_collections(self) -> list[Collection]:
-        data = self._call("list_collections")
+    def list_collections(self, include_counts: bool = False) -> list[Collection]:
+        data = self._call(
+            "list_collections",
+            {"include_counts": include_counts},
+            timeout=120.0 if include_counts else None,  # counting walks every photo
+        )
         return [
             Collection(str(c["id"]), str(c["name"]), photo_count=int(c.get("photo_count", 0)))
             for c in data["collections"]
         ]
+
+    def selftest(self) -> dict[str, Any]:
+        return self._call("selftest", timeout=180.0)
 
     def list_photos(self, collection_id, limit, offset, filters=None):
         data = self._call(

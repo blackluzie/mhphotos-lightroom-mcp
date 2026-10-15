@@ -85,18 +85,36 @@ async def connection_status() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def list_collections(name_contains: str | None = None) -> dict[str, Any]:
-    """List collections (albums) with id, name and photo count.
+async def lightroom_selftest() -> dict[str, Any]:
+    """Read-only check of every Lightroom read command (first photos of the catalog).
+
+    Reports ok/error per command with the exact Lightroom error text. Run this first after
+    installing the plugin; nothing is changed.
+    """
+    result = await _run(_adapter.selftest)
+    if _is_error(result):
+        return result
+    failed = [c for c in result.get("checks", []) if not c.get("ok")]
+    return {**result, "all_ok": not failed}
+
+
+@mcp.tool()
+async def list_collections(
+    name_contains: str | None = None, include_counts: bool = False
+) -> dict[str, Any]:
+    """List collections (albums) with id and name.
 
     name_contains: case-insensitive part of the name, e.g. "09 2026". Collection sets
-    appear as "Set/Name".
+    appear as "Set/Name". include_counts=true adds photo counts (slow on big catalogs).
     """
-    result = await _run(_adapter.list_collections)
+    result = await _run(_adapter.list_collections, include_counts)
     if _is_error(result):
         return result
     needle = (name_contains or "").strip().lower()
     return {
-        "collections": [c.summary() for c in result if needle in c.name.lower()]
+        "collections": [
+            c.summary(include_counts) for c in result if needle in c.name.lower()
+        ]
     }
 
 
@@ -803,9 +821,62 @@ async def mhphotos_instagram_images(post_ids: list[str]) -> list[Any]:
     return out
 
 
+# ---------------------------------------------------------------- toolsets
+# MHPHOTOS_TOOLSETS="read,develop" limits which tools are offered (fewer tools = fewer tokens,
+# smaller blast radius). Default: all. "read" is always on.
+TOOLSETS: dict[str, set[str]] = {
+    "read": {
+        "connection_status", "lightroom_selftest", "list_collections", "list_photos",
+        "get_photo_metadata", "get_photo_previews", "get_contact_sheet", "get_develop_settings",
+        "list_presets", "backlog_report", "list_changes",
+    },
+    "edit": {
+        "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
+        "create_collection", "add_to_collection", "export_photos", "undo_last_change",
+    },
+    "develop": {
+        "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",
+        "create_virtual_copies",
+    },
+    "mhphotos": {
+        "send_to_mhphotos_inbox", "mhphotos_galleries", "mhphotos_inbox", "mhphotos_analyze_inbox",
+        "mhphotos_publish", "mhphotos_instagram_posts", "mhphotos_instagram_images",
+        "mhphotos_schedule_instagram", "mhphotos_instagram_queue", "mhphotos_cancel_instagram",
+    },
+}
+
+
+def apply_toolsets(spec: str | None) -> list[str]:
+    """Remove every tool outside the selected toolsets. Returns the enabled set names."""
+    wanted = [w.strip().lower() for w in (spec or "all").split(",") if w.strip()] or ["all"]
+    unknown = [w for w in wanted if w != "all" and w not in TOOLSETS]
+    if unknown:
+        raise ValueError(
+            f"Unknown toolset(s): {', '.join(unknown)}. Choose from: all, {', '.join(TOOLSETS)}"
+        )
+    if "all" in wanted:
+        return list(TOOLSETS)
+    enabled = {"read", *wanted}
+    keep = set().union(*(TOOLSETS[name] for name in enabled))
+    for name in set().union(*TOOLSETS.values()) - keep:
+        try:
+            mcp.remove_tool(name)
+        except Exception:  # noqa: BLE001,S110 (tool may not exist in this build)
+            pass
+    return sorted(enabled)
+
+
 # ---------------------------------------------------------------- startup
 def main() -> None:
-    """Run MCP server over stdio."""
+    """Run the MCP server over stdio, or a helper command (doctor, install-plugin)."""
+    if len(sys.argv) > 1:
+        from . import cli
+
+        sys.exit(cli.run(sys.argv[1:]))
+    try:
+        apply_toolsets(os.environ.get("MHPHOTOS_TOOLSETS"))
+    except ValueError as exc:
+        sys.exit(str(exc))
     kind = os.environ.get("MHPHOTOS_ADAPTER", "mock").lower()
     if kind == "bridge":
         port = int(os.environ.get("MHPHOTOS_BRIDGE_PORT", "47831"))
