@@ -83,3 +83,14 @@ or prepare unapproved changes to user photos.
 SDK references: Adobe-authored [collection reads](https://lrc.mcor.dev/modules/LrCollection.html)
 and [metadata/JPEG requests](https://lrc.mcor.dev/modules/LrPhoto.html), hosted as
 reference mirrors. Image processing follows [Pillow's security guidance](https://pillow.readthedocs.io/en/stable/handbook/security.html).
+
+### Preview scheduling budget
+
+The Mac worker measures actual elapsed wall time for the shared fifteen-second
+preview wait, including thumbnail request startup. Counting requested short
+sleeps is insufficient when Lightroom resumes tasks late. A finite iteration
+cap remains as a fallback, and a backwards clock jump ends the wait. A blocked
+SDK call or delayed task resumption itself cannot be preempted; this budget
+bounds additional waiting, not the duration of Lightroom's own blocking work.
+Late callbacks retain the existing discard/release behavior. Authentication,
+job expiry, preview size limits and read-only permissions are unchanged.

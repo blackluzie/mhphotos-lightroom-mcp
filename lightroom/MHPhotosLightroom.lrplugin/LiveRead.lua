@@ -94,12 +94,14 @@ local function requestPreview(photo,index)
     return slot
 end
 
-local function finishPreviews(slots)
-    -- At most fifteen seconds for the entire page, not fifteen per image.
+local function finishPreviews(slots, startedAt)
+    -- Measure elapsed wall time: SDK sleeps can resume much later than requested.
+    -- Keep a finite iteration cap as a second bound if the clock moves backwards.
     for _=1,300 do
         local finished=true
         for _,slot in ipairs(slots) do if not slot.finished then finished=false; break end end
-        if finished then break end
+        local elapsed=os.time()-startedAt
+        if finished or elapsed<0 or elapsed>=15 then break end
         Tasks.sleep(0.05)
     end
     local encoded={}
@@ -127,11 +129,12 @@ function Live.execute(catalog,request)
     local photos=collection:getPhotos()
     if type(photos)~='table' or #photos>1000000 or request.offset>#photos then error('Invalid photos') end
     local records,previews={},{}
+    local startedAt=os.time()
     for i=request.offset+1,math.min(#photos,request.offset+request.limit) do
         records[#records+1]=Metadata.read(photos[i])
         if request.previews then previews[#previews+1]=requestPreview(photos[i],#records) end
     end
-    if request.previews then previews=finishPreviews(previews) end
+    if request.previews then previews=finishPreviews(previews,startedAt) end
     local encoded=Metadata.encode(records)
     return encoded:sub(1,-2)..',"total_count":'..#photos..',"offset":'..request.offset
         ..',"has_more":'..tostring(request.offset+#records<#photos)

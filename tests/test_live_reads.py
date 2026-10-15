@@ -186,6 +186,7 @@ def test_mcp_live_reads_and_native_images():
 def lua_live():
     lua=LuaRuntime(unpack_returned_tuples=True)
     lua.execute("""
+os.time=function() return math.floor(elapsed or 0) end
 taskApi={pcall=pcall,sleep=function() end}
 import=function(name) assert(name=='LrTasks'); return taskApi end
 function photo(name)
@@ -571,3 +572,34 @@ return container('catalog',{collection('late',photos)},{})
     lua.execute("for _,callback in ipairs(callbacks) do callback('late bytes') end; callbacks={}")
     result=json.loads(live.execute(catalog,request))
     assert all(p['error']=='preview_timeout' for p in result['previews'])
+
+
+@pytest.mark.parametrize('wake_delay', [0.5, 3, 20])
+def test_lua_preview_deadline_uses_actual_wakeup_time(lua_live, wake_delay):
+    lua,live=lua_live
+    lua.globals().wake_delay=wake_delay
+    catalog=lua.execute("""
+elapsed=0; sleeps=0
+local p=photo('slow scheduler')
+p.requestJpegThumbnail=function() return {} end
+taskApi.sleep=function(seconds) sleeps=sleeps+1; elapsed=elapsed+wake_delay end
+return container('catalog',{collection('slow',{p})},{})
+""")
+    result=json.loads(live.execute(catalog,live.parse(command(path=('slow',),limit=1,previews=True))))
+    assert result['previews']==[{'index':1,'error':'preview_timeout'}]
+    assert 15<=lua.globals().elapsed<15+wake_delay
+    assert lua.globals().sleeps<31
+
+
+def test_lua_preview_request_startup_counts_towards_page_budget(lua_live):
+    lua,live=lua_live
+    catalog=lua.execute("""
+elapsed=0; sleeps=0
+local p=photo('slow request')
+p.requestJpegThumbnail=function() elapsed=elapsed+16; return {} end
+taskApi.sleep=function() sleeps=sleeps+1 end
+return container('catalog',{collection('slow',{p})},{})
+""")
+    result=json.loads(live.execute(catalog,live.parse(command(path=('slow',),limit=1,previews=True))))
+    assert result['previews'][0]['error']=='preview_timeout'
+    assert lua.globals().sleeps==0
