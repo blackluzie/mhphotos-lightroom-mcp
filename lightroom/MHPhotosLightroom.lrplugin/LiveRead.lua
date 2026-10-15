@@ -132,7 +132,14 @@ function Live.execute(catalog,request)
     local startedAt=os.time()
     for i=request.offset+1,math.min(#photos,request.offset+request.limit) do
         records[#records+1]=Metadata.read(photos[i])
-        if request.previews then previews[#previews+1]=requestPreview(photos[i],#records) end
+        if request.previews then
+            local elapsed=os.time()-startedAt
+            if elapsed<0 or elapsed>=15 then
+                previews[#previews+1]={index=#records,finished=true,reason='preview_timeout'}
+            else
+                previews[#previews+1]=requestPreview(photos[i],#records)
+            end
+        end
     end
     if request.previews then previews=finishPreviews(previews,startedAt) end
     local encoded=Metadata.encode(records)

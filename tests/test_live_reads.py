@@ -603,3 +603,93 @@ return container('catalog',{collection('slow',{p})},{})
     result=json.loads(live.execute(catalog,live.parse(command(path=('slow',),limit=1,previews=True))))
     assert result['previews'][0]['error']=='preview_timeout'
     assert lua.globals().sleeps==0
+
+
+
+def test_lua_expired_page_does_not_start_more_thumbnail_requests(lua_live):
+    lua,live=lua_live
+    catalog=lua.execute("""
+elapsed=0; started=0; sleeps=0
+local photos={}
+for i=1,10 do
+ local p=photo('slow startup')
+ p.requestJpegThumbnail=function() started=started+1; elapsed=elapsed+16; return {} end
+ photos[i]=p
+end
+taskApi.sleep=function() sleeps=sleeps+1 end
+return container('catalog',{collection('slow',photos)},{})
+""")
+    result=json.loads(live.execute(catalog,live.parse(command(path=('slow',),previews=True))))
+    assert len(result['photos'])==10
+    assert len(result['previews'])==10
+    assert all(p['error']=='preview_timeout' for p in result['previews'])
+    assert lua.globals().started==1 and lua.globals().sleeps==0
+
+
+
+def test_expired_http_reply_is_rejected_without_breaking_next_request(live_server):
+    queue=live_server.live_reads
+    queue.poll()
+    with ThreadPoolExecutor() as pool:
+        first=pool.submit(queue.submit,REQUEST)
+        for _ in range(200):
+            job=queue.poll()
+            if job: break
+            time.sleep(.005)
+        with queue.lock:
+            queue.jobs[job['id']].deadline=time.monotonic()-1
+        with pytest.raises(HTTPError) as error:
+            post(live_server,'reply',{'id':job['id'],'result':RESULT})
+        assert error.value.code==409
+        assert json.load(error.value)=={'error':'live_request_unavailable'}
+        assert first.result(timeout=2)=={'error':'live_timeout'}
+        second=pool.submit(queue.submit,REQUEST)
+        for _ in range(200):
+            job=queue.poll()
+            if job: break
+            time.sleep(.005)
+        assert post(live_server,'reply',{'id':job['id'],'result':RESULT})=={'accepted':True}
+        assert second.result(timeout=2)==RESULT
+
+
+@pytest.mark.parametrize('route,code,body,recoverable', [
+    ('reply',409,b'{"error":"live_request_unavailable"}',True),
+    ('poll',409,b'{"error":"live_request_unavailable"}',False),
+    ('reply',401,b'{"error":"live_request_unavailable"}',False),
+    ('reply',400,b'{"error":"invalid_live_payload"}',False),
+    ('reply',500,b'{}',False),
+    ('reply',409,b'{"error":"other"}',False),
+    ('reply',409,b'{"error":"live_request_unavailable","extra":true}',False),
+    ('reply',409,b'not json',False),
+    ('reply',409,b' '*257+b'{"error":"live_request_unavailable"}',False),
+])
+def test_worker_only_recovers_exact_stale_reply(monkeypatch,route,code,body,recoverable):
+    from mhphotos_lightroom_mcp import live_worker_io as worker
+    monkeypatch.setattr(worker,'profile_root',lambda:Path('/dummy'))
+    monkeypatch.setattr(worker,'read_bridge_token',lambda _: 'test-token')
+    monkeypatch.setattr(worker,'bridge_token_path',lambda:Path('/dummy/token'))
+    monkeypatch.setattr(worker,'bridge_port',lambda:8767)
+    error=HTTPError('http://127.0.0.1',code,'test',{},io.BytesIO(body))
+    class Opener:
+        def open(self,*args,**kwargs): raise error
+    monkeypatch.setattr(worker,'build_opener',lambda _:Opener())
+    if recoverable:
+        assert worker.post_live(route,{})=={'accepted':False,'reason':'live_request_unavailable'}
+    else:
+        with pytest.raises(HTTPError):worker.post_live(route,{})
+    assert error.fp.closed
+
+
+def test_worker_discards_stale_reply_and_removes_private_file(tmp_path,monkeypatch):
+    from mhphotos_lightroom_mcp import live_worker_io as worker
+    from mhphotos_lightroom_mcp.private_files import (
+        private_directory,
+        write_new_private,
+    )
+    folder=tmp_path.resolve()/'transfers';private_directory(folder)
+    monkeypatch.setattr(worker,'transfer_path',lambda:folder)
+    path=folder/'live-1-123456.txt'
+    write_new_private(path,json.dumps({'id':SID,'result':RESULT}).encode())
+    monkeypatch.setattr(worker,'post_live',lambda *a,**k:{'accepted':False,'reason':'live_request_unavailable'})
+    worker.reply(path)
+    assert not path.exists()

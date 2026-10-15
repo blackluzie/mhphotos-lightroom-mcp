@@ -129,6 +129,10 @@ class Job:
     ready: threading.Event = field(default_factory=threading.Event)
 
 
+class UnavailableLiveRequest(ValueError):
+    """A reply has no active claimed request; its data must not be delivered."""
+
+
 class LiveReads:
     def __init__(self, enabled=False):
         self.enabled = enabled
@@ -193,11 +197,11 @@ class LiveReads:
             self.expire()
             job = self.jobs.get(identifier)
             if job is None or not job.claimed or job.ready.is_set():
-                raise ValueError('unknown_live_request')
+                raise UnavailableLiveRequest('unknown_live_request')
             request = job.request
         result = validate_result(request, result)
         with self.lock:
             if time.monotonic() >= job.deadline or self.jobs.get(identifier) is not job or job.ready.is_set():
-                raise ValueError('unknown_live_request')
+                raise UnavailableLiveRequest('unknown_live_request')
             job.result = copy.deepcopy(result)
             job.ready.set()
