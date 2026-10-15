@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 MAX_PAGE_SIZE = 100
@@ -96,7 +97,7 @@ class CatalogAdapter(Protocol):
 
 
 class MockAdapter:
-    """In-memory catalog with sample data. Never touches real files."""
+    """In-memory catalog with sample data. Export writes tiny placeholder files only."""
 
     name = "mock"
 
@@ -164,8 +165,9 @@ class MockAdapter:
 
     def export_photos(self, photo_ids, dest_dir):
         photos = self._all(photo_ids)
-        return {
-            "exported": [p.filename.rsplit(".", 1)[0] + ".jpg" for p in photos],
-            "destination": dest_dir,
-            "mock": True,
-        }
+        names = [p.filename.rsplit(".", 1)[0] + ".jpg" for p in photos]
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        for name in names:  # tiny placeholder file so the whole pipeline is testable
+            (dest / name).write_bytes(b"\xff\xd8\xff\xd9")
+        return {"exported": names, "destination": dest_dir, "mock": True}

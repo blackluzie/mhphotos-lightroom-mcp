@@ -172,6 +172,7 @@ class Bridge:
                 except ValueError:
                     return None
                 if length < 0 or length > MAX_BODY:
+                    self.close_connection = True  # body is not read; do not reuse the socket
                     return None
                 raw = self.rfile.read(length) if length else b"{}"
                 try:

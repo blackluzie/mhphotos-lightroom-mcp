@@ -26,6 +26,7 @@ Tools (default backend is a **mock catalog**; nothing touches real photos until 
 | `get_photo_metadata` | Rating, flag, keywords, capture time, camera | |
 | `set_rating` / `set_flag` / `add_keywords` | Edit metadata (dry run unless `confirm=true`) | `MHPHOTOS_ALLOW_WRITES=1` |
 | `export_photos` | JPEG export to an operator-set folder (dry run unless `confirm=true`) | `MHPHOTOS_EXPORT_DIR=/abs/path` |
+| `send_to_mhphotos_inbox` | Export and send to the MHPhotos Foto-Inbox for review, nothing goes public (dry run unless `confirm=true`) | `MHPHOTOS_INBOX_URL`, `MHPHOTOS_ADMIN_TOKEN`, `MHPHOTOS_EXPORT_DIR` |
 
 ## Use with real Lightroom Classic
 1. Install the plugin in `plugin/mhphotos.lrdevplugin` (see [plugin/README.md](plugin/README.md)).
@@ -46,7 +47,7 @@ Tools (default backend is a **mock catalog**; nothing touches real photos until 
 2. ~~Read-only commands for photos, collections and metadata~~ done (plugin untested inside Lightroom)
 3. ~~Permission-gated edits and export~~ done (plugin untested inside Lightroom)
 4. ~~Assess Lightroom cloud API~~ done: see `docs/cloud-assessment.md`, not built
-5. Optional MHPhotos publishing tools: not started (needs a definition)
+5. ~~MHPhotos publishing~~ done: `send_to_mhphotos_inbox` feeds the MHPhotos Foto-Inbox (`apps-platform/apps/mhphotos`, `/api/admin/lightroom-import`); approval stays in the MHPhotos app
 
 Lightroom Classic catalogs should be stored locally, even if originals live on mounted NAS volumes. The server never writes to the catalog SQLite database.
 

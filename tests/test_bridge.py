@@ -72,7 +72,10 @@ def test_bad_requests(bridge):
     assert _req(bridge, "/v1/nope", token=bridge.token, data={}) == 404
     assert _req(bridge, "/v1/result", token=bridge.token, data={"id": "unknown"}) == 404
     big = b'{"x":"' + b"a" * 1_100_000 + b'"}'
-    assert _req(bridge, "/v1/poll", token=bridge.token, data=big) == 400
+    try:  # server may also reset the connection while the oversize body is still being sent
+        assert _req(bridge, "/v1/poll", token=bridge.token, data=big) == 400
+    except (urllib.error.URLError, ConnectionError):
+        pass
 
 
 async def test_unavailable_when_plugin_missing(bridge):

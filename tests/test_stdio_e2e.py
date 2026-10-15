@@ -22,6 +22,7 @@ ALL_TOOLS = {
     "set_flag",
     "add_keywords",
     "export_photos",
+    "send_to_mhphotos_inbox",
 }
 
 

@@ -72,6 +72,19 @@ change, keywords are only ever added (never removed), ratings 0-5, flags
 `none|picked|rejected`. There is no delete, no develop-settings edit and no
 catalog-structure change.
 
+## MHPhotos publishing (Phase 5)
+`send_to_mhphotos_inbox` exports the chosen photos into a fresh `inbox-<id>` subfolder of
+`MHPHOTOS_EXPORT_DIR` and uploads each JPEG to the MHPhotos Foto-Inbox
+(`POST {MHPHOTOS_INBOX_URL}/api/admin/lightroom-import`, header `X-Admin-Token`, fields
+`file`, `rating`, `keywords`, `source=lightroom-classic-plugin`). Items arrive with status
+`wartet`; reviewing and publishing happens only inside the MHPhotos app. The inbox
+deduplicates by file hash and EXIF (reported as `duplicate`).
+
+Safeguards: dry run unless `confirm=true`; the target URL and token come only from the
+operator's environment (https required, plain http only for localhost); the token is never
+returned in results; files over the inbox limit of 24 MB are skipped and reported. The
+exported files stay in the export folder.
+
 ## Adapter layer
 The server talks only to the `CatalogAdapter` protocol (`adapters.py`). `MockAdapter`
 gives deterministic data for development and CI; `BridgeAdapter` forwards to the plugin.

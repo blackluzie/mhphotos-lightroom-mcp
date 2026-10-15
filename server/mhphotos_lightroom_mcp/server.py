@@ -5,6 +5,7 @@ Adapter is chosen with MHPHOTOS_ADAPTER=mock (default) | bridge.
 
 import os
 import sys
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 import anyio
 from mcp.server.fastmcp import FastMCP
 
-from . import permissions
+from . import permissions, publishing
 from .adapters import (
     FLAGS,
     MAX_BATCH,
@@ -218,6 +219,52 @@ async def export_photos(photo_ids: list[str], confirm: bool = False) -> dict[str
     Path(dest).mkdir(parents=True, exist_ok=True)
     result = await _run(_adapter.export_photos, photo_ids, dest)
     return result if _is_error(result) else {"applied": True, **result}
+
+
+@mcp.tool()
+async def send_to_mhphotos_inbox(photo_ids: list[str], confirm: bool = False) -> dict[str, Any]:
+    """Export photos and send them to the MHPhotos Foto-Inbox for review (not published).
+
+    Items arrive with status "wartet" and are approved inside the MHPhotos app. Dry run
+    unless confirm=true. Needs operator config: MHPHOTOS_INBOX_URL, MHPHOTOS_ADMIN_TOKEN
+    and MHPHOTOS_EXPORT_DIR.
+    """
+    if bad := _check_ids(photo_ids):
+        return bad
+    cfg = publishing.inbox_config()
+    dest = permissions.export_dir()
+    if cfg is None or dest is None:
+        return {"error": publishing.disabled_message(), "code": "disabled"}
+    photos = []
+    for pid in photo_ids:
+        meta = await _run(_adapter.get_photo, pid)
+        if _is_error(meta):
+            return meta
+        photos.append(meta)
+    if not confirm:
+        return {
+            "dry_run": True,
+            "target": cfg.host,
+            "files": [p.filename for p in photos],
+            "hint": "Nothing was exported or sent. Call again with confirm=true.",
+        }
+    batch_dir = Path(dest) / f"inbox-{uuid.uuid4().hex[:8]}"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    exported = await _run(_adapter.export_photos, photo_ids, str(batch_dir))
+    if _is_error(exported):
+        return exported
+    results = []
+    for photo in photos:
+        stem = photo.filename.rsplit(".", 1)[0]
+        path = batch_dir / f"{stem}.jpg"
+        if not path.is_file():
+            results.append({"photo_id": photo.id, "status": "error", "error": "exported file not found"})
+            continue
+        outcome = await anyio.to_thread.run_sync(
+            publishing.upload, cfg, path, photo.metadata()
+        )
+        results.append({"photo_id": photo.id, "filename": path.name, **outcome})
+    return {"applied": True, "target": cfg.host, "export_folder": str(batch_dir), "results": results}
 
 
 # ---------------------------------------------------------------- startup
