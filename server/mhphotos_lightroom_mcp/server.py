@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 
-from . import permissions, publishing
+from . import develop, permissions, publishing
 from .adapters import (
     FLAGS,
     MAX_BATCH,
@@ -85,10 +85,19 @@ async def connection_status() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def list_collections() -> dict[str, Any]:
-    """List all collections with id, name and photo count."""
+async def list_collections(name_contains: str | None = None) -> dict[str, Any]:
+    """List collections (albums) with id, name and photo count.
+
+    name_contains: case-insensitive part of the name, e.g. "09 2026". Collection sets
+    appear as "Set/Name".
+    """
     result = await _run(_adapter.list_collections)
-    return result if _is_error(result) else {"collections": [c.summary() for c in result]}
+    if _is_error(result):
+        return result
+    needle = (name_contains or "").strip().lower()
+    return {
+        "collections": [c.summary() for c in result if needle in c.name.lower()]
+    }
 
 
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -101,6 +110,10 @@ def _build_filter(
     captured_to: str | None,
     keyword: str | None,
     flag: str | None,
+    location: str | None = None,
+    near_lat: float | None = None,
+    near_lon: float | None = None,
+    radius_km: float | None = None,
 ) -> PhotoFilter | dict[str, Any]:
     """Validate search criteria; returns a PhotoFilter or an error result."""
     if min_rating is not None and not 0 <= min_rating <= 5:
@@ -116,8 +129,25 @@ def _build_filter(
             return {"error": "Dates must look like YYYY-MM-DD"}
     if flag is not None and flag not in FLAGS:
         return {"error": f"flag must be one of {', '.join(FLAGS)}"}
+    near = (near_lat, near_lon, radius_km)
+    if any(v is not None for v in near):
+        if any(v is None for v in near):
+            return {"error": "near_lat, near_lon and radius_km must be given together"}
+        if not (-90 <= near_lat <= 90 and -180 <= near_lon <= 180 and 0 < radius_km <= 500):
+            return {"error": "near_lat -90..90, near_lon -180..180, radius_km 0..500"}
     keyword = keyword.strip() if keyword else None
-    return PhotoFilter(min_rating, captured_from, captured_to, keyword or None, flag)
+    location = location.strip() if location else None
+    return PhotoFilter(
+        min_rating=min_rating,
+        captured_from=captured_from,
+        captured_to=captured_to,
+        keyword=keyword or None,
+        flag=flag,
+        location=location or None,
+        near_lat=near_lat,
+        near_lon=near_lon,
+        radius_km=radius_km,
+    )
 
 
 @mcp.tool()
@@ -131,16 +161,25 @@ async def list_photos(
     captured_to: str | None = None,
     keyword: str | None = None,
     flag: str | None = None,
+    location: str | None = None,
+    near_lat: float | None = None,
+    near_lon: float | None = None,
+    radius_km: float | None = None,
 ) -> dict[str, Any]:
     """List/search photos (id, filename, rating), optionally of one collection.
 
     Filters (all must match): min_rating 0-5, year or captured_from/captured_to
     (YYYY-MM-DD, inclusive), keyword (exact, case-insensitive), flag
-    (none|picked|rejected). Example: min_rating=5, year=2026.
+    (none|picked|rejected), location (text in city/region/country/place), and
+    near_lat + near_lon + radius_km (GPS circle; photos without GPS never match).
+    Example: min_rating=5, year=2026. South Tyrol by GPS: near_lat=46.7, near_lon=11.4,
+    radius_km=80.
     Paginated: limit is capped at 100. Returns total so callers can page on.
     """
     limit, offset = _clamp(limit, offset)
-    filters = _build_filter(min_rating, year, captured_from, captured_to, keyword, flag)
+    filters = _build_filter(
+        min_rating, year, captured_from, captured_to, keyword, flag, location, near_lat, near_lon, radius_km
+    )
     if isinstance(filters, dict):
         return filters
     result = await _run(
@@ -312,6 +351,148 @@ async def send_to_mhphotos_inbox(photo_ids: list[str], confirm: bool = False) ->
         )
         results.append({"photo_id": photo.id, "filename": path.name, **outcome})
     return {"applied": True, "target": cfg.host, "export_folder": str(batch_dir), "results": results}
+
+
+# ---------------------------------------------------------------- editing advice
+MAX_PREVIEWS = 12
+MAX_SETTINGS_BATCH = 20
+
+
+@mcp.tool(structured_output=False)  # mixed text + image blocks cannot be structured output
+async def get_photo_previews(photo_ids: list[str], size: int = 768) -> list[Any]:
+    """Show photos so you can judge and compare them (up to 12 per call, size 256-1280 px).
+
+    Each image is preceded by a caption with id, filename, rating, place and exposure.
+    For large albums narrow down first with list_photos filters (min_rating, location, ...).
+    """
+    if not photo_ids or len(photo_ids) > MAX_PREVIEWS or len(set(photo_ids)) != len(photo_ids):
+        return [{"error": f"Provide 1-{MAX_PREVIEWS} distinct photo ids"}]
+    size = max(256, min(size, 1280))
+    out: list[Any] = []
+    for pid in photo_ids:
+        meta = await _run(_adapter.get_photo, pid)
+        if _is_error(meta):
+            out.append(meta)
+            continue
+        data = await _run(_adapter.get_preview, pid, size)
+        if _is_error(data):
+            out.append({"id": pid, **data})
+            continue
+        m = meta.metadata()
+        caption = {
+            k: m[k]
+            for k in ("id", "filename", "rating", "flag", "capture_time", "location", "iso",
+                      "aperture", "shutter_speed", "focal_length_mm", "lens")
+            if k in m and m[k] not in ("", None)
+        }
+        out.append(caption)
+        out.append(Image(data=data, format="jpeg"))
+    return out
+
+
+@mcp.tool()
+async def get_develop_settings(photo_id: str) -> dict[str, Any]:
+    """Current develop settings of a photo (exposure, tone, presence, WB, HSL, ...)."""
+    result = await _run(_adapter.get_develop_settings, photo_id)
+    if _is_error(result):
+        return result
+    keep = develop.readable_keys()
+    return {"photo_id": photo_id, "settings": {k: v for k, v in result.items() if k in keep}}
+
+
+@mcp.tool()
+async def list_presets(name_contains: str | None = None) -> dict[str, Any]:
+    """List the Lightroom develop presets available to apply (folder and name)."""
+    result = await _run(_adapter.list_presets)
+    if _is_error(result):
+        return result
+    needle = (name_contains or "").strip().lower()
+    return {"presets": [p for p in result if needle in p["name"].lower()]}
+
+
+@mcp.tool()
+async def apply_preset(photo_ids: list[str], preset: str, confirm: bool = False) -> dict[str, Any]:
+    """Apply an existing develop preset ("Name" or "Folder/Name") to photos.
+
+    Dry run unless confirm=true; needs operator opt-in. Lightroom records it as a history
+    step ("MHPhotos"), so it can be undone in the Develop module.
+    """
+    if not preset or len(preset) > 160:
+        return {"error": "preset name required"}
+    available = await _run(_adapter.list_presets)
+    if _is_error(available):
+        return available
+    hits = [p for p in available if preset in (p["name"], f"{p['folder']}/{p['name']}")]
+    if not hits:
+        return {"error": f"Preset not found: {preset}. Use list_presets."}
+    if len(hits) > 1:
+        return {"error": f"Preset name is ambiguous, use Folder/Name: {preset}"}
+    return await _edit(
+        photo_ids,
+        {"preset": f"{hits[0]['folder']}/{hits[0]['name']}"},
+        lambda: _adapter.apply_preset(photo_ids, preset),
+        confirm,
+    )
+
+
+@mcp.tool()
+async def apply_develop_settings(
+    photo_ids: list[str], settings: dict[str, Any], confirm: bool = False
+) -> dict[str, Any]:
+    """Apply develop settings (e.g. {"Exposure2012": 0.3, "Highlights2012": -40}) to photos.
+
+    Only known parameters within Lightroom's ranges are accepted (error lists them). Dry run
+    shows old and new values per photo. Needs operator opt-in and confirm=true; Lightroom
+    records a history step that can be undone.
+    """
+    if not photo_ids or len(photo_ids) > MAX_SETTINGS_BATCH or len(set(photo_ids)) != len(photo_ids):
+        return {"error": f"Provide 1-{MAX_SETTINGS_BATCH} distinct photo ids"}
+    clean, err = develop.validate(settings)
+    if err:
+        return {"error": err}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    current = []
+    for pid in photo_ids:
+        cur = await _run(_adapter.get_develop_settings, pid)
+        if _is_error(cur):
+            return cur
+        current.append({"id": pid, "old": {k: cur.get(k) for k in clean}})
+    if not confirm:
+        return {
+            "dry_run": True,
+            "new": clean,
+            "photos": current,
+            "hint": "Nothing was changed. Call again with confirm=true to apply.",
+        }
+    result = await _run(_adapter.apply_develop_settings, photo_ids, clean)
+    return result if _is_error(result) else {"applied": True, "new": clean, **result}
+
+
+@mcp.tool()
+async def create_preset(name: str, settings: dict[str, Any], confirm: bool = False) -> dict[str, Any]:
+    """Create a new develop preset in Lightroom from settings (same parameters as apply_develop_settings).
+
+    It appears under the plugin's own preset folder. Dry run unless confirm=true; needs
+    operator opt-in. Creating a preset changes no photo.
+    """
+    if not develop.valid_preset_name(name):
+        return {"error": f"name required (max {develop.MAX_PRESET_NAME} characters, no '/')"}
+    clean, err = develop.validate(settings)
+    if err:
+        return {"error": err}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    existing = await _run(_adapter.list_presets)
+    if _is_error(existing):
+        return existing
+    if any(p["name"] == name.strip() for p in existing):
+        return {"error": f"A preset named '{name.strip()}' already exists. Choose another name."}
+    if not confirm:
+        return {"dry_run": True, "name": name.strip(), "settings": clean,
+                "hint": "No preset was created. Call again with confirm=true."}
+    result = await _run(_adapter.create_preset, name.strip(), clean)
+    return result if _is_error(result) else {"applied": True, **result}
 
 
 # ---------------------------------------------------------------- MHPhotos app

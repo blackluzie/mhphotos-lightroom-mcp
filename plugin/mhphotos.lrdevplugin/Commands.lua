@@ -3,6 +3,8 @@
 -- Errors with {code='not_found'} are reported to the MCP side as not_found.
 
 local LrApplication = import 'LrApplication'
+local LrTasks = import 'LrTasks'
+local LrStringUtils = import 'LrStringUtils'
 
 local Commands = {}
 
@@ -33,6 +35,28 @@ local function photoSummary(photo)
   }
 end
 
+local function gpsOf(photo)
+  local g = photo:getRawMetadata('gps')
+  if type(g) == 'table' and g.latitude and g.longitude then return g.latitude, g.longitude end
+  return nil
+end
+
+local function locationString(photo)
+  local parts = {}
+  for _, key in ipairs({ 'location', 'city', 'stateProvince', 'country' }) do
+    local v = photo:getFormattedMetadata(key)
+    if type(v) == 'string' and v ~= '' then parts[#parts + 1] = v end
+  end
+  return table.concat(parts, ', ')
+end
+
+local function distanceKm(lat1, lon1, lat2, lon2)
+  local rad = math.pi / 180
+  local dlat, dlon = (lat2 - lat1) * rad, (lon2 - lon1) * rad
+  local a = math.sin(dlat / 2) ^ 2 + math.cos(lat1 * rad) * math.cos(lat2 * rad) * math.sin(dlon / 2) ^ 2
+  return 6371 * 2 * math.asin(math.min(1, math.sqrt(a)))
+end
+
 local function photoMetadata(photo)
   local s = photoSummary(photo)
   local keywords = {}
@@ -43,6 +67,15 @@ local function photoMetadata(photo)
   s.keywords = keywords
   s.capture_time = isoTime(photo:getRawMetadata('dateTimeOriginal'))
   s.camera = photo:getFormattedMetadata('cameraModel') or ''
+  s.iso = photo:getRawMetadata('isoSpeedRating')
+  s.aperture = photo:getRawMetadata('aperture')
+  s.shutter_speed = photo:getFormattedMetadata('shutterSpeed')
+  s.focal_length_mm = photo:getRawMetadata('focalLength')
+  s.lens = photo:getFormattedMetadata('lens')
+  local place = locationString(photo)
+  if place ~= '' then s.location = place end
+  local lat, lon = gpsOf(photo)
+  if lat then s.gps = { latitude = lat, longitude = lon } end
   return s
 end
 
@@ -99,6 +132,13 @@ local function matchesFilters(photo, f)
     if f.captured_to and day > f.captured_to then return false end
   end
   if f.flag and pickStatusToFlag(photo:getRawMetadata('pickStatus')) ~= f.flag then return false end
+  if f.location and not locationString(photo):lower():find(f.location:lower(), 1, true) then
+    return false
+  end
+  if f.near_lat then
+    local lat, lon = gpsOf(photo)
+    if not lat or distanceKm(f.near_lat, f.near_lon, lat, lon) > f.radius_km then return false end
+  end
   if f.keyword then
     local want, found = f.keyword:lower(), false
     for _, kw in ipairs(photo:getRawMetadata('keywords') or {}) do
@@ -208,6 +248,100 @@ function Commands.export_photos(args)
   session:doExportOnCurrentTask()
   -- Names are the expected output names; Lightroom renames on collision.
   return { exported = names, destination = dest }
+end
+
+-- ---------------------------------------------------------------- editing advice
+function Commands.get_preview(args)
+  local photo = findPhoto(args.photo_id)
+  local size = math.max(256, math.min(tonumber(args.size) or 768, 1280))
+  local done, data, err = false, nil, nil
+  -- keep `request` referenced until we are done, or Lightroom may drop the callback
+  local request = photo:requestJpegThumbnail(size, size, function(d, e)
+    data, err, done = d, e, true
+  end)
+  local waited = 0
+  while not done and waited < 30 do
+    LrTasks.sleep(0.1)
+    waited = waited + 0.1
+  end
+  if not done or not data then error('preview failed: ' .. tostring(err or 'timeout'), 0) end
+  local encoded = LrStringUtils.encodeBase64(data)
+  request = nil
+  return { image_base64 = encoded }
+end
+
+function Commands.get_develop_settings(args)
+  local photo = findPhoto(args.photo_id)
+  local out = {}
+  for k, v in pairs(photo:getDevelopSettings() or {}) do
+    local t = type(v)
+    if t == 'number' or t == 'string' or t == 'boolean' then out[k] = v end
+  end
+  return { settings = out }
+end
+
+local function allPresets()
+  local out = {}
+  for _, folder in ipairs(LrApplication.developPresetFolders() or {}) do
+    for _, preset in ipairs(folder:getDevelopPresets() or {}) do
+      out[#out + 1] = { folder = folder:getName(), name = preset:getName(), preset = preset }
+    end
+  end
+  return out
+end
+
+function Commands.list_presets()
+  local out = {}
+  for _, p in ipairs(allPresets()) do out[#out + 1] = { folder = p.folder, name = p.name } end
+  return { presets = out }
+end
+
+local function findPreset(wanted)
+  local hits = {}
+  for _, p in ipairs(allPresets()) do
+    if wanted == p.name or wanted == (p.folder .. '/' .. p.name) then hits[#hits + 1] = p end
+  end
+  if #hits == 0 then notFound('Preset not found: ' .. tostring(wanted)) end
+  if #hits > 1 then notFound('Preset name is ambiguous, use Folder/Name: ' .. tostring(wanted)) end
+  return hits[1].preset
+end
+
+function Commands.apply_preset(args)
+  local photos = findAll(args.photo_ids)
+  local preset = findPreset(args.preset)
+  writeAccess('MHPhotos: apply preset', function()
+    for _, p in ipairs(photos) do p:applyDevelopPreset(preset, _PLUGIN) end
+  end)
+  return { updated = #photos }
+end
+
+local function checkSettings(settings)
+  if type(settings) ~= 'table' or next(settings) == nil then error('settings required', 0) end
+  for k, v in pairs(settings) do
+    local t = type(v)
+    if type(k) ~= 'string' or (t ~= 'number' and t ~= 'boolean') then
+      error('settings must map names to numbers or booleans', 0)
+    end
+  end
+end
+
+function Commands.apply_develop_settings(args)
+  checkSettings(args.settings)
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: develop settings', function()
+    for _, p in ipairs(photos) do p:applyDevelopSettings(args.settings, 'MHPhotos: develop settings') end
+  end)
+  return { updated = #photos }
+end
+
+function Commands.create_preset(args)
+  checkSettings(args.settings)
+  local name = args.name
+  if type(name) ~= 'string' or name == '' or #name > 80 then error('preset name required', 0) end
+  local count = 0
+  for _ in pairs(args.settings) do count = count + 1 end
+  LrApplication.addDevelopPresetForPlugin(_PLUGIN, name, args.settings)
+  return { created = name, folder = 'MHPhotos MCP Bridge', parameters = count }
 end
 
 function Commands.run(name, args)

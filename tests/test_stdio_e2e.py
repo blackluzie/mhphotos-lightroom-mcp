@@ -28,6 +28,12 @@ ALL_TOOLS = {
     "mhphotos_analyze_inbox",
     "mhphotos_publish",
     "mhphotos_instagram_posts",
+    "get_photo_previews",
+    "get_develop_settings",
+    "list_presets",
+    "apply_preset",
+    "apply_develop_settings",
+    "create_preset",
 }
 
 
@@ -52,6 +58,12 @@ def test_tools_over_stdio():
             assert {t.name for t in (await session.list_tools()).tools} == ALL_TOOLS
             meta = _text(await session.call_tool("get_photo_metadata", {"photo_id": "p4"}))
             assert meta["camera"] == "Nikon Z8"
+            # previews arrive as real image content next to their caption
+            res = await session.call_tool("get_photo_previews", {"photo_ids": ["p4", "p5"], "size": 512})
+            kinds = [c.type for c in res.content]
+            assert kinds == ["text", "image", "text", "image"]
+            assert res.content[1].mimeType == "image/jpeg"
+            assert "Seiser Alm" in res.content[0].text
             # writes are off by default
             res = _text(await session.call_tool("set_rating", {"photo_ids": ["p4"], "rating": 1, "confirm": True}))
             assert res["code"] == "disabled"

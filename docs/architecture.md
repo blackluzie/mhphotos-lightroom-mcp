@@ -67,6 +67,11 @@ Reads are always allowed. Anything that changes data needs **two** things:
 2. **`confirm=true`** on the individual call. Without it the tool returns a dry-run
    preview (current values, intended change) and changes nothing.
 
+Develop edits (`apply_preset`, `apply_develop_settings`, `create_preset`) use the same gate
+(`MHPHOTOS_ALLOW_WRITES=1` + `confirm=true`). Settings are checked against a whitelist with
+Lightroom's ranges (`develop.py`) before reaching the plugin; at most 20 photos per settings
+call. Previews are delivered as MCP image content, base64 over the bridge.
+
 Further limits: max 100 photos per call, duplicate/unknown ids rejected before any
 change, keywords are only ever added (never removed), ratings 0-5, flags
 `none|picked|rejected`. There is no delete, no develop-settings edit and no
