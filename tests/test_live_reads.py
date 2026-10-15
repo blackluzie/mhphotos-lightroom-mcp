@@ -301,14 +301,19 @@ end
 def test_lua_preview_timeout_and_bounded_pending_handles(lua_live):
     lua,live=lua_live
     catalog=lua.execute("""
-local p=photo('late')
-p.requestJpegThumbnail=function() return {} end
-return container('catalog',{collection('late',{p})},{})
+local photos={}
+for i=1,11 do
+ local p=photo('late')
+ p.requestJpegThumbnail=function() return {} end
+ photos[i]=p
+end
+return container('catalog',{collection('late',photos)},{})
 """)
-    request=live.parse(command(path=('late',),limit=1,previews=True))
-    for _ in range(10):
+    for offset in range(10):
+        request=live.parse(command(path=('late',),offset=offset,limit=1,previews=True))
         result=json.loads(live.execute(catalog,request))
         assert result['previews'][0]['error']=='preview_timeout'
+    request=live.parse(command(path=('late',),offset=10,limit=1,previews=True))
     result=json.loads(live.execute(catalog,request))
     assert result['previews'][0]['error']=='preview_unavailable'
 
@@ -693,3 +698,92 @@ def test_worker_discards_stale_reply_and_removes_private_file(tmp_path,monkeypat
     monkeypatch.setattr(worker,'post_live',lambda *a,**k:{'accepted':False,'reason':'live_request_unavailable'})
     worker.reply(path)
     assert not path.exists()
+
+
+
+def test_lua_repeated_explicit_reads_share_pending_photo_request(lua_live):
+    lua,live=lua_live
+    catalog=lua.execute("""
+elapsed=0; started=0; savedCallback=nil
+local p=photo('pending')
+p.requestJpegThumbnail=function(self,w,h,callback)
+ started=started+1; savedCallback=callback; return {}
+end
+taskApi.sleep=function(seconds) elapsed=elapsed+seconds end
+return container('catalog',{collection('pending',{p})},{})
+""")
+    request=live.parse(command(path=('pending',),limit=1,previews=True))
+    for _ in range(12):
+        result=json.loads(live.execute(catalog,request))
+        assert result['previews'][0]['error']=='preview_timeout'
+    assert lua.globals().started==1
+    lua.execute("taskApi.sleep=function(seconds) elapsed=elapsed+seconds; savedCallback('abc') end")
+    result=json.loads(live.execute(catalog,request))
+    assert result['previews']==[{'index':1,'jpeg':'YWJj'}]
+    assert lua.globals().started==1
+
+
+def test_lua_pending_photo_is_not_reused_in_another_catalog(lua_live):
+    lua,live=lua_live
+    lua.execute("""
+started=0
+local p=photo('same object')
+p.requestJpegThumbnail=function() started=started+1; return {} end
+first=container('first',{collection('pending',{p})},{})
+second=container('second',{collection('pending',{p})},{})
+""")
+    request=live.parse(command(path=('pending',),limit=1,previews=True))
+    live.execute(lua.globals().first,request)
+    live.execute(lua.globals().second,request)
+    assert lua.globals().started==2
+
+
+def test_lua_callback_after_timeout_is_discarded_and_next_read_starts_fresh(lua_live):
+    lua,live=lua_live
+    catalog=lua.execute("""
+started=0; savedCallback=nil
+local p=photo('late')
+p.requestJpegThumbnail=function(self,w,h,callback)
+ started=started+1; savedCallback=callback; return {}
+end
+return container('catalog',{collection('pending',{p})},{})
+""")
+    request=live.parse(command(path=('pending',),limit=1,previews=True))
+    live.execute(catalog,request)
+    lua.execute("savedCallback('PRIVATE LATE BYTES'); savedCallback('duplicate')")
+    result=json.loads(live.execute(catalog,request))
+    assert result['previews']==[{'index':1,'error':'preview_timeout'}]
+    assert lua.globals().started==2
+
+
+def test_lua_reused_pending_request_uses_current_page_index(lua_live):
+    lua,live=lua_live
+    catalog=lua.execute("""
+elapsed=0; started=0; savedCallback=nil
+p=photo('pending'); other=photo('other')
+p.requestJpegThumbnail=function(self,w,h,callback)
+ started=started+1; savedCallback=callback; return {}
+end
+photos={p,other}
+taskApi.sleep=function(seconds) elapsed=elapsed+seconds end
+return container('catalog',{collection('pending',photos)},{})
+""")
+    live.execute(catalog,live.parse(command(path=('pending',),limit=1,previews=True)))
+    lua.execute("photos[1]=other; photos[2]=p; taskApi.sleep=function(seconds) elapsed=elapsed+seconds; savedCallback('def') end")
+    result=json.loads(live.execute(catalog,live.parse(command(path=('pending',),limit=2,previews=True))))
+    assert [p['fileName'] for p in result['photos']]==['other','pending']
+    assert result['previews']==[{'index':1,'jpeg':'YWJj'},{'index':2,'jpeg':'ZGVm'}]
+    assert lua.globals().started==1
+
+
+def test_lua_duplicate_completion_does_not_replace_first_image(lua_live):
+    lua,live=lua_live
+    catalog=lua.execute("""
+local p=photo('duplicate callback')
+p.requestJpegThumbnail=function(self,w,h,callback)
+ callback('abc'); callback('replacement bytes'); return {}
+end
+return container('catalog',{collection('pending',{p})},{})
+""")
+    result=json.loads(live.execute(catalog,live.parse(command(path=('pending',),limit=1,previews=True))))
+    assert result['previews']==[{'index':1,'jpeg':'YWJj'}]

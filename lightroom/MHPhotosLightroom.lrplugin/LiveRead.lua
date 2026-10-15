@@ -69,14 +69,23 @@ Live.base64=base64
 
 local pending, pendingCount={},0
 -- Start requests together so rendering gets one bounded batch deadline.
-local function requestPreview(photo,index)
-    local slot={index=index,finished=false}
+local function requestPreview(photo,index,catalog)
+    -- Repeated explicit reads must not queue duplicate rendering for this photo.
+    -- A slot belongs to its catalog object, never just a name or read position.
+    for existing in pairs(pending) do
+        if existing.photo==photo and existing.catalog==catalog then
+            existing.index=index; existing.abandoned=false; existing.reason=nil
+            return existing
+        end
+    end
+    local slot={index=index,finished=false,photo=photo,catalog=catalog}
     if pendingCount>=10 then slot.finished=true; slot.reason='preview_unavailable'; return slot end
     pending[slot]=true; pendingCount=pendingCount+1
     local ok,handle=Tasks.pcall(function()
         return photo:requestJpegThumbnail(512,512,function(data)
+            if slot.finished then return end -- SDK callbacks may repeat.
             slot.finished=true
-            slot.handle=nil
+            slot.handle=nil; slot.photo=nil; slot.catalog=nil
             if not slot.abandoned then
                 if type(data)~='string' or #data==0 then slot.reason='preview_unavailable'
                 elseif #data>512000 then slot.reason='preview_size_limit'
@@ -137,7 +146,7 @@ function Live.execute(catalog,request)
             if elapsed<0 or elapsed>=15 then
                 previews[#previews+1]={index=#records,finished=true,reason='preview_timeout'}
             else
-                previews[#previews+1]=requestPreview(photos[i],#records)
+                previews[#previews+1]=requestPreview(photos[i],#records,catalog)
             end
         end
     end
