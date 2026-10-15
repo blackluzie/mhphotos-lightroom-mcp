@@ -113,16 +113,25 @@ def test_search_is_read_only_stdio_tool_and_absent_from_public_http():
     asyncio.run(inspect())
 
 
-def test_tool_uses_real_authenticated_bridge_without_new_worker_operation(monkeypatch, tmp_path):
+@pytest.mark.parametrize('read_delay', [0, 1.1])
+def test_tool_uses_real_authenticated_bridge_without_new_worker_operation(monkeypatch, tmp_path, read_delay):
     import threading
     import time
 
+    from mhphotos_lightroom_mcp import live_worker_io
     from mhphotos_lightroom_mcp.pairing import ensure_bridge_token
     from mhphotos_lightroom_mcp.private_files import (
         private_directory,
         write_new_private,
     )
 
+    original_reader = live_worker_io.read_bridge_token
+
+    def delayed_reader(path):
+        time.sleep(read_delay)
+        return original_reader(path)
+
+    monkeypatch.setattr(live_worker_io, 'read_bridge_token', delayed_reader)
     root = tmp_path / 'profile'
     private_directory(root)
     token = ensure_bridge_token(root / 'bridge-token')
@@ -136,11 +145,16 @@ def test_tool_uses_real_authenticated_bridge_without_new_worker_operation(monkey
         with ThreadPoolExecutor() as pool:
             future = pool.submit(asyncio.run, lightroom_collection_photo_search(['Travel'], 'Südtirol'))
             job = None
-            for _ in range(200):
+            # Windows owner-ACL verification precedes the HTTP request and can
+            # take more than a second. Keep polling as a real worker does.
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
                 job = server.live_reads.poll()
                 if job:
                     break
-                time.sleep(.005)
+                if future.done():
+                    pytest.fail('Search finished before claim: ' + str(future.result().get('reason')))
+                time.sleep(.01)
             assert job and {k: v for k, v in job.items() if k != 'id'} == REQUEST
             server.live_reads.reply(job['id'], page([photo(title='Südtirol')]))
             result = future.result(timeout=3)
