@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mhphotos-lightroom": {
+      "command": "mhphotos-lightroom-mcp",
+      "args": [],
+      "env": {
+        "MHPHOTOS_ADAPTER": "bridge"
+      }
+    }
+  }
+}
