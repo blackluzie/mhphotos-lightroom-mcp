@@ -309,13 +309,13 @@ for i=1,11 do
 end
 return container('catalog',{collection('late',photos)},{})
 """)
-    for offset in range(10):
+    for offset in range(2):
         request=live.parse(command(path=('late',),offset=offset,limit=1,previews=True))
         result=json.loads(live.execute(catalog,request))
         assert result['previews'][0]['error']=='preview_timeout'
-    request=live.parse(command(path=('late',),offset=10,limit=1,previews=True))
+    request=live.parse(command(path=('late',),offset=2,limit=1,previews=True))
     result=json.loads(live.execute(catalog,request))
-    assert result['previews'][0]['error']=='preview_unavailable'
+    assert result['previews'][0]['error']=='preview_timeout'
 
 
 def test_registered_mcp_images_are_native_content_not_base64_json():
@@ -527,25 +527,31 @@ end
     assert not lua.globals().parsed and not lua.globals().warning
 
 
-def test_lua_preview_batch_starts_all_requests_and_waits_for_delayed_render(lua_live):
+def test_lua_preview_batch_runs_two_at_a_time_and_retains_active_handles(lua_live):
     lua,live=lua_live
     catalog=lua.execute("""
-elapsed=0; started=0; callbacks={}; handles=setmetatable({},{__mode='v'})
+elapsed=0; started=0; callbacks={}; handles=setmetatable({},{__mode='v'}); wave=0
 local photos={}
 for i=1,10 do
  local p=photo('delayed')
  p.requestJpegThumbnail=function(self,w,h,callback)
   started=started+1; callbacks[started]=callback
+  local count=0; for _ in pairs(callbacks) do count=count+1 end; assert(count<=2)
   local handle={}; handles[started]=handle; return handle
  end
  photos[i]=p
 end
 taskApi.sleep=function(seconds)
- assert(started==10)
  elapsed=elapsed+seconds
  collectgarbage('collect')
- for i=1,10 do assert(handles[i]~=nil) end
- if elapsed>=5 then for _,callback in ipairs(callbacks) do callback('abc') end end
+ local count=0
+ for i in pairs(callbacks) do count=count+1; assert(handles[i]~=nil) end
+ assert(count<=2)
+ if elapsed>=wave+1 then
+  wave=wave+1
+  local current=callbacks; callbacks={}
+  for _,callback in pairs(current) do callback('abc') end
+ end
 end
 return container('catalog',{collection('delayed',photos)},{})
 """)
@@ -787,3 +793,36 @@ return container('catalog',{collection('pending',{p})},{})
 """)
     result=json.loads(live.execute(catalog,live.parse(command(path=('pending',),limit=1,previews=True))))
     assert result['previews']==[{'index':1,'jpeg':'YWJj'}]
+
+
+
+def test_lua_two_request_cap_applies_across_pages_until_late_callbacks_finish(lua_live):
+    lua,live=lua_live
+    catalog=lua.execute("""
+started=0; saved={}; old={}; fresh={}
+for i=1,10 do
+ local p=photo('slow')
+ p.requestJpegThumbnail=function(self,w,h,callback)
+  started=started+1; saved[#saved+1]=callback; return {}
+ end
+ old[i]=p
+ local q=photo('fresh')
+ q.requestJpegThumbnail=function(self,w,h,callback)
+  started=started+1; callback('abc'); return {}
+ end
+ fresh[i]=q
+end
+return container('catalog',{collection('old',old),collection('fresh',fresh)},{})
+""")
+    first=json.loads(live.execute(catalog,live.parse(command(path=('old',),previews=True))))
+    assert all(p['error']=='preview_timeout' for p in first['previews'])
+    assert lua.globals().started==2
+    request=live.parse(command(path=('fresh',),previews=True))
+    blocked=json.loads(live.execute(catalog,request))
+    assert all(p['error']=='preview_timeout' for p in blocked['previews'])
+    assert lua.globals().started==2
+    lua.execute("for _,callback in ipairs(saved) do callback('PRIVATE LATE BYTES') end")
+    result=json.loads(live.execute(catalog,request))
+    assert len(result['photos'])==10
+    assert result['previews']==[{'index':i,'jpeg':'YWJj'} for i in range(1,11)]
+    assert lua.globals().started==12
