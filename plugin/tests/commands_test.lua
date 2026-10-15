@@ -13,8 +13,13 @@ local function newPhoto(uuid, name, rating, pick, kws, t, cam)
   for _, k in ipairs(kws) do p.raw.keywords[#p.raw.keywords + 1] = { getName = function() return k end } end
   function p:getRawMetadata(k) return self.raw[k] end
   function p:getFormattedMetadata(k) return self.fmt[k] end
-  function p:setRawMetadata(k, v) self.raw[k] = v end
+  function p:setRawMetadata(k, v)
+    if k == 'title' or k == 'caption' then self.fmt[k] = v else self.raw[k] = v end
+  end
   function p:addKeyword(kw) self.raw.keywords[#self.raw.keywords + 1] = kw end
+  function p:removeKeyword(kw)
+    for i, k in ipairs(self.raw.keywords) do if k == kw then table.remove(self.raw.keywords, i); return end end
+  end
   p.develop = { Exposure2012 = 0.5, Contrast2012 = 10, ToneCurve = { 1, 2 }, CameraProfile = 'Adobe Color' }
   p.appliedPresets, p.appliedSettings = {}, {}
   function p:getDevelopSettings() return self.develop end
@@ -41,6 +46,7 @@ local set = { getName = function() return 'Set' end,
   getChildCollectionSets = function() return {} end }
 
 local writes = 0
+local createdCollection, selected
 local fakeCatalog = {
   getChildCollections = function() return { coll } end,
   getChildCollectionSets = function() return { set } end,
@@ -49,6 +55,15 @@ local fakeCatalog = {
   getCollectionByLocalIdentifier = function(_, id) if id == 7 then return coll end end,
   withWriteAccessDo = function(_, name, fn, opts) writes = writes + 1; fn(); return 'executed' end,
   createKeyword = function(_, name) return { getName = function() return name end } end,
+  createCollection = function(_, name, parent, prior) createdCollection = { name = name, prior = prior, localIdentifier = 99,
+    addPhotos = function(self, ps) self.added = ps end, isSmartCollection = function() return false end }; return createdCollection end,
+  setSelectedPhotos = function(_, p) selected = p end,
+  createVirtualCopies = function()
+    local copy = newPhoto('copy-of-' .. selected.raw.uuid, 'IMG_copy.dng', 0, 0, {}, 0, 'x')
+    copy.raw.isVirtualCopy = true; copy.raw.masterPhoto = selected
+    photos[#photos + 1] = copy
+    return { copy }
+  end,
 }
 -- methods are called with ':' -> need self first
 local catalogProxy = setmetatable({}, { __index = function(_, k)
@@ -196,6 +211,36 @@ Commands.run('set_flag', { photo_ids = { 'u2' }, flag = 'none' })  -- any write 
 local third = reads(listOnce)
 assert(third >= 3, 'cache must be rebuilt after a write, reads=' .. third)
 
+
+-- organising: collection, label, title/caption, keyword removal, virtual copy
+local made = Commands.run('create_collection', { name = 'Südtirol 09 2026' })
+eq(made.id, '99'); eq(createdCollection.name, 'Südtirol 09 2026'); eq(createdCollection.prior, true)
+eq(pcall(Commands.run, 'create_collection', { name = '' }), false)
+coll.addPhotos = function(self, ps) self.added = ps end
+coll.isSmartCollection = function() return false end
+Commands.run('add_to_collection', { collection_id = '7', photo_ids = { 'u1', 'u2' } })
+eq(#coll.added, 2)
+coll.isSmartCollection = function() return true end
+eq(pcall(Commands.run, 'add_to_collection', { collection_id = '7', photo_ids = { 'u1' } }), false)
+eq(select(2, pcall(Commands.run, 'add_to_collection', { collection_id = '55', photo_ids = { 'u1' } })).code, 'not_found')
+Commands.run('set_color_label', { photo_ids = { 'u1' }, label = 'green' })
+eq(p1.raw.colorNameForLabel, 'green')
+eq(pcall(Commands.run, 'set_color_label', { photo_ids = { 'u1' }, label = 'pink' }), false)
+Commands.run('set_title_caption', { photo_ids = { 'u1' }, title = 'Seiser Alm' })
+eq(p1.fmt.title, 'Seiser Alm'); eq(p1.fmt.caption, nil)
+Commands.run('set_title_caption', { photo_ids = { 'u1' }, caption = '' })
+eq(p1.fmt.caption, '')
+eq(pcall(Commands.run, 'set_title_caption', { photo_ids = { 'u1' } }), false)
+local m1 = Commands.run('get_photo', { photo_id = 'u1' })
+eq(m1.title, 'Seiser Alm'); eq(m1.color_label, 'green')
+Commands.run('add_keywords', { photo_ids = { 'u1' }, keywords = { 'zz-added' } })
+Commands.run('remove_keywords', { photo_ids = { 'u1' }, keywords = { 'ZZ-ADDED' } })
+for _, kw in ipairs(p1.raw.keywords) do assert(kw:getName() ~= 'zz-added', 'keyword should be gone') end
+eq(#p1.raw.keywords >= 2, true)  -- the original keywords 'a','b' stay
+local vc = Commands.run('create_virtual_copies', { photo_ids = { 'u1' } }).copies
+eq(vc[1].source_id, 'u1'); eq(vc[1].id, 'copy-of-u1')
+eq(Commands.run('get_photo', { photo_id = 'copy-of-u1' }).virtual_copy_of, 'u1')
+eq(pcall(Commands.run, 'create_virtual_copies', { photo_ids = {} }), false)
 
 -- self test: all green on the fake, and a failing API call is reported without stopping the rest
 local st = Commands.run('selftest')

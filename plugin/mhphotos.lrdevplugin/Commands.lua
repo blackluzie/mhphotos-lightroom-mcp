@@ -73,6 +73,15 @@ local function photoMetadata(photo)
   s.shutter_speed = photo:getFormattedMetadata('shutterSpeed')
   s.focal_length_mm = photo:getRawMetadata('focalLength')
   s.lens = photo:getFormattedMetadata('lens')
+  local title, caption = photo:getFormattedMetadata('title'), photo:getFormattedMetadata('caption')
+  if type(title) == 'string' and title ~= '' then s.title = title end
+  if type(caption) == 'string' and caption ~= '' then s.caption = caption end
+  local label = photo:getRawMetadata('colorNameForLabel')
+  if type(label) == 'string' and label ~= '' then s.color_label = label end
+  if photo:getRawMetadata('isVirtualCopy') then
+    local master = photo:getRawMetadata('masterPhoto')
+    if master then s.virtual_copy_of = master:getRawMetadata('uuid') end
+  end
   local place = locationString(photo)
   if place ~= '' then s.location = place end
   local lat, lon = gpsOf(photo)
@@ -365,6 +374,91 @@ function Commands.create_preset(args)
   for _ in pairs(args.settings) do count = count + 1 end
   LrApplication.addDevelopPresetForPlugin(_PLUGIN, name, args.settings)
   return { created = name, folder = 'MHPhotos MCP Bridge', parameters = count }
+end
+
+-- ---------------------------------------------------------------- organising (writes)
+local LABELS = { none = true, red = true, yellow = true, green = true, blue = true, purple = true }
+
+function Commands.create_collection(args)
+  local name = args.name
+  if type(name) ~= 'string' or name == '' or #name > 120 then error('collection name required', 0) end
+  local coll
+  writeAccess('MHPhotos: create collection', function()
+    coll = catalog():createCollection(name, nil, true) -- true: return the existing one of that name
+  end)
+  if not coll then error('Lightroom did not create the collection', 0) end
+  return { id = tostring(coll.localIdentifier), name = name }
+end
+
+function Commands.add_to_collection(args)
+  local coll = catalog():getCollectionByLocalIdentifier(tonumber(args.collection_id))
+  if not coll then notFound('Collection not found: ' .. tostring(args.collection_id)) end
+  if coll.isSmartCollection and coll:isSmartCollection() then
+    error('smart collections cannot receive photos manually', 0)
+  end
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: add to collection', function() coll:addPhotos(photos) end)
+  return { updated = #photos }
+end
+
+function Commands.set_color_label(args)
+  if not LABELS[args.label] then error('label must be none, red, yellow, green, blue or purple', 0) end
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: color label', function()
+    for _, p in ipairs(photos) do p:setRawMetadata('colorNameForLabel', args.label) end
+  end)
+  return { updated = #photos }
+end
+
+function Commands.set_title_caption(args)
+  if args.title == nil and args.caption == nil then error('title or caption required', 0) end
+  for _, v in ipairs({ args.title or '', args.caption or '' }) do
+    if type(v) ~= 'string' or #v > 4000 then error('title/caption must be text (max 4000 bytes)', 0) end
+  end
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: title/caption', function()
+    for _, p in ipairs(photos) do
+      if args.title ~= nil then p:setRawMetadata('title', args.title) end
+      if args.caption ~= nil then p:setRawMetadata('caption', args.caption) end
+    end
+  end)
+  return { updated = #photos }
+end
+
+-- Only used by undo: removes keywords (by name) that this server had added.
+function Commands.remove_keywords(args)
+  local names = {}
+  for _, n in ipairs(args.keywords or {}) do names[#names + 1] = tostring(n):lower() end
+  if #names == 0 then error('keywords required', 0) end
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: remove keywords', function()
+    for _, p in ipairs(photos) do
+      for _, kw in ipairs(p:getRawMetadata('keywords') or {}) do
+        local kwName = kw:getName():lower()
+        for _, n in ipairs(names) do
+          if kwName == n then p:removeKeyword(kw); break end
+        end
+      end
+    end
+  end)
+  return { updated = #photos }
+end
+
+-- One copy per call so every copy is unambiguously tied to its source photo.
+function Commands.create_virtual_copies(args)
+  local photos = findAll(args.photo_ids)
+  if #photos > 10 then error('at most 10 virtual copies per call', 0) end
+  local copies = {}
+  for _, p in ipairs(photos) do
+    local made
+    writeAccess('MHPhotos: virtual copy', function()
+      catalog():setSelectedPhotos(p, {})
+      made = catalog():createVirtualCopies()
+    end)
+    if type(made) ~= 'table' or not made[1] then error('Lightroom created no virtual copy', 0) end
+    copies[#copies + 1] = { source_id = p:getRawMetadata('uuid'), id = made[1]:getRawMetadata('uuid') }
+  end
+  return { copies = copies }
 end
 
 -- ---------------------------------------------------------------- self test (read only)

@@ -300,6 +300,29 @@ class BridgeAdapter:
     def create_preset(self, name, settings):
         return self._call("create_preset", {"name": name, "settings": settings})
 
+    def create_collection(self, name):
+        return self._call("create_collection", {"name": name})
+
+    def add_to_collection(self, collection_id, photo_ids):
+        return self._call("add_to_collection", {"collection_id": collection_id, "photo_ids": photo_ids})
+
+    def set_color_label(self, photo_ids, label):
+        return self._call("set_color_label", {"photo_ids": photo_ids, "label": label})
+
+    def set_title_caption(self, photo_ids, title, caption):
+        args: dict[str, Any] = {"photo_ids": photo_ids}
+        if title is not None:
+            args["title"] = title
+        if caption is not None:
+            args["caption"] = caption
+        return self._call("set_title_caption", args)
+
+    def remove_keywords(self, photo_ids, keywords):
+        return self._call("remove_keywords", {"photo_ids": photo_ids, "keywords": keywords})
+
+    def create_virtual_copies(self, photo_ids):
+        return self._call("create_virtual_copies", {"photo_ids": photo_ids}, timeout=120.0)
+
     def set_rating(self, photo_ids, rating):
         return self._call("set_rating", {"photo_ids": photo_ids, "rating": rating})
 

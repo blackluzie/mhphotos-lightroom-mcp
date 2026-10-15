@@ -3,6 +3,7 @@
 Adapter is chosen with MHPHOTOS_ADAPTER=mock (default) | bridge.
 """
 
+import json
 import os
 import re
 import sys
@@ -12,10 +13,11 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-from mcp.server.fastmcp import FastMCP, Image
+from mcp.server.fastmcp import Context, FastMCP, Image
 
-from . import develop, permissions, publishing
+from . import audit, develop, gate, permissions, publishing
 from .adapters import (
+    COLOR_LABELS,
     FLAGS,
     MAX_BATCH,
     MAX_PAGE_SIZE,
@@ -232,13 +234,26 @@ def _check_ids(photo_ids: list[str]) -> dict[str, Any] | None:
     return None
 
 
+def _names(items: list[dict[str, Any]], limit: int = 6) -> str:
+    names = [i.get("filename") or i.get("id") for i in items]
+    more = f" und {len(names) - limit} weitere" if len(names) > limit else ""
+    return ", ".join(str(n) for n in names[:limit]) + more
+
+
 async def _edit(
     photo_ids: list[str],
     change: dict[str, Any],
     apply: Callable[[], Any],
     confirm: bool,
+    *,
+    ctx: Context | None,
+    tool: str,
+    summary: str,
+    fields: tuple[str, ...] = (),
+    undoable: bool = False,
+    guard: Callable[[list[dict[str, Any]]], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
-    """Shared edit flow: validate ids -> operator gate -> preview -> confirmed apply."""
+    """Shared edit flow: validate ids -> operator gate -> preview -> approval -> apply -> log."""
     if bad := _check_ids(photo_ids):
         return bad
     if not permissions.writes_enabled():
@@ -249,6 +264,8 @@ async def _edit(
         if _is_error(meta):
             return meta
         current.append({"id": pid, "filename": meta.filename, "current": meta.metadata()})
+    if guard is not None and (problem := guard(current)):
+        return problem
     if not confirm:
         return {
             "dry_run": True,
@@ -256,48 +273,292 @@ async def _edit(
             "photos": current,
             "hint": "Nothing was changed. Call again with confirm=true to apply.",
         }
+    approved, how = await gate.approve(ctx, f"{summary}\nFotos: {_names(current)}")
+    if not approved:
+        return gate.refusal(how)
     result = await _run(apply)
-    return result if _is_error(result) else {"applied": True, "change": change, **result}
+    if _is_error(result):
+        return result
+    before = {c["id"]: {f: c["current"].get(f) for f in fields} for c in current}
+    change_id = audit.record(
+        tool, photo_ids, change, before=before, undoable=undoable, approved_by=how, result=result
+    )
+    return {"applied": True, "change": change, "change_id": change_id, **result}
 
 
 @mcp.tool()
-async def set_rating(photo_ids: list[str], rating: int, confirm: bool = False) -> dict[str, Any]:
-    """Set the star rating (0-5) of photos. Dry run unless confirm=true; needs operator opt-in."""
+async def set_rating(
+    photo_ids: list[str], rating: int, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Set the star rating (0-5) of photos. Dry run unless confirm=true; needs operator opt-in.
+
+    You are asked to approve it when your client supports that. Undoable with undo_last_change.
+    """
     if not 0 <= rating <= 5:
         return {"error": "rating must be between 0 and 5"}
     return await _edit(
-        photo_ids, {"rating": rating}, lambda: _adapter.set_rating(photo_ids, rating), confirm
+        photo_ids, {"rating": rating}, lambda: _adapter.set_rating(photo_ids, rating), confirm,
+        ctx=ctx, tool="set_rating", fields=("rating",), undoable=True,
+        summary=f"Bewertung auf {rating} Sterne setzen",
     )
 
 
 @mcp.tool()
-async def set_flag(photo_ids: list[str], flag: str, confirm: bool = False) -> dict[str, Any]:
-    """Set the pick flag (none|picked|rejected). Dry run unless confirm=true; needs opt-in."""
+async def set_flag(
+    photo_ids: list[str], flag: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Set the pick flag (none|picked|rejected). Dry run unless confirm=true; needs opt-in. Undoable."""
     if flag not in FLAGS:
         return {"error": f"flag must be one of {', '.join(FLAGS)}"}
     return await _edit(
-        photo_ids, {"flag": flag}, lambda: _adapter.set_flag(photo_ids, flag), confirm
+        photo_ids, {"flag": flag}, lambda: _adapter.set_flag(photo_ids, flag), confirm,
+        ctx=ctx, tool="set_flag", fields=("flag",), undoable=True,
+        summary=f"Markierung auf '{flag}' setzen",
     )
 
 
 @mcp.tool()
 async def add_keywords(
-    photo_ids: list[str], keywords: list[str], confirm: bool = False
+    photo_ids: list[str], keywords: list[str], confirm: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
-    """Add keywords to photos (never removes any). Dry run unless confirm=true; needs opt-in."""
+    """Add keywords to photos (never removes any). Dry run unless confirm=true; needs opt-in. Undoable."""
     cleaned = [k.strip() for k in keywords if k and k.strip()]
     if not cleaned or len(cleaned) > 20 or any(len(k) > 100 for k in cleaned):
         return {"error": "Provide 1-20 non-empty keywords of at most 100 characters"}
     return await _edit(
-        photo_ids,
-        {"add_keywords": cleaned},
-        lambda: _adapter.add_keywords(photo_ids, cleaned),
-        confirm,
+        photo_ids, {"add_keywords": cleaned}, lambda: _adapter.add_keywords(photo_ids, cleaned),
+        confirm, ctx=ctx, tool="add_keywords", fields=("keywords",), undoable=True,
+        summary="Keywords hinzufügen: " + ", ".join(cleaned),
     )
 
 
 @mcp.tool()
-async def export_photos(photo_ids: list[str], confirm: bool = False) -> dict[str, Any]:
+async def set_color_label(
+    photo_ids: list[str], label: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Set the color label (none|red|yellow|green|blue|purple), e.g. to mark picks. Undoable."""
+    if label not in COLOR_LABELS:
+        return {"error": f"label must be one of {', '.join(COLOR_LABELS)}"}
+    return await _edit(
+        photo_ids, {"label": label}, lambda: _adapter.set_color_label(photo_ids, label), confirm,
+        ctx=ctx, tool="set_color_label", fields=("color_label",), undoable=True,
+        summary=f"Farbmarkierung '{label}' setzen",
+    )
+
+
+@mcp.tool()
+async def set_title_caption(
+    photo_ids: list[str],
+    title: str | None = None,
+    caption: str | None = None,
+    overwrite: bool = False,
+    confirm: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Set title and/or caption (IPTC) of photos. Existing text is kept unless overwrite=true.
+
+    Dry run unless confirm=true; needs operator opt-in. Undoable.
+    """
+    if title is None and caption is None:
+        return {"error": "Provide a title and/or a caption"}
+    if (title is not None and len(title) > 200) or (caption is not None and len(caption) > 2000):
+        return {"error": "title max 200 characters, caption max 2000"}
+    change = {k: v for k, v in (("title", title), ("caption", caption)) if v is not None}
+
+    def guard(current: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if overwrite:
+            return None
+        clash = [
+            {"id": c["id"], "title": c["current"].get("title"), "caption": c["current"].get("caption")}
+            for c in current
+            if (title is not None and c["current"].get("title"))
+            or (caption is not None and c["current"].get("caption"))
+        ]
+        if clash:
+            return {
+                "error": "Some photos already have that text. Pass overwrite=true to replace it.",
+                "photos_with_text": clash,
+            }
+        return None
+
+    return await _edit(
+        photo_ids, change, lambda: _adapter.set_title_caption(photo_ids, title, caption), confirm,
+        ctx=ctx, tool="set_title_caption", fields=("title", "caption"), undoable=True, guard=guard,
+        summary="Titel/Beschreibung setzen: " + " | ".join(f"{k}: {v[:60]}" for k, v in change.items()),
+    )
+
+
+@mcp.tool()
+async def create_collection(
+    name: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Create a collection (album), e.g. for picked photos. Returns the existing one if the name exists.
+
+    Dry run unless confirm=true; needs operator opt-in. Not undoable (delete it in Lightroom).
+    """
+    name = name.strip()
+    if not name or len(name) > 120:
+        return {"error": "name required (max 120 characters)"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    existing = await _run(_adapter.list_collections)
+    if _is_error(existing):
+        return existing
+    same = [c for c in existing if c.name == name]
+    if same:
+        return {"exists": True, "id": same[0].id, "name": name, "hint": "Nothing to create; use this id."}
+    if not confirm:
+        return {"dry_run": True, "would_create": name, "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Sammlung '{name}' in Lightroom anlegen")
+    if not approved:
+        return gate.refusal(how)
+    result = await _run(_adapter.create_collection, name)
+    if _is_error(result):
+        return result
+    change_id = audit.record("create_collection", [], {"name": name}, approved_by=how, result=result)
+    return {"applied": True, "change_id": change_id, **result}
+
+
+@mcp.tool()
+async def add_to_collection(
+    collection_id: str, photo_ids: list[str], confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Add photos to a (non-smart) collection. Dry run unless confirm=true; needs operator opt-in."""
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    existing = await _run(_adapter.list_collections)
+    if _is_error(existing):
+        return existing
+    target = next((c for c in existing if c.id == collection_id), None)
+    if target is None:
+        return {"error": f"Collection not found: {collection_id}. Use list_collections."}
+    return await _edit(
+        photo_ids,
+        {"add_to_collection": target.name, "collection_id": collection_id},
+        lambda: _adapter.add_to_collection(collection_id, photo_ids),
+        confirm, ctx=ctx, tool="add_to_collection",
+        summary=f"Zur Sammlung '{target.name}' hinzufügen",
+    )
+
+
+@mcp.tool()
+async def create_virtual_copies(
+    photo_ids: list[str], confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Create virtual copies (max 10) so edits can be tried without touching the originals.
+
+    Apply presets/settings to the returned copy ids, compare with get_photo_previews, keep or
+    delete the copy in Lightroom. Changes the Lightroom selection. Needs operator opt-in.
+    """
+    if len(photo_ids) > 10:
+        return {"error": "At most 10 virtual copies per call"}
+    return await _edit(
+        photo_ids, {"virtual_copies": len(photo_ids)}, lambda: _adapter.create_virtual_copies(photo_ids),
+        confirm, ctx=ctx, tool="create_virtual_copies",
+        summary="Virtuelle Kopien anlegen (Auswahl in Lightroom ändert sich)",
+    )
+
+
+@mcp.tool()
+async def list_changes(limit: int = 10) -> dict[str, Any]:
+    """Recent confirmed changes from the local audit log (newest first), with undo status."""
+    return {"changes": audit.recent(max(1, min(limit, 50))), "log_file": str(audit.log_path())}
+
+
+def _restore_plan(entry: dict[str, Any], current: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Per photo: what to restore, or why it is skipped (changed since)."""
+    tool, change, before = entry["tool"], entry["change"], entry["before"]
+    plan = []
+    for pid in entry["photo_ids"]:
+        cur, prev = current[pid], before.get(pid, {})
+        item: dict[str, Any] = {"id": pid}
+        if tool == "set_rating":
+            ok, item["restore"] = cur.get("rating") == change["rating"], {"rating": prev.get("rating", 0)}
+        elif tool == "set_flag":
+            ok, item["restore"] = cur.get("flag") == change["flag"], {"flag": prev.get("flag") or "none"}
+        elif tool == "set_color_label":
+            ok = (cur.get("color_label") or "none") == change["label"]
+            item["restore"] = {"color_label": prev.get("color_label") or "none"}
+        elif tool == "set_title_caption":
+            ok = all((cur.get(k) or "") == v for k, v in change.items())
+            item["restore"] = {k: prev.get(k) or "" for k in change}
+        elif tool == "add_keywords":
+            had = {k.lower() for k in prev.get("keywords") or []}
+            added = [k for k in change["add_keywords"] if k.lower() not in had]
+            have = {k.lower() for k in cur.get("keywords") or []}
+            ok = bool(added) and all(k.lower() in have for k in added)
+            item["restore"] = {"remove_keywords": added}
+            if not added:
+                item["skip"] = "keywords were already present, nothing to remove"
+        else:
+            ok = False
+        if not ok and "skip" not in item:
+            item["skip"] = "changed since (or not restorable); left as it is"
+        plan.append(item)
+    return plan
+
+
+@mcp.tool()
+async def undo_last_change(confirm: bool = False, ctx: Context | None = None) -> dict[str, Any]:
+    """Undo the most recent undoable change (rating, flag, color label, title/caption, keywords).
+
+    Photos changed again since are left alone. Presets/develop settings are not covered here:
+    undo those in Lightroom's History panel. Dry run unless confirm=true; needs opt-in.
+    """
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    entry = audit.last_undoable()
+    if entry is None:
+        return {"error": "Nothing to undo: no undoable change in the audit log."}
+    current: dict[str, dict[str, Any]] = {}
+    for pid in entry["photo_ids"]:
+        meta = await _run(_adapter.get_photo, pid)
+        if _is_error(meta):
+            return {"error": f"Cannot undo, photo {pid} is not available: {meta['error']}"}
+        current[pid] = meta.metadata()
+    plan = _restore_plan(entry, current)
+    doable = [p for p in plan if "skip" not in p]
+    summary = {"change_id": entry["id"], "tool": entry["tool"], "time": entry.get("ts"), "change": entry["change"]}
+    if not doable:
+        return {**summary, "error": "No photo can be restored (all changed since).", "photos": plan}
+    if not confirm:
+        return {"dry_run": True, **summary, "photos": plan, "hint": "Call again with confirm=true to undo."}
+    approved, how = await gate.approve(
+        ctx, f"Letzte Änderung rückgängig machen: {entry['tool']} für {len(doable)} Foto(s)"
+    )
+    if not approved:
+        return gate.refusal(how)
+
+    groups: dict[str, list[str]] = {}
+    for item in doable:
+        groups.setdefault(json.dumps(item["restore"], sort_keys=True), []).append(item["id"])
+    for key, pids in groups.items():
+        restore = json.loads(key)
+        tool = entry["tool"]
+        if tool == "set_rating":
+            result = await _run(_adapter.set_rating, pids, restore["rating"])
+        elif tool == "set_flag":
+            result = await _run(_adapter.set_flag, pids, restore["flag"])
+        elif tool == "set_color_label":
+            result = await _run(_adapter.set_color_label, pids, restore["color_label"])
+        elif tool == "set_title_caption":
+            result = await _run(_adapter.set_title_caption, pids, restore.get("title"), restore.get("caption"))
+        else:
+            result = await _run(_adapter.remove_keywords, pids, restore["remove_keywords"])
+        if _is_error(result):
+            return {**result, "note": "Undo stopped part-way; check with list_changes and Lightroom."}
+    undo_id = audit.record(
+        "undo_last_change", [p["id"] for p in doable], {"undoes": entry["id"]},
+        approved_by=how, undoes=entry["id"],
+    )
+    return {"applied": True, "change_id": undo_id, **summary, "restored": len(doable),
+            "skipped": [p for p in plan if "skip" in p]}
+
+
+@mcp.tool()
+async def export_photos(
+    photo_ids: list[str], confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
     """Export photos as JPEG into the operator-configured folder. Dry run unless confirm=true.
 
     The destination cannot be chosen by the client; it comes from MHPHOTOS_EXPORT_DIR.
@@ -312,26 +573,38 @@ async def export_photos(photo_ids: list[str], confirm: bool = False) -> dict[str
         meta = await _run(_adapter.get_photo, pid)
         if _is_error(meta):
             return meta
-        names.append(meta.filename)
+        names.append({"id": pid, "filename": meta.filename})
     if not confirm:
         return {
             "dry_run": True,
             "destination": dest,
-            "files": names,
+            "files": [n["filename"] for n in names],
             "hint": "Nothing was exported. Call again with confirm=true to export.",
         }
+    approved, how = await gate.approve(ctx, f"{len(names)} Foto(s) als JPEG nach {dest} exportieren: {_names(names)}")
+    if not approved:
+        return gate.refusal(how)
     Path(dest).mkdir(parents=True, exist_ok=True)
     result = await _run(_adapter.export_photos, photo_ids, dest)
-    return result if _is_error(result) else {"applied": True, **result}
+    if _is_error(result):
+        return result
+    change_id = audit.record("export_photos", photo_ids, {"destination": dest}, approved_by=how)
+    return {"applied": True, "change_id": change_id, **result}
 
 
 @mcp.tool()
-async def send_to_mhphotos_inbox(photo_ids: list[str], confirm: bool = False) -> dict[str, Any]:
+async def send_to_mhphotos_inbox(
+    photo_ids: list[str],
+    confirm: bool = False,
+    mark_in_lightroom: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
     """Export photos and send them to the MHPhotos Foto-Inbox for review (not published).
 
     Items arrive with status "wartet" and are approved inside the MHPhotos app. Dry run
-    unless confirm=true. Needs operator config: MHPHOTOS_INBOX_URL, MHPHOTOS_ADMIN_TOKEN
-    and MHPHOTOS_EXPORT_DIR.
+    unless confirm=true. Needs operator config: MHPHOTOS_INBOX_URL, the admin token and
+    MHPHOTOS_EXPORT_DIR. mark_in_lightroom=true adds the keyword "MHPhotos-Inbox" to the sent
+    photos (needs MHPHOTOS_ALLOW_WRITES=1) so backlog_report can tell what is already sent.
     """
     if bad := _check_ids(photo_ids):
         return bad
@@ -345,13 +618,23 @@ async def send_to_mhphotos_inbox(photo_ids: list[str], confirm: bool = False) ->
         if _is_error(meta):
             return meta
         photos.append(meta)
+    if mark_in_lightroom and not permissions.writes_enabled():
+        return {"error": "mark_in_lightroom needs " + permissions.writes_disabled_message(), "code": "disabled"}
     if not confirm:
         return {
             "dry_run": True,
             "target": cfg.host,
             "files": [p.filename for p in photos],
+            "mark_in_lightroom": mark_in_lightroom,
             "hint": "Nothing was exported or sent. Call again with confirm=true.",
         }
+    approved, how = await gate.approve(
+        ctx,
+        f"{len(photos)} Foto(s) exportieren und an die MHPhotos-Inbox ({cfg.host}) senden "
+        f"(noch nicht öffentlich): {_names([{'filename': p.filename} for p in photos])}",
+    )
+    if not approved:
+        return gate.refusal(how)
     batch_dir = Path(dest) / f"inbox-{uuid.uuid4().hex[:8]}"
     batch_dir.mkdir(parents=True, exist_ok=True)
     exported = await _run(_adapter.export_photos, photo_ids, str(batch_dir))
@@ -368,12 +651,25 @@ async def send_to_mhphotos_inbox(photo_ids: list[str], confirm: bool = False) ->
             publishing.upload, cfg, path, photo.metadata()
         )
         results.append({"photo_id": photo.id, "filename": path.name, **outcome})
-    return {"applied": True, "target": cfg.host, "export_folder": str(batch_dir), "results": results}
+    sent = [r["photo_id"] for r in results if r.get("status") in ("uploaded", "duplicate")]
+    marked = None
+    if mark_in_lightroom and sent:
+        mark = await _run(_adapter.add_keywords, sent, [INBOX_KEYWORD])
+        marked = {"error": mark["error"]} if _is_error(mark) else {"keyword": INBOX_KEYWORD, "photos": len(sent)}
+    change_id = audit.record(
+        "send_to_mhphotos_inbox", photo_ids, {"target": cfg.host, "sent": len(sent)},
+        approved_by=how, result={"inbox_ids": {r["photo_id"]: r.get("inbox_id") for r in results}},
+    )
+    out = {"applied": True, "change_id": change_id, "target": cfg.host, "export_folder": str(batch_dir), "results": results}
+    if marked is not None:
+        out["marked"] = marked
+    return out
 
 
 # ---------------------------------------------------------------- editing advice
 MAX_PREVIEWS = 12
 MAX_SETTINGS_BATCH = 20
+INBOX_KEYWORD = "MHPhotos-Inbox"
 
 
 @mcp.tool(structured_output=False)  # mixed text + image blocks cannot be structured output
@@ -429,7 +725,9 @@ async def list_presets(name_contains: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def apply_preset(photo_ids: list[str], preset: str, confirm: bool = False) -> dict[str, Any]:
+async def apply_preset(
+    photo_ids: list[str], preset: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
     """Apply an existing develop preset ("Name" or "Folder/Name") to photos.
 
     Dry run unless confirm=true; needs operator opt-in. Lightroom records it as a history
@@ -450,24 +748,23 @@ async def apply_preset(photo_ids: list[str], preset: str, confirm: bool = False)
         {"preset": f"{hits[0]['folder']}/{hits[0]['name']}"},
         lambda: _adapter.apply_preset(photo_ids, preset),
         confirm,
+        ctx=ctx,
+        tool="apply_preset",
+        summary=f"Preset '{hits[0]['name']}' anwenden (in Lightroom über den Verlauf rückgängig zu machen)",
     )
 
 
-@mcp.tool()
-async def apply_develop_settings(
-    photo_ids: list[str], settings: dict[str, Any], confirm: bool = False
+async def _apply_settings(
+    photo_ids: list[str],
+    clean: dict[str, Any],
+    confirm: bool,
+    ctx: Context | None,
+    *,
+    tool: str,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Apply develop settings (e.g. {"Exposure2012": 0.3, "Highlights2012": -40}) to photos.
-
-    Only known parameters within Lightroom's ranges are accepted (error lists them). Dry run
-    shows old and new values per photo. Needs operator opt-in and confirm=true; Lightroom
-    records a history step that can be undone.
-    """
     if not photo_ids or len(photo_ids) > MAX_SETTINGS_BATCH or len(set(photo_ids)) != len(photo_ids):
         return {"error": f"Provide 1-{MAX_SETTINGS_BATCH} distinct photo ids"}
-    clean, err = develop.validate(settings)
-    if err:
-        return {"error": err}
     if not permissions.writes_enabled():
         return {"error": permissions.writes_disabled_message(), "code": "disabled"}
     current = []
@@ -480,15 +777,86 @@ async def apply_develop_settings(
         return {
             "dry_run": True,
             "new": clean,
+            **(extra or {}),
             "photos": current,
             "hint": "Nothing was changed. Call again with confirm=true to apply.",
         }
+    approved, how = await gate.approve(
+        ctx,
+        f"{len(clean)} Entwicklungs-Werte auf {len(photo_ids)} Foto(s) anwenden "
+        "(in Lightroom über den Verlauf rückgängig zu machen)",
+    )
+    if not approved:
+        return gate.refusal(how)
     result = await _run(_adapter.apply_develop_settings, photo_ids, clean)
-    return result if _is_error(result) else {"applied": True, "new": clean, **result}
+    if _is_error(result):
+        return result
+    change_id = audit.record(
+        tool, photo_ids, {"settings": clean, **(extra or {})},
+        before={c["id"]: c["old"] for c in current}, approved_by=how, result=result,
+    )
+    return {"applied": True, "change_id": change_id, "new": clean, **result}
 
 
 @mcp.tool()
-async def create_preset(name: str, settings: dict[str, Any], confirm: bool = False) -> dict[str, Any]:
+async def apply_develop_settings(
+    photo_ids: list[str],
+    settings: dict[str, Any],
+    confirm: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Apply develop settings (e.g. {"Exposure2012": 0.3, "Highlights2012": -40}) to photos.
+
+    Only known parameters within Lightroom's ranges are accepted (error lists them). Dry run
+    shows old and new values per photo. Needs operator opt-in and confirm=true; Lightroom
+    records a history step that can be undone.
+    """
+    clean, err = develop.validate(settings)
+    if err:
+        return {"error": err}
+    return await _apply_settings(photo_ids, clean, confirm, ctx, tool="apply_develop_settings")
+
+
+@mcp.tool()
+async def sync_develop_settings(
+    from_photo_id: str,
+    to_photo_ids: list[str],
+    include_white_balance: bool = False,
+    keys: list[str] | None = None,
+    confirm: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Copy the look of one photo to others (tone, presence, HSL, detail, vignette, grain).
+
+    White balance (Temperature/Tint) is left out unless include_white_balance=true, because it
+    differs per photo. keys limits the copy to named parameters. Dry run shows old and new values.
+    """
+    if from_photo_id in to_photo_ids:
+        return {"error": "to_photo_ids must not contain from_photo_id"}
+    source = await _run(_adapter.get_develop_settings, from_photo_id)
+    if _is_error(source):
+        return source
+    tunable = set(develop.RANGES) | develop.BOOLEANS
+    if keys:
+        bad = [k for k in keys if k not in tunable]
+        if bad:
+            return {"error": f"Not copyable: {', '.join(bad)}"}
+        wanted = set(keys)
+    else:
+        wanted = tunable - (set() if include_white_balance else {"Temperature", "Tint"})
+    picked = {k: v for k, v in source.items() if k in wanted}
+    clean, err = develop.validate(picked) if picked else ({}, "The source photo has none of the copyable settings")
+    if err:
+        return {"error": err}
+    return await _apply_settings(
+        to_photo_ids, clean, confirm, ctx, tool="sync_develop_settings", extra={"from": from_photo_id}
+    )
+
+
+@mcp.tool()
+async def create_preset(
+    name: str, settings: dict[str, Any], confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
     """Create a new develop preset in Lightroom from settings (same parameters as apply_develop_settings).
 
     It appears under the plugin's own preset folder. Dry run unless confirm=true; needs
@@ -509,8 +877,14 @@ async def create_preset(name: str, settings: dict[str, Any], confirm: bool = Fal
     if not confirm:
         return {"dry_run": True, "name": name.strip(), "settings": clean,
                 "hint": "No preset was created. Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Preset '{name.strip()}' mit {len(clean)} Werten in Lightroom anlegen")
+    if not approved:
+        return gate.refusal(how)
     result = await _run(_adapter.create_preset, name.strip(), clean)
-    return result if _is_error(result) else {"applied": True, **result}
+    if _is_error(result):
+        return result
+    change_id = audit.record("create_preset", [], {"name": name.strip(), "settings": clean}, approved_by=how)
+    return {"applied": True, "change_id": change_id, **result}
 
 
 # ---------------------------------------------------------------- MHPhotos app
@@ -646,6 +1020,7 @@ async def mhphotos_publish(
     item_ids: list[str],
     overrides: dict[str, dict[str, Any]] | None = None,
     confirm: bool = False,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Publish approved inbox items on the PUBLIC MHPhotos site (mhphotos.de).
 
@@ -722,6 +1097,14 @@ async def mhphotos_publish(
             "items": plan,
             "hint": "Nothing was published. Review title, description and categories, then call again with confirm=true.",
         }
+    if not ready:
+        return {"applied": False, "published": 0, "items": plan, "hint": "Nothing is ready to publish."}
+    titles = "; ".join(f"{e['title']} -> {', '.join(e['categories'])}" for e in ready[:6])
+    approved, how = await gate.approve(
+        ctx, f"{len(ready)} Foto(s) ÖFFENTLICH auf mhphotos.de veröffentlichen: {titles}"
+    )
+    if not approved:
+        return gate.refusal(how)
     for entry in ready:
         fields = {k: entry[k] for k in ("title", "description", "alt", "location", "categories")}
         code, data = await anyio.to_thread.run_sync(publishing.approve, cfg, entry["id"], fields)
@@ -731,7 +1114,12 @@ async def mhphotos_publish(
         else:
             entry["status"] = "error"
             entry["problem"] = _app_error(code, data)["error"]
-    return {"applied": True, "published": sum(1 for e in plan if e.get("status") == "published"), "items": plan}
+    published = sum(1 for e in plan if e.get("status") == "published")
+    change_id = audit.record(
+        "mhphotos_publish", [], {"items": [{"id": e["id"], "title": e.get("title"), "status": e.get("status")} for e in ready]},
+        approved_by=how,
+    )
+    return {"applied": True, "change_id": change_id, "published": published, "items": plan}
 
 
 @mcp.tool()

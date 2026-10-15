@@ -20,6 +20,7 @@ EXTRA_KEYS = (
 MAX_PAGE_SIZE = 100
 MAX_BATCH = 100
 FLAGS = ("none", "picked", "rejected")
+COLOR_LABELS = ("none", "red", "yellow", "green", "blue", "purple")
 
 
 def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -177,6 +178,24 @@ class CatalogAdapter(Protocol):
 
     def apply_preset(self, photo_ids: list[str], preset: str) -> dict[str, Any]: ...
 
+    def create_collection(self, name: str) -> dict[str, Any]:
+        """Create (or return the existing) collection of that name: {"id", "name"}."""
+
+    def add_to_collection(self, collection_id: str, photo_ids: list[str]) -> dict[str, Any]: ...
+
+    def set_color_label(self, photo_ids: list[str], label: str) -> dict[str, Any]: ...
+
+    def set_title_caption(
+        self, photo_ids: list[str], title: str | None, caption: str | None
+    ) -> dict[str, Any]:
+        """None leaves a field untouched; an empty string clears it."""
+
+    def remove_keywords(self, photo_ids: list[str], keywords: list[str]) -> dict[str, Any]:
+        """Only used by undo, to remove keywords this server added."""
+
+    def create_virtual_copies(self, photo_ids: list[str]) -> dict[str, Any]:
+        """{"copies": [{"source_id", "id"}]}"""
+
     def apply_develop_settings(
         self, photo_ids: list[str], settings: dict[str, Any]
     ) -> dict[str, Any]: ...
@@ -314,6 +333,54 @@ class MockAdapter:
     def create_preset(self, name, settings):
         self._presets.append({"folder": "MHPhotos MCP Bridge", "name": name})
         return {"created": name, "folder": "MHPhotos MCP Bridge", "parameters": len(settings)}
+
+    def create_collection(self, name):
+        for c in self._collections:
+            if c.name == name:
+                return {"id": c.id, "name": c.name, "existed": True}
+        cid = f"c{len(self._collections) + 1}"
+        self._collections.append(Collection(cid, name, ()))
+        return {"id": cid, "name": name, "existed": False}
+
+    def add_to_collection(self, collection_id, photo_ids):
+        photos = self._all(photo_ids)
+        for i, c in enumerate(self._collections):
+            if c.id == collection_id:
+                merged = tuple(dict.fromkeys((*c.photo_ids, *(p.id for p in photos))))
+                self._collections[i] = dataclasses.replace(c, photo_ids=merged)
+                return {"updated": len(photos)}
+        raise NotFoundError(f"Collection not found: {collection_id}")
+
+    def _set_extra(self, photo_ids, **values):
+        for p in self._all(photo_ids):
+            self._photos[p.id] = dataclasses.replace(p, extra={**p.extra, **values})
+        return {"updated": len(photo_ids)}
+
+    def set_color_label(self, photo_ids, label):
+        return self._set_extra(photo_ids, color_label=label)
+
+    def set_title_caption(self, photo_ids, title, caption):
+        values = {k: v for k, v in (("title", title), ("caption", caption)) if v is not None}
+        return self._set_extra(photo_ids, **values)
+
+    def remove_keywords(self, photo_ids, keywords):
+        drop = {k.lower() for k in keywords}
+        for p in self._all(photo_ids):
+            kept = tuple(k for k in p.keywords if k.lower() not in drop)
+            self._photos[p.id] = dataclasses.replace(p, keywords=kept)
+        return {"updated": len(photo_ids)}
+
+    def create_virtual_copies(self, photo_ids):
+        copies = []
+        for p in self._all(photo_ids):
+            n = sum(1 for k in self._photos if k.startswith(f"{p.id}-vc")) + 1
+            cid = f"{p.id}-vc{n}"
+            self._photos[cid] = dataclasses.replace(
+                p, id=cid, extra={**p.extra, "virtual_copy_of": p.id}
+            )
+            self._develop[cid] = dict(self._develop[p.id])
+            copies.append({"source_id": p.id, "id": cid})
+        return {"copies": copies}
 
     def _all(self, photo_ids: list[str]) -> list[Photo]:
         return [self.get_photo(i) for i in photo_ids]  # raises before any change

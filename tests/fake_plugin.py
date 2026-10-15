@@ -77,6 +77,18 @@ class FakePlugin:
             return b.apply_develop_settings(a["photo_ids"], a["settings"])
         if name == "create_preset":
             return b.create_preset(a["name"], a["settings"])
+        if name == "create_collection":
+            return b.create_collection(a["name"])
+        if name == "add_to_collection":
+            return b.add_to_collection(a["collection_id"], a["photo_ids"])
+        if name == "set_color_label":
+            return b.set_color_label(a["photo_ids"], a["label"])
+        if name == "set_title_caption":
+            return b.set_title_caption(a["photo_ids"], a.get("title"), a.get("caption"))
+        if name == "remove_keywords":
+            return b.remove_keywords(a["photo_ids"], a["keywords"])
+        if name == "create_virtual_copies":
+            return b.create_virtual_copies(a["photo_ids"])
         if name == "set_rating":
             return b.set_rating(a["photo_ids"], a["rating"])
         if name == "set_flag":
