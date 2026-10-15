@@ -70,7 +70,8 @@ def test_invalid_mapping_or_unbounded_input_is_rejected(state, images, offset):
     'not base64!', base64.b64encode(b'not an image').decode(),
     jpeg(size=(1025, 10)), jpeg(fmt='PNG'),
     'A' * 700001, base64.b64encode(b'x' * 512001).decode(),
-])
+], ids=['invalid-base64', 'not-an-image', 'oversize-dimensions',
+        'png-not-jpeg', 'oversize-encoded', 'oversize-decoded'])
 def test_non_jpeg_or_oversize_preview_is_rejected(encoded):
     with pytest.raises(ValueError):
         render_contact_sheet(statuses('available'), [encoded], 0)
