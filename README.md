@@ -30,7 +30,7 @@ Tools (default backend is a **mock catalog**; nothing touches real photos until 
 
 ## Use with real Lightroom Classic
 1. Install the plugin in `plugin/mhphotos.lrdevplugin` (see [plugin/README.md](plugin/README.md)).
-2. Run the server with `MHPHOTOS_ADAPTER=bridge`.
+2. Run the server with `MHPHOTOS_ADAPTER=bridge`. In Claude Code the committed `.mcp.json` does this for you: run `pip install -e .` once in this repo, start Claude Code here and approve the project server. It enables reads only; edits, export and inbox stay off until you add the environment variables from the tool table.
 3. Try it on a **disposable catalog first** and follow the checklist in `plugin/README.md`.
 
 ## Architecture
