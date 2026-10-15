@@ -102,7 +102,7 @@ async def test_confirmed_upload(configured):
     assert first["fields"]["source"] == b"lightroom-classic-plugin"
     assert first["fields"]["rating"] == b"5"
     assert first["fields"]["keywords"] == b"portrait,studio"
-    assert first["fields"]["file"] == b"\xff\xd8\xff\xd9"
+    assert first["fields"]["file"][:2] == b"\xff\xd8"  # a JPEG
 
 
 async def test_wrong_token_reports_error_without_leaking(configured, monkeypatch):

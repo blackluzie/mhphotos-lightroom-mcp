@@ -22,6 +22,7 @@ from typing import Any
 URL_ENV = "MHPHOTOS_INBOX_URL"
 TOKEN_ENV = "MHPHOTOS_ADMIN_TOKEN"
 PUBLISH_ENV = "MHPHOTOS_ALLOW_PUBLISH"
+INSTAGRAM_ENV = "MHPHOTOS_ALLOW_INSTAGRAM"
 MAX_FILE_BYTES = 24 * 1024 * 1024  # the inbox rejects larger originals
 ENDPOINT = "/api/admin/lightroom-import"
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -253,3 +254,50 @@ def fetch_image(url: str, timeout: float = 30.0) -> tuple[bytes | None, str | No
     if len(data) > MAX_IMAGE_BYTES:
         return None, "image larger than 6 MB"
     return data, None
+
+
+# --- Instagram queue of the MHPhotos app ---------------------------------------------------
+INSTA_ENDPOINT = "/api/admin/insta-queue"
+INSTA_MAX_BYTES = 8 * 1024 * 1024
+
+
+def instagram_enabled() -> bool:
+    """Operator opt-in for scheduling posts that the MHPhotos app publishes to Instagram."""
+    return os.environ.get(INSTAGRAM_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+def instagram_disabled_message() -> str:
+    return f"Scheduling Instagram posts is disabled. The operator must set {INSTAGRAM_ENV}=1."
+
+
+def instagram_queue(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", INSTA_ENDPOINT)
+
+
+def instagram_cancel(cfg: InboxConfig, item_id: str) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "DELETE", f"{INSTA_ENDPOINT}/{_quote(item_id)}")
+
+
+def instagram_schedule(
+    cfg: InboxConfig, filename: str, data: bytes, fields: dict[str, str], timeout: float = 120.0
+) -> tuple[int, dict[str, Any]]:
+    """Multipart upload into the Instagram queue (status 'geplant' until the app publishes it)."""
+    if len(data) > INSTA_MAX_BYTES:
+        return 413, {"error": "image larger than 8 MB"}
+    body, ctype = _multipart(fields, filename, data)
+    req = urllib.request.Request(
+        cfg.base_url.rstrip("/") + INSTA_ENDPOINT,
+        data=body, method="POST",
+        headers={"Content-Type": ctype, "X-Admin-Token": cfg.token, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read() or b"{}")
+        except ValueError:
+            payload = {}
+        return exc.code, payload if isinstance(payload, dict) else {}
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0, {"error": "MHPhotos app not reachable"}

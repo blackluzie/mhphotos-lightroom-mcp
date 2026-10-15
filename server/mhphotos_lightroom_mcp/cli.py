@@ -10,7 +10,7 @@ import urllib.request
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from . import bridge, permissions, publishing
+from . import bridge, gate, permissions, publishing
 
 OK, WARN, FAIL = "✓", "!", "✗"
 
@@ -109,6 +109,13 @@ def doctor() -> tuple[int, list[tuple[str, str, str]]]:
     else:
         add(OK, "export folder", "not set (export disabled)")
     add(OK, "publish (MHPHOTOS_ALLOW_PUBLISH)", "enabled" if publishing.publishing_enabled() else "off")
+    add(OK, "Instagram scheduling (MHPHOTOS_ALLOW_INSTAGRAM)", "enabled" if publishing.instagram_enabled() else "off")
+    add(OK, "confirmation (MHPHOTOS_CONFIRMATION)", {
+        "ask": "ask (you are asked when your client can; otherwise confirm=true)",
+        "require": "require (refuses when your client cannot ask)",
+        "flag": "flag (confirm=true is enough, you are never asked)",
+    }[gate.mode()])
+    add(OK, "toolsets (MHPHOTOS_TOOLSETS)", os.environ.get("MHPHOTOS_TOOLSETS") or "all")
 
     # MHPhotos app
     token, source = publishing.resolve_token()

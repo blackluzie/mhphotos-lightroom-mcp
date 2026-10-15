@@ -217,7 +217,7 @@ def _mock_preview(photo_id: str, size: int) -> bytes:
 
 
 class MockAdapter:
-    """In-memory catalog with sample data. Export writes tiny placeholder files only."""
+    """In-memory catalog with sample data. Export writes small flat-colour JPEGs only."""
 
     name = "mock"
 
@@ -407,6 +407,6 @@ class MockAdapter:
         names = [p.filename.rsplit(".", 1)[0] + ".jpg" for p in photos]
         dest = Path(dest_dir)
         dest.mkdir(parents=True, exist_ok=True)
-        for name in names:  # tiny placeholder file so the whole pipeline is testable
-            (dest / name).write_bytes(b"\xff\xd8\xff\xd9")
+        for photo, name in zip(photos, names, strict=True):  # a real (flat colour) JPEG
+            (dest / name).write_bytes(_mock_preview(photo.id, 640))
         return {"exported": names, "destination": dest_dir, "mock": True}

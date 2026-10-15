@@ -3,19 +3,21 @@
 Adapter is chosen with MHPHOTOS_ADAPTER=mock (default) | bridge.
 """
 
+import dataclasses
 import json
 import os
 import re
 import sys
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import anyio
 from mcp.server.fastmcp import Context, FastMCP, Image
 
-from . import audit, develop, gate, permissions, publishing
+from . import audit, develop, gate, imaging, permissions, publishing
 from .adapters import (
     COLOR_LABELS,
     FLAGS,
@@ -459,6 +461,59 @@ async def create_virtual_copies(
     )
 
 
+async def _collect(filters: PhotoFilter, cap: int = 500) -> tuple[list[Any], int] | dict[str, Any]:
+    """Page through list_photos (100 per page) up to cap photos. Returns (photos, total)."""
+    out: list[Any] = []
+    offset = 0
+    while True:
+        res = await _run(_adapter.list_photos, None, MAX_PAGE_SIZE, offset, filters)
+        if _is_error(res):
+            return res
+        photos, total = res
+        out += photos
+        offset += MAX_PAGE_SIZE
+        if offset >= total or len(out) >= cap:
+            return out, total
+
+
+@mcp.tool()
+async def backlog_report(year: int, min_rating: int = 5, sample: int = 30) -> dict[str, Any]:
+    """What good photos of a year are not yet handled? Compares Lightroom against markers.
+
+    Candidates: photos of the year rated min_rating or more. A photo counts as handled when it
+    carries the Lightroom keyword "MHPhotos-Inbox" (set by send_to_mhphotos_inbox with
+    mark_in_lightroom=true) or "Instagram" (set when matched to an Instagram post). Only as
+    reliable as those markers. Read-only.
+    """
+    if not 1900 <= year <= 2200 or not 0 <= min_rating <= 5:
+        return {"error": "year must be four digits and min_rating 0-5"}
+    base = PhotoFilter(min_rating=min_rating, captured_from=f"{year}-01-01", captured_to=f"{year}-12-31")
+    parts = {}
+    for name, flt in (
+        ("candidates", base),
+        ("inbox", dataclasses.replace(base, keyword=INBOX_KEYWORD)),
+        ("instagram", dataclasses.replace(base, keyword="Instagram")),
+    ):
+        res = await _collect(flt)
+        if isinstance(res, dict):
+            return res
+        parts[name] = res
+    candidates, total = parts["candidates"]
+    handled = {p.id for p in parts["inbox"][0]} | {p.id for p in parts["instagram"][0]}
+    open_items = [p for p in candidates if p.id not in handled]
+    return {
+        "year": year,
+        "min_rating": min_rating,
+        "candidates": total,
+        "sent_to_mhphotos_inbox": parts["inbox"][1],
+        "marked_instagram": parts["instagram"][1],
+        "not_yet_handled": len(open_items),
+        "not_yet_handled_sample": [p.summary() for p in open_items[: max(1, min(sample, 100))]],
+        "truncated": total > len(candidates),
+        "note": 'Handled means: keyword "MHPhotos-Inbox" or "Instagram" present.',
+    }
+
+
 @mcp.tool()
 async def list_changes(limit: int = 10) -> dict[str, Any]:
     """Recent confirmed changes from the local audit log (newest first), with undo status."""
@@ -702,6 +757,33 @@ async def get_photo_previews(photo_ids: list[str], size: int = 768) -> list[Any]
         out.append(caption)
         out.append(Image(data=data, format="jpeg"))
     return out
+
+
+@mcp.tool(structured_output=False)  # text + image blocks
+async def get_contact_sheet(photo_ids: list[str], columns: int = 5, cell: int = 360) -> list[Any]:
+    """One numbered overview image of up to 30 photos (about 5x cheaper than separate previews).
+
+    Use it to pick candidates from a big album, then look closely at the few with
+    get_photo_previews. The legend maps each number on the image to the photo id.
+    """
+    if not photo_ids or len(photo_ids) > imaging.MAX_SHEET_PHOTOS or len(set(photo_ids)) != len(photo_ids):
+        return [{"error": f"Provide 1-{imaging.MAX_SHEET_PHOTOS} distinct photo ids"}]
+    cell = max(160, min(cell, 480))
+    previews: list[bytes | None] = []
+    legend: list[dict[str, Any]] = []
+    for number, pid in enumerate(photo_ids, 1):
+        meta = await _run(_adapter.get_photo, pid)
+        data = None if _is_error(meta) else await _run(_adapter.get_preview, pid, max(256, cell))
+        if _is_error(meta) or _is_error(data):
+            previews.append(None)
+            legend.append({"n": number, "id": pid, "error": "not available"})
+            continue
+        previews.append(data)
+        m = meta.metadata()
+        legend.append({"n": number, "id": pid, "filename": m["filename"], "rating": m["rating"],
+                       **({"location": m["location"]} if m.get("location") else {})})
+    sheet = await anyio.to_thread.run_sync(imaging.contact_sheet, previews, columns, cell)
+    return [{"legend": legend}, Image(data=sheet, format="jpeg")]
 
 
 @mcp.tool()
@@ -1207,6 +1289,158 @@ async def mhphotos_instagram_images(post_ids: list[str]) -> list[Any]:
         )
         out.append(Image(data=image, format="jpeg"))
     return out
+
+
+# ---------------------------------------------------------------- Instagram queue (MHPhotos app)
+MIN_LEAD = timedelta(minutes=15)
+MAX_LEAD = timedelta(days=60)
+
+
+def _parse_when(value: str) -> datetime | dict[str, Any]:
+    try:
+        when = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return {"error": "scheduled_at must be ISO 8601 with time zone, e.g. 2026-10-20T18:00:00+02:00"}
+    if when.tzinfo is None:
+        return {"error": "scheduled_at needs a time zone offset, e.g. +02:00"}
+    now = datetime.now(UTC)
+    if when < now + MIN_LEAD:
+        return {"error": "scheduled_at must be at least 15 minutes in the future (time to cancel)"}
+    if when > now + MAX_LEAD:
+        return {"error": "scheduled_at must be within the next 60 days"}
+    return when
+
+
+@mcp.tool()
+async def mhphotos_schedule_instagram(
+    photo_id: str,
+    caption: str,
+    scheduled_at: str,
+    post_type: str = "post",
+    confirm: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Queue a Lightroom photo for Instagram via the MHPhotos app (published automatically at the time).
+
+    Exports the photo, shrinks it to Instagram size (long edge 1440 px, JPEG under 8 MB) and puts it
+    in the MHPhotos Instagram queue. scheduled_at: ISO 8601 with offset, 15 minutes to 60 days ahead.
+    Cancel before the time with mhphotos_cancel_instagram. Dry run unless confirm=true; needs
+    MHPHOTOS_ALLOW_INSTAGRAM=1, the MHPhotos config and MHPHOTOS_EXPORT_DIR.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    if not publishing.instagram_enabled():
+        return {"error": publishing.instagram_disabled_message(), "code": "disabled"}
+    dest = permissions.export_dir()
+    if dest is None:
+        return {"error": permissions.export_disabled_message(), "code": "disabled"}
+    caption = caption.strip()
+    if not caption or len(caption) > 2200:
+        return {"error": "caption required (max 2200 characters)"}
+    if post_type not in ("post", "story"):
+        return {"error": "post_type must be post or story"}
+    when = _parse_when(scheduled_at)
+    if isinstance(when, dict):
+        return when
+    meta = await _run(_adapter.get_photo, photo_id)
+    if _is_error(meta):
+        return meta
+    plan = {
+        "photo": meta.filename,
+        "type": post_type,
+        "scheduled_at": when.astimezone(UTC).isoformat(timespec="minutes"),
+        "caption": caption,
+    }
+    if not confirm:
+        return {
+            "dry_run": True, **plan, "posted_automatically": True,
+            "hint": "Nothing was queued. Call again with confirm=true; cancel later with mhphotos_cancel_instagram.",
+        }
+    approved, how = await gate.approve(
+        ctx,
+        f"AUTOMATISCH auf Instagram veröffentlichen ({post_type}) am {when.astimezone().strftime('%d.%m.%Y %H:%M')}: "
+        f"{meta.filename} – \"{caption[:80]}\"",
+    )
+    if not approved:
+        return gate.refusal(how)
+    batch_dir = Path(dest) / f"insta-{uuid.uuid4().hex[:8]}"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    exported = await _run(_adapter.export_photos, [photo_id], str(batch_dir))
+    if _is_error(exported):
+        return exported
+    path = batch_dir / f"{meta.filename.rsplit('.', 1)[0]}.jpg"
+    if not path.is_file():
+        return {"error": "exported file not found"}
+    try:
+        data = await anyio.to_thread.run_sync(lambda: imaging.instagram_jpeg(path.read_bytes()))
+    except (OSError, ValueError) as exc:
+        return {"error": f"image could not be prepared: {exc}"}
+    code, resp = await anyio.to_thread.run_sync(
+        publishing.instagram_schedule, cfg, f"{path.stem}.jpg", data,
+        {"type": post_type, "caption": caption, "scheduledAt": when.astimezone(UTC).isoformat(), "source": "mcp"},
+    )
+    if code != 200 or not resp.get("ok"):
+        return _app_error(code, resp)
+    item = resp.get("item") or {}
+    change_id = audit.record(
+        "mhphotos_schedule_instagram", [photo_id], {**plan, "queue_id": item.get("id")}, approved_by=how
+    )
+    return {"applied": True, "change_id": change_id, "queue_id": item.get("id"), **plan}
+
+
+@mcp.tool()
+async def mhphotos_instagram_queue() -> dict[str, Any]:
+    """The MHPhotos Instagram queue: scheduled, published and failed items."""
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    code, data = await anyio.to_thread.run_sync(publishing.instagram_queue, cfg)
+    if code != 200:
+        return _app_error(code, data)
+    items = sorted(data.get("items", []), key=lambda i: i.get("scheduledAt") or "")
+    return {
+        "items": [
+            {
+                "id": i.get("id"), "type": i.get("type"), "status": i.get("status"),
+                "scheduled_at": i.get("scheduledAt"), "caption": (i.get("caption") or "")[:120],
+                "error": i.get("error"), "attempts": i.get("attempts"),
+            }
+            for i in items
+        ]
+    }
+
+
+@mcp.tool()
+async def mhphotos_cancel_instagram(
+    queue_id: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Remove a not-yet-published item from the MHPhotos Instagram queue (it will not be posted)."""
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    if not publishing.instagram_enabled():
+        return {"error": publishing.instagram_disabled_message(), "code": "disabled"}
+    code, data = await anyio.to_thread.run_sync(publishing.instagram_queue, cfg)
+    if code != 200:
+        return _app_error(code, data)
+    item = next((i for i in data.get("items", []) if i.get("id") == queue_id), None)
+    if item is None:
+        return {"error": f"Queue item not found: {queue_id}. Use mhphotos_instagram_queue."}
+    if item.get("status") == "veroeffentlicht":
+        return {"error": "Already published on Instagram; delete the post in Instagram itself."}
+    summary = {"id": queue_id, "status": item.get("status"), "scheduled_at": item.get("scheduledAt"),
+               "caption": (item.get("caption") or "")[:120]}
+    if not confirm:
+        return {"dry_run": True, **summary, "hint": "Call again with confirm=true to remove it from the queue."}
+    approved, how = await gate.approve(ctx, f"Instagram-Beitrag aus der Warteschlange entfernen: {summary['caption'][:60]}")
+    if not approved:
+        return gate.refusal(how)
+    code, resp = await anyio.to_thread.run_sync(publishing.instagram_cancel, cfg, queue_id)
+    if code != 200:
+        return _app_error(code, resp)
+    change_id = audit.record("mhphotos_cancel_instagram", [], summary, approved_by=how)
+    return {"applied": True, "change_id": change_id, **summary}
 
 
 # ---------------------------------------------------------------- toolsets
