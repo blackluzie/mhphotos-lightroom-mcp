@@ -390,6 +390,47 @@ async def lightroom_collection_photo_search(
         return {"photos": [], "reason": "invalid_live_response"}
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+async def lightroom_collection_contact_sheet(
+    collection_path: list[str], offset: int = 0, limit: int = 10,
+    session_id: str | None = None,
+) -> list[TextContent | ImageContent]:
+    """Read up to ten current collection photos as one numbered JPEG review sheet.
+    Uses the same authorized previews/metadata as lightroom_collection_photos.
+    Labels are one-based collection positions, never ratings or stable photo IDs.
+    Missing previews have placeholders, not replacement images. For detailed
+    inspection request individual previews using lightroom_collection_photos.
+    No automatic ranking, edits, ratings, exports or catalog changes occur.
+    Membership/order can change between calls; pass the catalog session_id.
+    Only available through the isolated read-only stdio worker, not public HTTP.
+    """
+    from mhphotos_lightroom_mcp.contact_sheet import render_contact_sheet
+
+    content = await lightroom_collection_photos(
+        collection_path, offset=offset, limit=limit,
+        include_previews=True, session_id=session_id,
+    )
+    metadata = json.loads(content[0].text)
+    if metadata.get("reason"):
+        return content
+    try:
+        sheet = render_contact_sheet(metadata["preview_status"],
+                                     [c.data for c in content if isinstance(c, ImageContent)], offset)
+    except (OSError, ValueError):
+        metadata["reason"] = "contact_sheet_unavailable"
+        return [TextContent(type="text", text=json.dumps(metadata))]
+    metadata["contact_sheet"] = {
+        "available": sheet is not None,
+        "labels": [{"photo_number": offset + s["index"],
+                    "collection_offset": offset + s["index"] - 1,
+                    "preview_status": s["status"]} for s in metadata["preview_status"]],
+    }
+    output = [TextContent(type="text", text=json.dumps(metadata))]
+    if sheet is not None:
+        output.append(ImageContent(type="image", data=sheet, mimeType="image/jpeg"))
+    return output
+
+
 def register_http_tools(http_server: FastMCP) -> None:
     """Publish the read-only tools with explicit ChatGPT permissions."""
     from mcp.types import ToolAnnotations
