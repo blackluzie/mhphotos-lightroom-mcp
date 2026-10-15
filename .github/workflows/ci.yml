@@ -8,7 +8,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Isolate bounded diagnostic runs from older unresponsive workflow jobs.
+  group: ci-v2-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
