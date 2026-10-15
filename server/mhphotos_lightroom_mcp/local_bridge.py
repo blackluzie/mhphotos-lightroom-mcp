@@ -8,6 +8,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,7 +18,11 @@ from mhphotos_lightroom_mcp.collection_schema import (
     MAX_COLLECTIONS,
     validate_collections,
 )
-from mhphotos_lightroom_mcp.live_reads import MAX_LIVE_BODY, LiveReads
+from mhphotos_lightroom_mcp.live_reads import (
+    MAX_LIVE_BODY,
+    LiveReads,
+    UnavailableLiveRequest,
+)
 from mhphotos_lightroom_mcp.selection_schema import (
     FIELDS,
     MAX_BODY,
@@ -224,10 +229,12 @@ class _Handler(BaseHTTPRequestHandler):
                     raise ValueError("invalid_live_request")
                 result = {"request": self.server.live_reads.poll()}
             else:
-                if not isinstance(data, dict) or set(data) != {"id", "result"} or not isinstance(data["id"], str):
+                if not isinstance(data, dict) or set(data) != {"id", "result"} or not isinstance(data["id"], str) or not re.fullmatch("[0-9a-f]{32}", data["id"]):
                     raise ValueError("invalid_live_result")
                 self.server.live_reads.reply(data["id"], data["result"])
                 result = {"accepted": True}
+        except UnavailableLiveRequest:
+            return self._respond(409, {"error": "live_request_unavailable"})
         except (ValueError, UnicodeError):
             return self._respond(400, {"error": "invalid_live_payload"})
         return self._respond(200, result)

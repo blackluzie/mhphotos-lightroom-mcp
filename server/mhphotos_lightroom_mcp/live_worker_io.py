@@ -4,6 +4,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
 from mhphotos_lightroom_mcp.live_reads import MAX_LIVE_BODY, validate_request
@@ -26,8 +27,24 @@ def post_live(route, payload, *, timeout=5):
     token = read_bridge_token(bridge_token_path())
     request = Request(f'http://127.0.0.1:{bridge_port()}/v1/live/{route}', data=data,
                       headers={'Authorization':f'Bearer {token}','Content-Type':'application/json'})
-    with build_opener(ProxyHandler({})).open(request, timeout=timeout) as response:
-        raw = response.read(MAX_LIVE_BODY + 1)
+    try:
+        with build_opener(ProxyHandler({})).open(request, timeout=timeout) as response:
+            raw = response.read(MAX_LIVE_BODY + 1)
+    except HTTPError as exc:
+        with exc:
+            # Only the broker's exact stale-reply response is recoverable. Never
+            # swallow authentication, schema, size, transport or other HTTP errors.
+            if route == 'reply' and exc.code == 409:
+                raw = exc.read(257)
+                if len(raw) <= 256:
+                    try:
+                        stale = json.loads(raw)
+                    except (ValueError, UnicodeError):
+                        stale = None
+                    if stale == {'error': 'live_request_unavailable'}:
+                        return {'accepted': False, 'reason': 'live_request_unavailable'}
+            raise
+
     if len(raw) > MAX_LIVE_BODY:
         raise ValueError('Live payload too large')
     result = json.loads(raw)
@@ -76,7 +93,8 @@ def reply(path):
         envelope = json.loads(raw)
         if not isinstance(envelope, dict) or set(envelope) != {'id','result'}:
             raise ValueError('Invalid result file')
-        if post_live('reply', envelope).get('accepted') is not True:
+        outcome = post_live('reply', envelope)
+        if outcome != {'accepted': False, 'reason': 'live_request_unavailable'} and outcome.get('accepted') is not True:
             raise ValueError('Reply rejected')
     finally:
         path.unlink(missing_ok=True)

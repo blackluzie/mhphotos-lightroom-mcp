@@ -57,7 +57,7 @@ explicit. No matching/ranking automatically writes ratings, picks or Develop dat
 - Only `collections` and `collection_photos` are accepted. No arbitrary SDK method,
   Lua source, shell command, preset operation or catalog write can be queued.
 - At most two outstanding jobs, thirty-second deadline, UUID request identifiers,
-  single claim/reply, expired/replayed replies rejected; results removed from RAM
+  single claim/reply, expired/replayed replies rejected (409 `live_request_unavailable`); results removed from RAM
   after delivery/timeout. Heartbeat is worker availability, not a catalog sync.
 - Private owner-only temporary files in the existing isolated transfers folder.
   Poll commands use fixed lines/hex-encoded names and are never evaluated as Lua.
@@ -83,3 +83,23 @@ or prepare unapproved changes to user photos.
 SDK references: Adobe-authored [collection reads](https://lrc.mcor.dev/modules/LrCollection.html)
 and [metadata/JPEG requests](https://lrc.mcor.dev/modules/LrPhoto.html), hosted as
 reference mirrors. Image processing follows [Pillow's security guidance](https://pillow.readthedocs.io/en/stable/handbook/security.html).
+
+### Preview scheduling budget
+
+The Mac worker measures actual elapsed wall time for the shared fifteen-second
+preview wait, including thumbnail request startup. Counting requested short
+sleeps is insufficient when Lightroom resumes tasks late. A finite iteration
+cap remains as a fallback, and a backwards clock jump ends the wait. A blocked
+SDK call or delayed task resumption itself cannot be preempted; this budget
+bounds additional waiting, not the duration of Lightroom's own blocking work.
+Late callbacks retain the existing discard/release behavior. Authentication,
+job expiry, preview size limits and read-only permissions are unchanged.
+
+A well-formed reply whose job is expired, stopped, already completed or no longer
+claimed is rejected with HTTP 409 and exactly `{"error":"live_request_unavailable"}`.
+The helper discards that response, deletes its private result file and continues
+polling; no late data are delivered, cached or retried. It recognizes only this
+bounded exact response on the reply route. Authentication, origin, invalid result,
+other status/body and transport failures still stop the worker. Malformed job
+identifiers remain invalid payloads. This prevents a delayed SDK result from
+turning one request timeout into a session-wide disconnect.
