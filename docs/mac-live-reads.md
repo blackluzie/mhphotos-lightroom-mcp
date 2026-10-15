@@ -103,3 +103,17 @@ bounded exact response on the reply route. Authentication, origin, invalid resul
 other status/body and transport failures still stop the worker. Malformed job
 identifiers remain invalid payloads. This prevents a delayed SDK result from
 turning one request timeout into a session-wide disconnect.
+
+### Repeated reads while thumbnails are pending
+
+An explicit read reuses a still-pending thumbnail request for the same SDK photo
+object and catalog object. It does not enqueue another rendering request or use
+a collection position/name as photo identity. The current read still collects
+fresh metadata and assigns current page indices. The ten-pending-request cap and
+page budget remain in force. A callback arriving during the later explicit wait
+can satisfy that read. A callback arriving with no active consumer discards its
+bytes and releases the slot; a future read starts afresh. No completed JPEG cache,
+automatic retries, background catalog scan or extra metadata access is added.
+Repeated callbacks after completion are ignored. Catalog changes never reuse an
+old catalog's pending slot. SDK callbacks that never complete can still occupy
+bounded slots; the tool does not claim it can cancel Lightroom rendering.
