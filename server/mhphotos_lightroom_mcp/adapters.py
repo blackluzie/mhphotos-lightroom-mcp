@@ -1,11 +1,18 @@
-"""Catalog adapters: read-only access to a (mock or real) Lightroom catalog."""
+"""Catalog adapters: access to a (mock or real) Lightroom catalog.
+
+Reads are always available. Writes and exports exist on the interface but are
+only reachable through the permission gate in ``permissions.py``.
+"""
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 MAX_PAGE_SIZE = 100
+MAX_BATCH = 100
+FLAGS = ("none", "picked", "rejected")
 
 
 class NotFoundError(LookupError):
@@ -17,9 +24,11 @@ class Collection:
     id: str
     name: str
     photo_ids: tuple[str, ...] = ()
+    photo_count: int | None = None
 
     def summary(self) -> dict[str, Any]:
-        return {"id": self.id, "name": self.name, "photo_count": len(self.photo_ids)}
+        count = self.photo_count if self.photo_count is not None else len(self.photo_ids)
+        return {"id": self.id, "name": self.name, "photo_count": count}
 
 
 @dataclass(frozen=True)
@@ -48,14 +57,25 @@ class Photo:
             **self.extra,
         }
 
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Photo:
+        return cls(
+            id=str(d["id"]),
+            filename=str(d.get("filename", "")),
+            rating=int(d.get("rating") or 0),
+            flag=str(d.get("flag") or "none"),
+            keywords=tuple(str(k) for k in d.get("keywords") or ()),
+            capture_time=str(d.get("capture_time") or ""),
+            camera=str(d.get("camera") or ""),
+        )
+
 
 class CatalogAdapter(Protocol):
-    """Read-only catalog interface. Implementations must never write."""
-
     name: str
 
     def is_connected(self) -> bool: ...
 
+    # --- reads ---
     def list_collections(self) -> list[Collection]: ...
 
     def list_photos(
@@ -65,9 +85,18 @@ class CatalogAdapter(Protocol):
 
     def get_photo(self, photo_id: str) -> Photo: ...
 
+    # --- gated writes (callers must pass the permission gate first) ---
+    def set_rating(self, photo_ids: list[str], rating: int) -> dict[str, Any]: ...
+
+    def set_flag(self, photo_ids: list[str], flag: str) -> dict[str, Any]: ...
+
+    def add_keywords(self, photo_ids: list[str], keywords: list[str]) -> dict[str, Any]: ...
+
+    def export_photos(self, photo_ids: list[str], dest_dir: str) -> dict[str, Any]: ...
+
 
 class MockAdapter:
-    """In-memory catalog with fixed sample data. Never touches real files."""
+    """In-memory catalog with sample data. Never touches real files."""
 
     name = "mock"
 
@@ -112,3 +141,31 @@ class MockAdapter:
             return self._photos[photo_id]
         except KeyError:
             raise NotFoundError(f"Photo not found: {photo_id}") from None
+
+    def _all(self, photo_ids: list[str]) -> list[Photo]:
+        return [self.get_photo(i) for i in photo_ids]  # raises before any change
+
+    def _update(self, photo_ids: list[str], **changes: Any) -> dict[str, Any]:
+        for p in self._all(photo_ids):
+            self._photos[p.id] = dataclasses.replace(p, **changes)
+        return {"updated": len(photo_ids)}
+
+    def set_rating(self, photo_ids, rating):
+        return self._update(photo_ids, rating=rating)
+
+    def set_flag(self, photo_ids, flag):
+        return self._update(photo_ids, flag=flag)
+
+    def add_keywords(self, photo_ids, keywords):
+        for p in self._all(photo_ids):
+            merged = tuple(dict.fromkeys((*p.keywords, *keywords)))
+            self._photos[p.id] = dataclasses.replace(p, keywords=merged)
+        return {"updated": len(photo_ids)}
+
+    def export_photos(self, photo_ids, dest_dir):
+        photos = self._all(photo_ids)
+        return {
+            "exported": [p.filename.rsplit(".", 1)[0] + ".jpg" for p in photos],
+            "destination": dest_dir,
+            "mock": True,
+        }

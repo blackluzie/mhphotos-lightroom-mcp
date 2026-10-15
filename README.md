@@ -16,34 +16,39 @@ pytest
 mhphotos-lightroom-mcp
 ```
 
-Read-only MCP tools (backed by a mock adapter with sample data; they never access or change real photos):
+Tools (default backend is a **mock catalog**; nothing touches real photos until you opt in to the bridge):
 
-| Tool | Purpose |
-|------|---------|
-| `connection_status` | Adapter mode and connection state (`mock`) |
-| `list_collections` | Collections with id, name, photo count |
-| `list_photos` | Photos (optionally per collection), paginated, `limit` capped at 100 |
-| `get_photo_metadata` | Rating, flag, keywords, capture time, camera |
+| Tool | Purpose | Needs opt-in |
+|------|---------|:-:|
+| `connection_status` | Adapter mode, connection, enabled permissions | |
+| `list_collections` | Collections with id, name, photo count | |
+| `list_photos` | Photos (optionally per collection), paginated, `limit` capped at 100 | |
+| `get_photo_metadata` | Rating, flag, keywords, capture time, camera | |
+| `set_rating` / `set_flag` / `add_keywords` | Edit metadata (dry run unless `confirm=true`) | `MHPHOTOS_ALLOW_WRITES=1` |
+| `export_photos` | JPEG export to an operator-set folder (dry run unless `confirm=true`) | `MHPHOTOS_EXPORT_DIR=/abs/path` |
 
-A real Lightroom bridge will plug in later as another `CatalogAdapter` (`server/mhphotos_lightroom_mcp/adapters.py`).
+## Use with real Lightroom Classic
+1. Install the plugin in `plugin/mhphotos.lrdevplugin` (see [plugin/README.md](plugin/README.md)).
+2. Run the server with `MHPHOTOS_ADAPTER=bridge`.
+3. Try it on a **disposable catalog first** and follow the checklist in `plugin/README.md`.
 
 ## Architecture
 
-- `server/`: Python MCP server
-- `plugin/`: planned Lightroom Classic SDK (Lua) plugin
-- `adapters/`: planned optional adapters, including cloud only if Adobe APIs allow it
-- `tests/`: automated tests
-- `docs/architecture.md`: architecture and safety
+- `server/`: Python MCP server, adapters, bridge, permission gate
+- `plugin/`: Lightroom Classic SDK (Lua) plugin + Lua tests
+- `tests/`: automated tests (Python, plus a runner for the Lua tests)
+- `docs/architecture.md`: protocol, security, permission model
+- `docs/cloud-assessment.md`: Lightroom cloud API assessment
 
-## Roadmap
+## Roadmap / status
 
-1. ~~Mock adapter with read-only tools~~ (done); design a local, authenticated bridge.
-2. Add read-only Lightroom Classic SDK commands for photos, collections and metadata.
-3. Add permission-gated edits and exports.
-4. Assess Lightroom Cloud API access separately.
-5. Add optional MHPhotos publishing tools.
+1. ~~Local authenticated bridge and mock adapter~~ done
+2. ~~Read-only commands for photos, collections and metadata~~ done (plugin untested inside Lightroom)
+3. ~~Permission-gated edits and export~~ done (plugin untested inside Lightroom)
+4. ~~Assess Lightroom cloud API~~ done: see `docs/cloud-assessment.md`, not built
+5. Optional MHPhotos publishing tools: not started (needs a definition)
 
-Lightroom Classic catalogs should be stored locally, even if originals live on mounted NAS volumes. Never directly write to the catalog SQLite database.
+Lightroom Classic catalogs should be stored locally, even if originals live on mounted NAS volumes. The server never writes to the catalog SQLite database.
 
 ## Contributing
 
