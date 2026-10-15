@@ -53,7 +53,10 @@ supports macOS and Windows.
 The separate Mac test profile also supports direct read-only requests without
 manual sending: `lightroom_collections` and `lightroom_collection_photos` with
 JPEG previews. Enable its worker once in Lightroom. These new tools are stdio-only
-and are not exposed by the existing public HTTP connector. See
+and are not exposed by the existing public HTTP connector.
+`lightroom_collection_photo_search` searches bounded current collection metadata
+by filename, exportable keywords, title/caption and non-private location labels;
+see [photo metadata search](docs/mac-live-photo-search.md). See
 [direct Mac reads](docs/mac-live-reads.md).
 
 All tools are read-only. There are no rating-change or catalog-write tools.

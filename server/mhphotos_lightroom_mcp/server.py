@@ -350,6 +350,46 @@ async def lightroom_collection_photos(
     return content
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
+async def lightroom_collection_photo_search(
+    collection_path: list[str], query: str, offset: int = 0,
+    scan_limit: int = 50, session_id: str | None = None,
+) -> dict:
+    """Search one current collection page (up to 50 photos), without rendering.
+    Literal case-insensitive substring search across filename, exportable keywords,
+    title, caption and explicitly non-private textual location labels. No GPS,
+    hidden keywords or visual/geographic inference. Longer worker metadata text
+    may be truncated. match_count is for this page,
+    not the whole collection; zero matches does not mean the subject is absent.
+    Continue with next_offset and the same query, path and returned session_id.
+    Membership/order may change between reads. collection_offset can request a
+    preview through lightroom_collection_photos; it is not a stable photo ID or
+    an editing handle. Requires the enabled isolated worker; not public HTTP.
+    """
+    from mhphotos_lightroom_mcp.live_photo_search import normalized_query, search_page
+    from mhphotos_lightroom_mcp.live_reads import validate_request
+    from mhphotos_lightroom_mcp.live_worker_io import post_live
+
+    request = {"operation": "collection_photos", "path": collection_path,
+               "offset": offset, "limit": scan_limit, "previews": False,
+               "session_id": session_id}
+    try:
+        normalized_query(query)
+        validate_request(request)
+        if offset > 0 and session_id is None:
+            raise ValueError("Continuation requires catalog session")
+    except (ValueError, UnicodeError):
+        return {"photos": [], "reason": "invalid_live_search_request"}
+    try:
+        result = await asyncio.to_thread(post_live, "read", request, timeout=35)
+    except (OSError, ValueError):
+        return {"photos": [], "reason": "live_bridge_unavailable"}
+    try:
+        return search_page(request, result, query)
+    except (ValueError, UnicodeError):
+        return {"photos": [], "reason": "invalid_live_response"}
+
+
 def register_http_tools(http_server: FastMCP) -> None:
     """Publish the read-only tools with explicit ChatGPT permissions."""
     from mcp.types import ToolAnnotations
