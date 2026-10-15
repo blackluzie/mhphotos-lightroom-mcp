@@ -20,12 +20,21 @@ Run in this order and tick off each step:
 - [ ] `connection_status` → `connected: true, mode: bridge`
 - [ ] `list_collections` matches Lightroom (names, counts; sets appear as `Set/Name`)
 - [ ] `list_photos` (whole catalog, one collection, paging with limit/offset)
+- [ ] `list_photos` filters: `min_rating=5`, `year=…`, `keyword=…`, `flag=picked` (results match what Lightroom shows)
 - [ ] `get_photo_metadata`: filename, rating, flag, keywords, camera correct;
       `capture_time` plausible (see note below)
+- [ ] `get_photo_previews` shows real images (try 2 photos, size 512)
+- [ ] `get_photo_metadata`: `location`, `gps`, `iso`, `aperture`, `shutter_speed`, `lens` plausible
+- [ ] `list_photos` with `location=…` and with `near_lat/near_lon/radius_km`
+- [ ] `get_develop_settings` returns the values you see in the Develop module
+- [ ] `list_presets` lists your presets (folder + name)
 - [ ] Edits disabled by default: `set_rating … confirm=true` → `code: disabled`
 - [ ] Restart server with `MHPHOTOS_ALLOW_WRITES=1`: `set_rating` without confirm → dry run only
 - [ ] `set_rating`, `set_flag`, `add_keywords` with `confirm=true` → visible in Lightroom
 - [ ] Rating 0 clears the rating
+- [ ] `apply_preset` (dry run, then confirm) on a test photo: preset visible in Develop, one history step "MHPhotos…", undoable
+- [ ] `apply_develop_settings` e.g. `{"Exposure2012": 0.5}`: slider moves
+- [ ] `create_preset`: preset appears under the plugin's folder in the Develop module's preset list
 - [ ] A bad id in a batch changes nothing
 - [ ] Restart with `MHPHOTOS_EXPORT_DIR=/some/abs/folder`: `export_photos` dry run, then confirm → JPEGs appear
 - [ ] Quit Lightroom → tools return `unavailable`; restart Lightroom → reconnects by itself
@@ -36,6 +45,8 @@ These API usages are the ones not verifiable without Lightroom:
 - `catalog:findPhotoByUuid`, `catalog:getCollectionByLocalIdentifier`
 - `catalog:withWriteAccessDo(name, fn, {timeout = 15})` return value `'executed'`
 - `catalog:createKeyword(name, {}, true, nil, true)`
+- `photo:requestJpegThumbnail`, `LrStringUtils.encodeBase64`, `photo:getDevelopSettings`
+- `LrApplication.developPresetFolders`, `photo:applyDevelopPreset(preset, _PLUGIN)`, `photo:applyDevelopSettings`, `LrApplication.addDevelopPresetForPlugin`
 - `LrExportSession` settings keys, and `LrFileUtils.readFile`
 - `capture_time`: Lightroom's raw time is relative to 2001-01-01 and has no time zone;
   the plugin presents it as if it were UTC.

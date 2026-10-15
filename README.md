@@ -21,12 +21,21 @@ Tools (default backend is a **mock catalog**; nothing touches real photos until 
 | Tool | Purpose | Needs opt-in |
 |------|---------|:-:|
 | `connection_status` | Adapter mode, connection, enabled permissions | |
-| `list_collections` | Collections with id, name, photo count | |
-| `list_photos` | Photos (optionally per collection), paginated, `limit` capped at 100 | |
+| `list_collections` | Collections (albums) with id, name, photo count; `name_contains` to find e.g. "09 2026" | |
+| `list_photos` | Search photos (also by `location` text or GPS circle `near_lat`/`near_lon`/`radius_km`): `min_rating`, `year` or `captured_from`/`captured_to`, `keyword`, `flag`, optional collection; paginated, `limit` capped at 100 | |
 | `get_photo_metadata` | Rating, flag, keywords, capture time, camera | |
 | `set_rating` / `set_flag` / `add_keywords` | Edit metadata (dry run unless `confirm=true`) | `MHPHOTOS_ALLOW_WRITES=1` |
 | `export_photos` | JPEG export to an operator-set folder (dry run unless `confirm=true`) | `MHPHOTOS_EXPORT_DIR=/abs/path` |
+| `get_photo_previews` | Look at up to 12 photos at a time (images), with place and exposure | |
+| `get_develop_settings` / `list_presets` | Current develop settings of a photo; your Lightroom presets | |
+| `apply_preset` / `apply_develop_settings` / `create_preset` | Apply a preset or settings to photos, or create a new preset (dry run unless `confirm=true`; Lightroom keeps a history step) | `MHPHOTOS_ALLOW_WRITES=1` |
+| `mhphotos_galleries` / `mhphotos_inbox` / `mhphotos_instagram_posts` | Read MHPhotos categories, Foto-Inbox with AI suggestions, your Instagram posts | `MHPHOTOS_INBOX_URL`, `MHPHOTOS_ADMIN_TOKEN` |
+| `mhphotos_instagram_images` | Show Instagram posts as images to match them against Lightroom previews | same |
+| `mhphotos_analyze_inbox` | Ask MHPhotos for AI title/description/category suggestions (changes nothing public) | same |
+| `mhphotos_publish` | Publish inbox items on the **public** MHPhotos site (dry run unless `confirm=true`) | same + `MHPHOTOS_ALLOW_PUBLISH=1` |
 | `send_to_mhphotos_inbox` | Export and send to the MHPhotos Foto-Inbox for review, nothing goes public (dry run unless `confirm=true`) | `MHPHOTOS_INBOX_URL`, `MHPHOTOS_ADMIN_TOKEN`, `MHPHOTOS_EXPORT_DIR` |
+
+Example workflows (5-star photos of 2026 to mhphotos.de, Instagram posts): see [docs/workflows.md](docs/workflows.md).
 
 ## Use with real Lightroom Classic
 1. Install the plugin in `plugin/mhphotos.lrdevplugin` (see [plugin/README.md](plugin/README.md)).

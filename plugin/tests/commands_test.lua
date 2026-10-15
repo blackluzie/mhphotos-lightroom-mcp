@@ -15,11 +15,23 @@ local function newPhoto(uuid, name, rating, pick, kws, t, cam)
   function p:getFormattedMetadata(k) return self.fmt[k] end
   function p:setRawMetadata(k, v) self.raw[k] = v end
   function p:addKeyword(kw) self.raw.keywords[#self.raw.keywords + 1] = kw end
+  p.develop = { Exposure2012 = 0.5, Contrast2012 = 10, ToneCurve = { 1, 2 }, CameraProfile = 'Adobe Color' }
+  p.appliedPresets, p.appliedSettings = {}, {}
+  function p:getDevelopSettings() return self.develop end
+  function p:applyDevelopPreset(preset, plugin) self.appliedPresets[#self.appliedPresets + 1] = { preset, plugin } end
+  function p:applyDevelopSettings(settings, name) self.appliedSettings[#self.appliedSettings + 1] = { settings, name } end
+  function p:requestJpegThumbnail(w, h, cb) cb(self.fmt.fileName .. ':' .. w .. 'x' .. h, nil); return {} end
   return p
 end
 
 local p1 = newPhoto('u1', 'IMG_1.dng', 5, 1, { 'a', 'b' }, 0, 'Canon')
 local p2 = newPhoto('u2', 'IMG_2.dng', nil, 0, {}, 86400, 'Nikon')
+-- p1 was taken in South Tyrol, p2 has no place data
+p1.raw.gps = { latitude = 46.6, longitude = 11.5 }
+p1.raw.isoSpeedRating = 200; p1.raw.aperture = 8; p1.raw.focalLength = 35
+p1.fmt.city = 'Brixen'; p1.fmt.stateProvince = 'Südtirol'; p1.fmt.country = 'Italien'
+p1.fmt.shutterSpeed = '1/250'; p1.fmt.lens = '24-70'
+function p2:getRawMetadata(k) return self.raw[k] end
 local photos = { p1, p2 }
 
 local coll = { localIdentifier = 7, getName = function() return 'Fav' end, getPhotos = function() return { p1 } end }
@@ -43,8 +55,25 @@ local catalogProxy = setmetatable({}, { __index = function(_, k)
   local f = fakeCatalog[k]; return function(self, ...) return f(self, ...) end end })
 
 local exported
+local createdPreset
+local presetA = { getName = function() return 'Warm' end }
+local presetB = { getName = function() return 'Warm' end }
+local presetC = { getName = function() return 'Klar' end }
+local folders = {
+  { getName = function() return 'User Presets' end, getDevelopPresets = function() return { presetA, presetC } end },
+  { getName = function() return 'Adobe' end, getDevelopPresets = function() return { presetB } end },
+}
+_PLUGIN = { id = 'plugin' }
 function import(name)
-  if name == 'LrApplication' then return { activeCatalog = function() return catalogProxy end } end
+  if name == 'LrTasks' then return { sleep = function() end } end
+  if name == 'LrStringUtils' then return { encodeBase64 = function(d) return 'B64(' .. d .. ')' end } end
+  if name == 'LrApplication' then
+    return {
+      activeCatalog = function() return catalogProxy end,
+      developPresetFolders = function() return folders end,
+      addDevelopPresetForPlugin = function(plugin, title, settings) createdPreset = { plugin, title, settings } end,
+    }
+  end
   if name == 'LrExportSession' then
     return function(spec) exported = spec; return { doExportOnCurrentTask = function() end } end
   end
@@ -67,6 +96,57 @@ local m = Commands.run('get_photo', { photo_id = 'u1' })
 eq(m.flag, 'picked'); eq(m.keywords[2], 'b'); eq(m.camera, 'Canon'); eq(m.capture_time, '2001-01-01T00:00:00')
 eq(Commands.run('get_photo', { photo_id = 'u2' }).flag, 'none')
 eq(select(2, pcall(Commands.run, 'get_photo', { photo_id = 'zzz' })).code, 'not_found')
+
+-- filters (p1: 5 stars, picked, kw a/b, 2001-01-01; p2: unrated, none, 2001-01-02)
+local function ids(r) local o = {} for _, x in ipairs(r.photos) do o[#o + 1] = x.id end return table.concat(o, ',') end
+eq(ids(Commands.run('list_photos', { filters = { min_rating = 5 } })), 'u1')
+eq(ids(Commands.run('list_photos', { filters = { captured_from = '2001-01-02' } })), 'u2')
+eq(ids(Commands.run('list_photos', { filters = { captured_to = '2001-01-01' } })), 'u1')
+eq(ids(Commands.run('list_photos', { filters = { keyword = 'A' } })), 'u1')
+eq(ids(Commands.run('list_photos', { filters = { flag = 'none' } })), 'u2')
+local fr = Commands.run('list_photos', { filters = { min_rating = 5, flag = 'none' } })
+eq(fr.total, 0)
+eq(Commands.run('list_photos', { filters = {} }).total, 2)
+eq(Commands.run('list_photos', { filters = { min_rating = 1 }, limit = 1, offset = 0 }).total, 1)
+
+-- place / GPS filters and extra metadata
+eq(ids(Commands.run('list_photos', { filters = { location = 'südtirol' } })), 'u1')
+eq(ids(Commands.run('list_photos', { filters = { near_lat = 46.7, near_lon = 11.4, radius_km = 30 } })), 'u1')
+eq(Commands.run('list_photos', { filters = { near_lat = 51.9, near_lon = 7.6, radius_km = 30 } }).total, 0)
+local meta = Commands.run('get_photo', { photo_id = 'u1' })
+eq(meta.location, 'Brixen, Südtirol, Italien'); eq(meta.gps.latitude, 46.6); eq(meta.iso, 200)
+eq(meta.shutter_speed, '1/250'); eq(meta.focal_length_mm, 35)
+eq(Commands.run('get_photo', { photo_id = 'u2' }).gps, nil)
+
+-- preview
+eq(Commands.run('get_preview', { photo_id = 'u1', size = 99999 }).image_base64, 'B64(IMG_1.dng:1280x1280)')
+eq(Commands.run('get_preview', { photo_id = 'u1', size = 1 }).image_base64, 'B64(IMG_1.dng:256x256)')
+eq(select(2, pcall(Commands.run, 'get_preview', { photo_id = 'zzz' })).code, 'not_found')
+
+-- develop settings: scalars only (the ToneCurve table is dropped)
+local ds = Commands.run('get_develop_settings', { photo_id = 'u1' }).settings
+eq(ds.Exposure2012, 0.5); eq(ds.CameraProfile, 'Adobe Color'); eq(ds.ToneCurve, nil)
+
+-- presets
+local pl = Commands.run('list_presets').presets
+eq(#pl, 3); eq(pl[1].folder, 'User Presets'); eq(pl[3].folder, 'Adobe')
+Commands.run('apply_preset', { photo_ids = { 'u1' }, preset = 'Klar' })
+eq(p1.appliedPresets[1][1], presetC); eq(p1.appliedPresets[1][2], _PLUGIN)
+eq(select(2, pcall(Commands.run, 'apply_preset', { photo_ids = { 'u1' }, preset = 'Warm' })).code, 'not_found')  -- ambiguous
+Commands.run('apply_preset', { photo_ids = { 'u1' }, preset = 'Adobe/Warm' })
+eq(p1.appliedPresets[2][1], presetB)
+local wb = writes
+eq(select(2, pcall(Commands.run, 'apply_preset', { photo_ids = { 'u1' }, preset = 'Nope' })).code, 'not_found')
+eq(writes, wb)  -- unknown preset: no write access requested
+
+-- develop settings + create preset
+Commands.run('apply_develop_settings', { photo_ids = { 'u1', 'u2' }, settings = { Exposure2012 = 0.3, ConvertToGrayscale = false } })
+eq(p2.appliedSettings[1][1].Exposure2012, 0.3)
+eq(pcall(Commands.run, 'apply_develop_settings', { photo_ids = { 'u1' }, settings = {} }), false)
+eq(pcall(Commands.run, 'apply_develop_settings', { photo_ids = { 'u1' }, settings = { Exposure2012 = 'x' } }), false)
+Commands.run('create_preset', { name = 'Mein Preset', settings = { Contrast2012 = 20 } })
+eq(createdPreset[2], 'Mein Preset'); eq(createdPreset[3].Contrast2012, 20); eq(createdPreset[1], _PLUGIN)
+eq(pcall(Commands.run, 'create_preset', { name = '', settings = { Contrast2012 = 20 } }), false)
 
 -- writes
 Commands.run('set_rating', { photo_ids = { 'u1', 'u2' }, rating = 3 })

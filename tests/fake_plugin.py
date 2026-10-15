@@ -1,11 +1,12 @@
 """Stand-in for the Lua plugin: speaks the real bridge HTTP protocol, answers from a MockAdapter."""
 
+import base64
 import json
 import threading
 import urllib.error
 import urllib.request
 
-from mhphotos_lightroom_mcp.adapters import MockAdapter, NotFoundError
+from mhphotos_lightroom_mcp.adapters import MockAdapter, NotFoundError, PhotoFilter
 
 
 def _post(base, token, path, payload, timeout=15):
@@ -57,10 +58,23 @@ class FakePlugin:
         if name == "list_collections":
             return {"collections": [c.summary() for c in b.list_collections()]}
         if name == "list_photos":
-            photos, total = b.list_photos(a["collection_id"], a["limit"], a["offset"])
+            filters = PhotoFilter(**a["filters"]) if a.get("filters") else None
+            photos, total = b.list_photos(a["collection_id"], a["limit"], a["offset"], filters)
             return {"total": total, "photos": [p.metadata() for p in photos]}
         if name == "get_photo":
             return b.get_photo(a["photo_id"]).metadata()
+        if name == "get_preview":
+            return {"image_base64": base64.b64encode(b.get_preview(a["photo_id"], a["size"])).decode()}
+        if name == "get_develop_settings":
+            return {"settings": b.get_develop_settings(a["photo_id"])}
+        if name == "list_presets":
+            return {"presets": b.list_presets()}
+        if name == "apply_preset":
+            return b.apply_preset(a["photo_ids"], a["preset"])
+        if name == "apply_develop_settings":
+            return b.apply_develop_settings(a["photo_ids"], a["settings"])
+        if name == "create_preset":
+            return b.create_preset(a["name"], a["settings"])
         if name == "set_rating":
             return b.set_rating(a["photo_ids"], a["rating"])
         if name == "set_flag":

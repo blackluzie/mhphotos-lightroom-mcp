@@ -71,7 +71,7 @@ def test_bad_requests(bridge):
     assert _req(bridge, "/v1/poll", token=bridge.token, data=b"[1]") == 400
     assert _req(bridge, "/v1/nope", token=bridge.token, data={}) == 404
     assert _req(bridge, "/v1/result", token=bridge.token, data={"id": "unknown"}) == 404
-    big = b'{"x":"' + b"a" * 1_100_000 + b'"}'
+    big = b'{"x":"' + b"a" * 4_100_000 + b'"}'
     try:  # server may also reset the connection while the oversize body is still being sent
         assert _req(bridge, "/v1/poll", token=bridge.token, data=big) == 400
     except (urllib.error.URLError, ConnectionError):
@@ -95,6 +95,8 @@ async def test_roundtrip_reads(bridge, plugin):
     assert {c["name"] for c in colls} == {"Portraits", "Landschaft", "Leer"}
     page = await server.list_photos(collection_id="c1", limit=2)
     assert page["total"] == 3 and len(page["photos"]) == 2
+    found = await server.list_photos(min_rating=5, year=2026)  # filters travel through the bridge
+    assert [p["id"] for p in found["photos"]] == ["p1"]
     meta = await server.get_photo_metadata("p4")
     assert meta["camera"] == "Nikon Z8"
     assert "error" in await server.get_photo_metadata("nope")  # not_found mapped
@@ -129,3 +131,18 @@ def test_plugin_config_file_is_private(bridge, tmp_path):
     cfg = json.loads(path.read_text())
     assert cfg == {"url": bridge.url, "token": bridge.token}
     assert (path.stat().st_mode & 0o077) == 0
+
+
+async def test_roundtrip_editing_tools(bridge, plugin, monkeypatch):
+    out = await server.get_photo_previews(["p4"], size=512)
+    assert out[1].data[:2] == b"\xff\xd8"  # base64 survived the bridge
+    assert (await server.get_develop_settings("p4"))["settings"]["Exposure2012"] == 0.0
+    near = await server.list_photos(near_lat=46.7, near_lon=11.4, radius_km=40)
+    assert near["total"] == 2
+    assert len((await server.list_presets())["presets"]) == 3
+    assert (await server.apply_preset(["p4"], "Vivid", confirm=True))["code"] == "disabled"
+    monkeypatch.setenv("MHPHOTOS_ALLOW_WRITES", "1")
+    assert (await server.apply_preset(["p4"], "Vivid", confirm=True))["applied"]
+    assert (await server.apply_develop_settings(["p4"], {"Exposure2012": 0.4}, confirm=True))["applied"]
+    assert (await server.create_preset("Neu", {"Contrast2012": 5}, confirm=True))["applied"]
+    assert plugin.commands.count("apply_develop_settings") == 1

@@ -67,6 +67,11 @@ Reads are always allowed. Anything that changes data needs **two** things:
 2. **`confirm=true`** on the individual call. Without it the tool returns a dry-run
    preview (current values, intended change) and changes nothing.
 
+Develop edits (`apply_preset`, `apply_develop_settings`, `create_preset`) use the same gate
+(`MHPHOTOS_ALLOW_WRITES=1` + `confirm=true`). Settings are checked against a whitelist with
+Lightroom's ranges (`develop.py`) before reaching the plugin; at most 20 photos per settings
+call. Previews are delivered as MCP image content, base64 over the bridge.
+
 Further limits: max 100 photos per call, duplicate/unknown ids rejected before any
 change, keywords are only ever added (never removed), ratings 0-5, flags
 `none|picked|rejected`. There is no delete, no develop-settings edit and no
@@ -84,6 +89,23 @@ Safeguards: dry run unless `confirm=true`; the target URL and token come only fr
 operator's environment (https required, plain http only for localhost); the token is never
 returned in results; files over the inbox limit of 24 MB are skipped and reported. The
 exported files stay in the export folder.
+
+## MHPhotos app tools
+Beyond the upload, the server talks to the MHPhotos admin API (same URL/token as the
+upload): `GET /api/admin/galleries`, `GET /api/admin/lightroom-import` (inbox with AI
+suggestions), `POST .../{id}/analyze` (queued AI analysis), `PATCH .../{id}`
+`{action: "approve", ...}` (**this publishes to the public site**) and
+`GET /api/admin/instagram-library`. `mhphotos_publish` is gated by
+`MHPHOTOS_ALLOW_PUBLISH=1` plus `confirm=true`, shows a full preview first, skips items that
+are already public, rejected, untitled or without a valid category, and never creates new
+categories. See [workflows.md](workflows.md).
+
+### Instagram images
+`mhphotos_instagram_images` downloads post images for visual matching. The image URLs are data
+stored by the MHPhotos app, so they are untrusted: only `https` to `*.cdninstagram.com`,
+`*.fbcdn.net` or `*.instagram.com`, redirects are re-checked against the same list, the content
+type must be `image/*` and the size is capped at 6 MB. The service-side links expire, which the
+tool reports.
 
 ## Adapter layer
 The server talks only to the `CatalogAdapter` protocol (`adapters.py`). `MockAdapter`

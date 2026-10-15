@@ -10,6 +10,7 @@ server, never from the plugin side.
 
 from __future__ import annotations
 
+import base64
 import hmac
 import json
 import os
@@ -22,9 +23,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from .adapters import Collection, NotFoundError, Photo
+from .adapters import Collection, NotFoundError, Photo, PhotoFilter
 
-MAX_BODY = 1_000_000
+MAX_BODY = 4_000_000  # previews arrive base64-encoded
 DEFAULT_PORT = 47831
 
 
@@ -257,14 +258,40 @@ class BridgeAdapter:
             for c in data["collections"]
         ]
 
-    def list_photos(self, collection_id, limit, offset):
+    def list_photos(self, collection_id, limit, offset, filters=None):
         data = self._call(
-            "list_photos", {"collection_id": collection_id, "limit": limit, "offset": offset}
+            "list_photos",
+            {
+                "collection_id": collection_id,
+                "limit": limit,
+                "offset": offset,
+                "filters": filters.to_args() if isinstance(filters, PhotoFilter) else {},
+            },
         )
         return [Photo.from_dict(p) for p in data["photos"]], int(data["total"])
 
     def get_photo(self, photo_id: str) -> Photo:
         return Photo.from_dict(self._call("get_photo", {"photo_id": photo_id}))
+
+    def get_preview(self, photo_id, size):
+        data = self._call("get_preview", {"photo_id": photo_id, "size": size}, timeout=60.0)
+        return base64.b64decode(data["image_base64"])
+
+    def get_develop_settings(self, photo_id):
+        settings = self._call("get_develop_settings", {"photo_id": photo_id})["settings"]
+        return settings if isinstance(settings, dict) else {}  # empty Lua table encodes as []
+
+    def list_presets(self):
+        return self._call("list_presets")["presets"]
+
+    def apply_preset(self, photo_ids, preset):
+        return self._call("apply_preset", {"photo_ids": photo_ids, "preset": preset})
+
+    def apply_develop_settings(self, photo_ids, settings):
+        return self._call("apply_develop_settings", {"photo_ids": photo_ids, "settings": settings})
+
+    def create_preset(self, name, settings):
+        return self._call("create_preset", {"name": name, "settings": settings})
 
     def set_rating(self, photo_ids, rating):
         return self._call("set_rating", {"photo_ids": photo_ids, "rating": rating})
