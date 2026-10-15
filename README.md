@@ -30,6 +30,7 @@ Tools (default backend is a **mock catalog**; nothing touches real photos until 
 | `get_develop_settings` / `list_presets` | Current develop settings of a photo; your Lightroom presets | |
 | `apply_preset` / `apply_develop_settings` / `create_preset` | Apply a preset or settings to photos, or create a new preset (dry run unless `confirm=true`; Lightroom keeps a history step) | `MHPHOTOS_ALLOW_WRITES=1` |
 | `mhphotos_galleries` / `mhphotos_inbox` / `mhphotos_instagram_posts` | Read MHPhotos categories, Foto-Inbox with AI suggestions, your Instagram posts | `MHPHOTOS_INBOX_URL`, `MHPHOTOS_ADMIN_TOKEN` |
+| `mhphotos_instagram_images` | Show Instagram posts as images to match them against Lightroom previews | same |
 | `mhphotos_analyze_inbox` | Ask MHPhotos for AI title/description/category suggestions (changes nothing public) | same |
 | `mhphotos_publish` | Publish inbox items on the **public** MHPhotos site (dry run unless `confirm=true`) | same + `MHPHOTOS_ALLOW_PUBLISH=1` |
 | `send_to_mhphotos_inbox` | Export and send to the MHPhotos Foto-Inbox for review, nothing goes public (dry run unless `confirm=true`) | `MHPHOTOS_INBOX_URL`, `MHPHOTOS_ADMIN_TOKEN`, `MHPHOTOS_EXPORT_DIR` |

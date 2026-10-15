@@ -38,20 +38,20 @@ Develop parameters are a fixed whitelist with Lightroom's ranges (tone, presence
 balance, sharpening/noise, vignette, grain, HSL, grayscale); anything else is rejected.
 
 ## 2. "My 2026 Instagram photos: find them in Lightroom and publish them on MHPhotos"
-Done today:
-- `mhphotos_instagram_posts(year=2026)` lists your Instagram posts that are not yet linked
-  to a photo on the MHPhotos site (the library is synced inside the MHPhotos app; the
-  result shows `newest_sync`).
+1. `mhphotos_instagram_posts(year=2026)` lists your Instagram posts not yet on the MHPhotos
+   site (the library is synced inside the MHPhotos app; the result shows `newest_sync`).
+2. `mhphotos_instagram_images(post_ids)` shows up to 6 posts at a time as images.
+3. Shortlist the Lightroom originals: `list_photos` with `captured_from`/`captured_to` in the
+   weeks **before** the post date (a post comes after the shot), plus `min_rating`,
+   `location` or `keyword` if you know them. Look at them with `get_photo_previews`.
+4. Claude compares subject and composition and names the match per post, or says "no
+   match". Instagram crops (often 4:5) and recompresses, so this is a visual judgement,
+   not a pixel comparison. Confirm uncertain matches yourself.
+5. Optional bookkeeping: `add_keywords(photo_ids, ["Instagram"], confirm=true)` marks the
+   matched originals in Lightroom, so later searches can use `keyword="Instagram"`.
+6. Then steps 2 to 5 of workflow 1 (inbox, AI suggestions, `mhphotos_publish`).
 
-**Not automated yet: matching a post to its Lightroom original.** Instagram crops and
-recompresses, and a post date is not the capture date, so file names and dates do not
-identify the photo. Options, in the order I would build them:
-1. *Visual matching by Claude:* `get_photo_previews` now exists, so Claude can compare a
-   Lightroom preview with the Instagram thumbnail for a shortlist (rating and year as
-   pre-filter). Reliable; the missing piece is only a tool that shows the Instagram image.
-2. *Perceptual hashes:* fully automatic, but fragile with Instagram crops; would need an
-   image library and still needs a confirmation step.
-3. *Marker in Lightroom:* tag posted photos with a keyword such as `instagram-2026`
-   and use `list_photos(keyword=...)`. Zero guessing, but needs your discipline.
-
-After a match is found, steps 2 to 5 of workflow 1 apply.
+Instagram image links are temporary. If a link has expired the tool says so; sync the
+Instagram library in the MHPhotos app and try again. Only https addresses on Instagram/Meta
+CDN hosts are downloaded (no redirects elsewhere, max 6 MB), because the links come from
+stored data and are treated as untrusted.

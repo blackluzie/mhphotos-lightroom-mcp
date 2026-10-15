@@ -119,3 +119,109 @@ async def test_instagram_posts(app):
     both = await server.mhphotos_instagram_posts(year=2026, only_not_on_homepage=False)
     assert [p["id"] for p in both["posts"]] == ["ig2", "ig1"]
     assert (await server.mhphotos_instagram_posts())["total"] == 2
+
+
+# ---- Instagram images -------------------------------------------------------
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from mcp.server.fastmcp import Image
+from mhphotos_lightroom_mcp import publishing
+
+
+class _Cdn:
+    def __init__(self):
+        outer = self
+        self.hits = []
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                outer.hits.append(self.path)
+                if self.path == "/ok.jpg":
+                    body, ctype, status = b"\xff\xd8\xff\xd9", "image/jpeg", 200
+                elif self.path == "/gone.jpg":
+                    body, ctype, status = b"", "text/plain", 403
+                elif self.path == "/html":
+                    body, ctype, status = b"<html>", "text/html", 200
+                elif self.path == "/big.jpg":
+                    body, ctype, status = b"x" * (publishing.MAX_IMAGE_BYTES + 10), "image/jpeg", 200
+                elif self.path == "/redir":
+                    self.send_response(302)
+                    self.send_header("Location", "http://evil.example/steal.jpg")
+                    self.end_headers()
+                    return
+                else:
+                    body, ctype, status = b"", "text/plain", 404
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.httpd = HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    @property
+    def base(self):
+        return f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+
+@pytest.fixture
+def cdn(monkeypatch):
+    c = _Cdn()
+    monkeypatch.setattr(publishing, "IMAGE_HOST_SUFFIXES", ("127.0.0.1",))  # test double for the CDN
+    monkeypatch.setattr(publishing, "IMAGE_SCHEMES", ("http", "https"))
+    yield c
+    c.httpd.shutdown()
+    c.httpd.server_close()
+
+
+def test_image_url_allowlist():
+    ok = ["https://scontent-fra5-1.cdninstagram.com/v/a.jpg", "https://scontent.xx.fbcdn.net/a.jpg",
+          "https://www.instagram.com/p/x/media"]
+    bad = ["http://scontent.cdninstagram.com/a.jpg", "https://evil.example/a.jpg",
+           "https://cdninstagram.com.evil.example/a.jpg", "https://evilcdninstagram.com/a.jpg",
+           "file:///etc/passwd", "ftp://x.cdninstagram.com/a", ""]
+    assert all(publishing.image_url_allowed(u) for u in ok)
+    assert not any(publishing.image_url_allowed(u) for u in bad)
+
+
+async def test_instagram_images_fetch_only_allowed_hosts(app):
+    app.instagram = [{"id": "ig1", "mediaType": "IMAGE", "mediaUrl": "https://evil.example/a.jpg",
+                      "timestamp": "2026-03-01T08:00:00+0000"}]
+    res = await server.mhphotos_instagram_images(["ig1"])
+    assert "not an Instagram" in res[0]["error"]
+
+
+async def test_instagram_images_roundtrip(app, cdn):
+    app.instagram = [
+        {"id": "ig1", "mediaType": "IMAGE", "mediaUrl": cdn.base + "/ok.jpg", "caption": "Aasee",
+         "timestamp": "2026-03-01T08:00:00+0000", "permalink": "https://instagram.com/p/1"},
+        {"id": "ig2", "mediaType": "VIDEO", "thumbnailUrl": cdn.base + "/ok.jpg", "mediaUrl": cdn.base + "/video.mp4"},
+        {"id": "ig3", "mediaType": "IMAGE", "mediaUrl": cdn.base + "/gone.jpg"},
+        {"id": "ig4", "mediaType": "IMAGE", "mediaUrl": cdn.base + "/html"},
+        {"id": "ig5", "mediaType": "IMAGE", "mediaUrl": cdn.base + "/big.jpg"},
+        {"id": "ig6", "mediaType": "IMAGE", "mediaUrl": cdn.base + "/redir"},
+    ]
+    res = await server.mhphotos_instagram_images(["ig1", "ig2", "ig3", "ig4", "ig5", "ig6"])
+    assert res[0]["id"] == "ig1" and res[0]["caption"] == "Aasee"
+    assert isinstance(res[1], Image) and res[1].data == b"\xff\xd8\xff\xd9"
+    assert res[2]["id"] == "ig2" and isinstance(res[3], Image)
+    assert "expired" in res[4]["error"]
+    assert "not an image" in res[5]["error"]
+    assert "larger than 6 MB" in res[6]["error"]
+    assert "download failed" in res[7]["error"]  # redirect to evil.example was refused
+    assert "/video.mp4" not in cdn.hits  # videos use their thumbnail
+
+
+async def test_instagram_images_validation(app):
+    assert "error" in (await server.mhphotos_instagram_images([]))[0]
+    assert "error" in (await server.mhphotos_instagram_images([f"i{n}" for n in range(7)]))[0]
+    assert "not found" in (await server.mhphotos_instagram_images(["nope"]))[0]["error"]
+
+
+async def test_instagram_images_disabled_without_config():
+    assert (await server.mhphotos_instagram_images(["ig1"]))[0]["code"] == "disabled"

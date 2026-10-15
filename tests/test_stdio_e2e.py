@@ -29,6 +29,7 @@ ALL_TOOLS = {
     "mhphotos_publish",
     "mhphotos_instagram_posts",
     "get_photo_previews",
+    "mhphotos_instagram_images",
     "get_develop_settings",
     "list_presets",
     "apply_preset",

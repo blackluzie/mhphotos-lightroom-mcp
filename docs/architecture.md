@@ -100,6 +100,13 @@ suggestions), `POST .../{id}/analyze` (queued AI analysis), `PATCH .../{id}`
 are already public, rejected, untitled or without a valid category, and never creates new
 categories. See [workflows.md](workflows.md).
 
+### Instagram images
+`mhphotos_instagram_images` downloads post images for visual matching. The image URLs are data
+stored by the MHPhotos app, so they are untrusted: only `https` to `*.cdninstagram.com`,
+`*.fbcdn.net` or `*.instagram.com`, redirects are re-checked against the same list, the content
+type must be `image/*` and the size is capped at 6 MB. The service-side links expire, which the
+tool reports.
+
 ## Adapter layer
 The server talks only to the `CatalogAdapter` protocol (`adapters.py`). `MockAdapter`
 gives deterministic data for development and CI; `BridgeAdapter` forwards to the plugin.

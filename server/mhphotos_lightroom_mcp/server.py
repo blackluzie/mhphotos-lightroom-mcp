@@ -760,6 +760,49 @@ async def mhphotos_instagram_posts(
     }
 
 
+@mcp.tool(structured_output=False)  # text + image blocks
+async def mhphotos_instagram_images(post_ids: list[str]) -> list[Any]:
+    """Show Instagram posts (up to 6 per call) so you can compare them with Lightroom previews.
+
+    Use mhphotos_instagram_posts for the ids. To find the Lightroom original of a post:
+    shortlist with list_photos (captured_from/captured_to in the weeks BEFORE the post date,
+    min_rating, location), look at them with get_photo_previews and compare. Instagram
+    crops (often 4:5) and recompresses, so judge subject and composition, not pixels.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return [cfg]
+    if not post_ids or len(post_ids) > 6 or len(set(post_ids)) != len(post_ids):
+        return [{"error": "Provide 1-6 distinct Instagram post ids"}]
+    code, data = await anyio.to_thread.run_sync(publishing.instagram_library, cfg)
+    if code != 200:
+        return [_app_error(code, data)]
+    by_id = {i.get("id"): i for i in data.get("items", [])}
+    out: list[Any] = []
+    for pid in post_ids:
+        item = by_id.get(pid)
+        if item is None:
+            out.append({"id": pid, "error": "post not found in the MHPhotos Instagram library"})
+            continue
+        url = item.get("mediaUrl") if item.get("mediaType") == "IMAGE" else None
+        url = url or item.get("thumbnailUrl") or item.get("mediaUrl") or ""
+        image, reason = await anyio.to_thread.run_sync(publishing.fetch_image, url)
+        if image is None:
+            out.append({"id": pid, "error": reason})
+            continue
+        out.append(
+            {
+                "id": pid,
+                "timestamp": item.get("timestamp"),
+                "permalink": item.get("permalink"),
+                "media_type": item.get("mediaType"),
+                "caption": (item.get("caption") or "")[:300],
+            }
+        )
+        out.append(Image(data=image, format="jpeg"))
+    return out
+
+
 # ---------------------------------------------------------------- startup
 def main() -> None:
     """Run MCP server over stdio."""

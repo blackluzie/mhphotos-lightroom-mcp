@@ -161,3 +161,47 @@ def approve(cfg: InboxConfig, item_id: str, fields: dict[str, Any]) -> tuple[int
 
 def instagram_library(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
     return api(cfg, "GET", "/api/admin/instagram-library", timeout=120.0)
+
+
+# --- Instagram images (for visual matching against Lightroom previews) ---
+# The URLs come from data stored by the MHPhotos app, so they are treated as untrusted:
+# only https to Instagram/Meta CDN hosts, no redirects to anywhere else, size-capped.
+IMAGE_HOST_SUFFIXES = (".cdninstagram.com", ".fbcdn.net", ".instagram.com")
+IMAGE_SCHEMES = ("https",)
+MAX_IMAGE_BYTES = 6 * 1024 * 1024
+
+
+def image_url_allowed(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in IMAGE_SCHEMES or not host:
+        return False
+    return any(host == s.lstrip(".") or host.endswith(s) for s in IMAGE_HOST_SUFFIXES)
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not image_url_allowed(newurl):
+            raise urllib.error.URLError("redirect to a disallowed host")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def fetch_image(url: str, timeout: float = 30.0) -> tuple[bytes | None, str | None]:
+    """Download one Instagram image. Returns (bytes, None) or (None, reason)."""
+    if not url or not image_url_allowed(url):
+        return None, "image URL is not an Instagram/Meta https address"
+    opener = urllib.request.build_opener(_SafeRedirect)
+    try:
+        with opener.open(urllib.request.Request(url), timeout=timeout) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            if not ctype.startswith("image/"):
+                return None, f"not an image ({ctype or 'unknown type'})"
+            data = resp.read(MAX_IMAGE_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        hint = " (link probably expired: sync the Instagram library in the MHPhotos app)" if exc.code in (403, 404) else ""
+        return None, f"Instagram CDN answered HTTP {exc.code}{hint}"
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return None, f"download failed: {type(exc).__name__}"
+    if len(data) > MAX_IMAGE_BYTES:
+        return None, "image larger than 6 MB"
+    return data, None
