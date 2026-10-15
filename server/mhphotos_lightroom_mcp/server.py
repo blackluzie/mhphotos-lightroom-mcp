@@ -405,6 +405,7 @@ async def lightroom_collection_contact_sheet(
     Only available through the isolated read-only stdio worker, not public HTTP.
     """
     from mhphotos_lightroom_mcp.contact_sheet import render_contact_sheet
+    from mhphotos_lightroom_mcp.photo_reference import metadata_fingerprint
 
     content = await lightroom_collection_photos(
         collection_path, offset=offset, limit=limit,
@@ -419,16 +420,68 @@ async def lightroom_collection_contact_sheet(
     except (OSError, ValueError):
         metadata["reason"] = "contact_sheet_unavailable"
         return [TextContent(type="text", text=json.dumps(metadata))]
-    metadata["contact_sheet"] = {
-        "available": sheet is not None,
-        "labels": [{"photo_number": offset + s["index"],
-                    "collection_offset": offset + s["index"] - 1,
-                    "preview_status": s["status"]} for s in metadata["preview_status"]],
-    }
+    try:
+        labels = [{"photo_number": offset + item["index"],
+                   "collection_offset": offset + item["index"] - 1,
+                   "preview_status": item["status"],
+                   "metadata_fingerprint": metadata_fingerprint(
+                       collection_path, metadata["session_id"], offset + item["index"] - 1,
+                       metadata["photos"][item["index"] - 1],
+                   )} for item in metadata["preview_status"]]
+    except (ValueError, UnicodeError):
+        return [TextContent(type="text", text=json.dumps({"photos": [], "reason": "invalid_live_response"}))]
+    metadata["collection_path"] = list(collection_path)
+    metadata["contact_sheet"] = {"available": sheet is not None, "labels": labels}
     output = [TextContent(type="text", text=json.dumps(metadata))]
     if sheet is not None:
         output.append(ImageContent(type="image", data=sheet, mimeType="image/jpeg"))
     return output
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+async def lightroom_collection_candidate_preview(
+    collection_path: list[str], collection_offset: int,
+    session_id: str, metadata_fingerprint: str,
+) -> list[TextContent | ImageContent]:
+    """Read an individual preview selected from a contact-sheet label.
+    Pass its collection_offset/metadata_fingerprint and the sheet's path/session.
+    Only return the current image when those metadata still match. A mismatch
+    discards the fetched image and metadata; request a fresh sheet. This compares
+    bounded metadata, not pixels or stable identity: distinct photos can have
+    identical metadata. It is never authorization for edits, ratings or presets.
+    The returned image is the existing bounded JPEG preview, not full resolution.
+    Requires the enabled private worker; unavailable through public HTTP/OAuth.
+    """
+    from mhphotos_lightroom_mcp.photo_reference import (
+        metadata_fingerprint as fingerprint_for,
+    )
+    from mhphotos_lightroom_mcp.photo_reference import validate_candidate_request
+
+    try:
+        validate_candidate_request(collection_path, collection_offset, session_id, metadata_fingerprint)
+    except (ValueError, UnicodeError):
+        return [TextContent(type="text", text=json.dumps({"photos": [], "reason": "invalid_candidate_reference"}))]
+    content = await lightroom_collection_photos(
+        collection_path, offset=collection_offset, limit=1,
+        include_previews=True, session_id=session_id,
+    )
+    metadata = json.loads(content[0].text)
+    if metadata.get("reason"):
+        return content
+    if not metadata["photos"]:
+        return [TextContent(type="text", text=json.dumps({"photos": [], "reason": "photo_unavailable"}))]
+    try:
+        actual = fingerprint_for(collection_path, metadata["session_id"], metadata["offset"], metadata["photos"][0])
+    except (ValueError, UnicodeError):
+        actual = None
+    if actual != metadata_fingerprint:
+        return [TextContent(type="text", text=json.dumps({"photos": [], "reason": "photo_metadata_changed"}))]
+    metadata["candidate_verification"] = {
+        "metadata_match": True, "metadata_fingerprint": actual,
+        "collection_offset": collection_offset,
+    }
+    content[0] = TextContent(type="text", text=json.dumps(metadata))
+    return content
 
 
 def register_http_tools(http_server: FastMCP) -> None:
