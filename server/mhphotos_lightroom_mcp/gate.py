@@ -33,8 +33,10 @@ def mode() -> str:
 async def approve(ctx: Context | None, message: str) -> tuple[bool, str]:
     """Return (approved, how). how: user | flag | declined | unsupported | failed."""
     chosen = mode()
-    if chosen == "flag" or ctx is None:  # ctx is None for direct calls (tests, scripts)
+    if chosen == "flag":
         return True, "flag"
+    if ctx is None:  # direct call (tests, the `call` command): there is nobody to ask
+        return (False, "unsupported") if chosen == "require" else (True, "flag")
     try:
         result = await ctx.elicit(message=message, schema=Approval)
     except McpError as exc:

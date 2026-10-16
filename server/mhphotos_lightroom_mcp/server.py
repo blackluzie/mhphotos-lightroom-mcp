@@ -1292,7 +1292,129 @@ async def mhphotos_instagram_images(post_ids: list[str]) -> list[Any]:
     return out
 
 
-# ---------------------------------------------------------------- Instagram queue (MHPhotos app)
+# ---------------------------------------------------------------- inbox images (no Lightroom needed)
+MAX_SHEET = 30
+
+
+async def _inbox_items_by_id(cfg: publishing.InboxConfig) -> dict[str, dict[str, Any]] | dict[str, Any]:
+    code, data = await anyio.to_thread.run_sync(publishing.inbox_items, cfg)
+    if code != 200:
+        return {"_error": _app_error(code, data)}
+    return {i.get("id"): i for i in data.get("items", [])}
+
+
+def _inbox_caption(item: dict[str, Any]) -> dict[str, Any]:
+    s = _item_summary(item)
+    for key in ("source", "camera", "location", "lens"):
+        if item.get(key):
+            s[key] = item[key]
+    return {k: v for k, v in s.items() if v not in (None, "", [])}
+
+
+async def _original(cfg: publishing.InboxConfig, item_id: str) -> bytes | dict[str, Any]:
+    code, data = await anyio.to_thread.run_sync(publishing.inbox_image, cfg, item_id)
+    if data is None:
+        return {"id": item_id, **_app_error(code, {"error": f"image of {item_id} not available"})}
+    return data
+
+
+@mcp.tool(structured_output=False)  # text + image blocks
+async def mhphotos_inbox_images(item_ids: list[str], size: int = 768) -> list[Any]:
+    """Look at up to 12 Foto-Inbox items as images (the originals shrunk to `size`, 256-1280 px).
+
+    Works for photos that arrived from anywhere (Lightroom Classic plugin, the Mac sync service,
+    Lightroom Mobile exports) without Lightroom running. Each image comes with a caption.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return [cfg]
+    if not item_ids or len(item_ids) > MAX_PREVIEWS or len(set(item_ids)) != len(item_ids):
+        return [{"error": f"Provide 1-{MAX_PREVIEWS} distinct inbox item ids"}]
+    items = await _inbox_items_by_id(cfg)
+    if "_error" in items:
+        return [items["_error"]]
+    size = max(256, min(size, 1280))
+    out: list[Any] = []
+    for iid in item_ids:
+        if iid not in items:
+            out.append({"id": iid, "error": "not found in inbox"})
+            continue
+        raw = await _original(cfg, iid)
+        if isinstance(raw, dict):
+            out.append(raw)
+            continue
+        try:
+            jpeg = await anyio.to_thread.run_sync(imaging.downscale_jpeg, raw, size)
+        except (OSError, ValueError):
+            out.append({"id": iid, "error": "image could not be decoded"})
+            continue
+        out.append(_inbox_caption(items[iid]))
+        out.append(Image(data=jpeg, format="jpeg"))
+    return out
+
+
+@mcp.tool(structured_output=False)  # text + image blocks
+async def mhphotos_inbox_contact_sheet(
+    item_ids: list[str], columns: int = 5, cell: int = 360
+) -> list[Any]:
+    """One numbered overview image of up to 30 inbox items, to pick the best of a large batch cheaply.
+
+    Look closely at the few candidates afterwards with mhphotos_inbox_images.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return [cfg]
+    if not item_ids or len(item_ids) > MAX_SHEET or len(set(item_ids)) != len(item_ids):
+        return [{"error": f"Provide 1-{MAX_SHEET} distinct inbox item ids"}]
+    items = await _inbox_items_by_id(cfg)
+    if "_error" in items:
+        return [items["_error"]]
+    cell = max(160, min(cell, 480))
+    previews: list[bytes | None] = []
+    legend: list[dict[str, Any]] = []
+    for number, iid in enumerate(item_ids, 1):
+        raw = await _original(cfg, iid) if iid in items else None
+        if not isinstance(raw, bytes):
+            previews.append(None)
+            legend.append({"n": number, "id": iid, "error": "not available"})
+            continue
+        previews.append(raw)
+        c = _inbox_caption(items[iid])
+        legend.append({"n": number, "id": iid, **{k: c[k] for k in ("filename", "rating", "status") if k in c}})
+    sheet = await anyio.to_thread.run_sync(imaging.contact_sheet, previews, columns, cell)
+    return [{"legend": legend}, Image(data=sheet, format="jpeg")]
+
+
+@mcp.tool(structured_output=False)  # text + image blocks
+async def mhphotos_edit_preview(
+    inbox_item_id: str, adjust: dict[str, Any], size: int = 640
+) -> list[Any]:
+    """Show BEFORE and AFTER of a basic edit of an inbox photo (nothing is saved or sent).
+
+    adjust: exposure (EV -2..2), contrast, saturation, warmth (-50..50 %), sharpen (0..100 %),
+    crop (original|1:1|4:5|9:16|16:9). These are simple edits for the Instagram copy, not
+    Lightroom-quality development; use the same dict in mhphotos_schedule_instagram.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return [cfg]
+    clean, err = imaging.validate_adjust(adjust)
+    if err or not clean:
+        return [{"error": err or "adjust must not be empty"}]
+    raw = await _original(cfg, inbox_item_id)
+    if isinstance(raw, dict):
+        return [raw]
+    size = max(256, min(size, 1280))
+    try:
+        both = await anyio.to_thread.run_sync(
+            lambda: imaging.before_after(raw, imaging.adjust(raw, clean), size)
+        )
+    except (OSError, ValueError):
+        return [{"error": "image could not be decoded"}]
+    return [{"id": inbox_item_id, "adjust": clean}, Image(data=both, format="jpeg")]
+
+
+# ---------------------------------------------------------------- Instagram via the SocialHub
 MIN_LEAD = timedelta(minutes=15)
 MAX_LEAD = timedelta(days=60)
 
@@ -1314,100 +1436,168 @@ def _parse_when(value: str) -> datetime | dict[str, Any]:
 
 @mcp.tool()
 async def mhphotos_schedule_instagram(
-    photo_id: str,
     caption: str,
     scheduled_at: str,
+    photo_id: str | None = None,
+    inbox_item_id: str | None = None,
+    accounts: str = "mhphotos",
     post_type: str = "post",
+    adjust: dict[str, Any] | None = None,
+    allow_duplicate: bool = False,
     confirm: bool = False,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Queue a Lightroom photo for Instagram via the MHPhotos app (published automatically at the time).
+    """Queue a photo for Instagram in the MHPhotos SocialHub (it publishes automatically at that time).
 
-    Exports the photo, shrinks it to Instagram size (long edge 1440 px, JPEG under 8 MB) and puts it
-    in the MHPhotos Instagram queue. scheduled_at: ISO 8601 with offset, 15 minutes to 60 days ahead.
-    Cancel before the time with mhphotos_cancel_instagram. Dry run unless confirm=true; needs
-    MHPHOTOS_ALLOW_INSTAGRAM=1, the MHPhotos config and MHPHOTOS_EXPORT_DIR.
+    Source: either a Lightroom photo (photo_id, needs the Lightroom bridge and MHPHOTOS_EXPORT_DIR) or
+    an MHPhotos inbox item (inbox_item_id, works without Lightroom). accounts: mhphotos (default),
+    malou, martin, or a comma list. post_type: post|story. adjust: optional basic edits for the
+    Instagram copy only (see mhphotos_edit_preview). The SocialHub duplicate check runs first; a photo
+    that is already planned/posted is refused unless allow_duplicate=true. scheduled_at: ISO 8601 with
+    offset, 15 minutes to 60 days ahead. Cancel in time with mhphotos_cancel_instagram. Dry run unless
+    confirm=true; needs MHPHOTOS_ALLOW_INSTAGRAM=1 and the MHPhotos config.
     """
     cfg = _app_cfg()
     if isinstance(cfg, dict):
         return cfg
     if not publishing.instagram_enabled():
         return {"error": publishing.instagram_disabled_message(), "code": "disabled"}
-    dest = permissions.export_dir()
-    if dest is None:
-        return {"error": permissions.export_disabled_message(), "code": "disabled"}
+    if bool(photo_id) == bool(inbox_item_id):
+        return {"error": "Give exactly one of photo_id (Lightroom) or inbox_item_id (MHPhotos inbox)"}
     caption = caption.strip()
     if not caption or len(caption) > 2200:
         return {"error": "caption required (max 2200 characters)"}
     if post_type not in ("post", "story"):
         return {"error": "post_type must be post or story"}
+    names = publishing.parse_accounts(accounts)
+    if names is None:
+        return {"error": f"accounts must be a comma list of: {', '.join(publishing.HUB_ACCOUNTS)}"}
+    edits, err = imaging.validate_adjust(adjust)
+    if err:
+        return {"error": err}
     when = _parse_when(scheduled_at)
     if isinstance(when, dict):
         return when
-    meta = await _run(_adapter.get_photo, photo_id)
-    if _is_error(meta):
-        return meta
+    dest = permissions.export_dir()
+    label: str
+    if photo_id:
+        if dest is None:
+            return {"error": permissions.export_disabled_message(), "code": "disabled"}
+        meta = await _run(_adapter.get_photo, photo_id)
+        if _is_error(meta):
+            return meta
+        label = meta.filename
+        look = await _run(_adapter.get_preview, photo_id, 1024)  # for the duplicate check only
+        if _is_error(look):
+            return look
+        original: bytes | None = None
+    else:
+        items = await _inbox_items_by_id(cfg)
+        if "_error" in items:
+            return items["_error"]
+        if inbox_item_id not in items:
+            return {"error": f"Inbox item not found: {inbox_item_id}"}
+        label = str(items[inbox_item_id].get("originalFileName") or inbox_item_id)
+        original = await _original(cfg, inbox_item_id)
+        if isinstance(original, dict):
+            return original
+        look = original
+
+    # SocialHub duplicate check (best effort, like the app): same photo planned or posted already?
+    dup: dict[str, Any] | None = None
+    img_hash = ""
+    try:
+        thumb = await anyio.to_thread.run_sync(imaging.thumb_png_b64, look)
+        code, resp = await anyio.to_thread.run_sync(publishing.hub_duplicate, cfg, thumb, names[0])
+        if code == 200:
+            img_hash = str(resp.get("hash") or "")
+            if resp.get("duplicate"):
+                dup = {k: resp.get(k) for k in ("account_name", "scheduled_at", "status", "distance") if resp.get(k) is not None}
+    except (OSError, ValueError):
+        pass
     plan = {
-        "photo": meta.filename,
+        "photo": label,
+        "accounts": names,
         "type": post_type,
         "scheduled_at": when.astimezone(UTC).isoformat(timespec="minutes"),
         "caption": caption,
+        "edits": edits or None,
     }
+    if dup and not allow_duplicate:
+        return {"error": "This photo already looks planned or posted. Pass allow_duplicate=true to queue it anyway.",
+                "code": "duplicate", "duplicate": dup, **plan}
     if not confirm:
         return {
-            "dry_run": True, **plan, "posted_automatically": True,
+            "dry_run": True, **plan, "duplicate": dup, "posted_automatically": True,
             "hint": "Nothing was queued. Call again with confirm=true; cancel later with mhphotos_cancel_instagram.",
         }
     approved, how = await gate.approve(
         ctx,
-        f"AUTOMATISCH auf Instagram veröffentlichen ({post_type}) am {when.astimezone().strftime('%d.%m.%Y %H:%M')}: "
-        f"{meta.filename} – \"{caption[:80]}\"",
+        f"AUTOMATISCH auf Instagram ({', '.join(names)}, {post_type}) am {when.astimezone().strftime('%d.%m.%Y %H:%M')} "
+        f"veröffentlichen: {label} – \"{caption[:80]}\"",
     )
     if not approved:
         return gate.refusal(how)
-    batch_dir = Path(dest) / f"insta-{uuid.uuid4().hex[:8]}"
-    batch_dir.mkdir(parents=True, exist_ok=True)
-    exported = await _run(_adapter.export_photos, [photo_id], str(batch_dir))
-    if _is_error(exported):
-        return exported
-    path = batch_dir / f"{meta.filename.rsplit('.', 1)[0]}.jpg"
-    if not path.is_file():
-        return {"error": "exported file not found"}
+    if photo_id:
+        batch_dir = Path(dest) / f"insta-{uuid.uuid4().hex[:8]}"
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        exported = await _run(_adapter.export_photos, [photo_id], str(batch_dir))
+        if _is_error(exported):
+            return exported
+        path = batch_dir / f"{label.rsplit('.', 1)[0]}.jpg"
+        if not path.is_file():
+            return {"error": "exported file not found"}
+        original = path.read_bytes()
     try:
-        data = await anyio.to_thread.run_sync(lambda: imaging.instagram_jpeg(path.read_bytes()))
+        def prepare() -> bytes:
+            data = imaging.adjust(original, edits) if edits else original
+            return imaging.instagram_jpeg(data)
+
+        final = await anyio.to_thread.run_sync(prepare)
     except (OSError, ValueError) as exc:
         return {"error": f"image could not be prepared: {exc}"}
+    fields = {
+        "accountId": ",".join(names), "type": post_type, "caption": caption,
+        "scheduledAt": when.astimezone(UTC).isoformat(),
+    }
+    if img_hash:
+        fields["imgHash"] = img_hash
     code, resp = await anyio.to_thread.run_sync(
-        publishing.instagram_schedule, cfg, f"{path.stem}.jpg", data,
-        {"type": post_type, "caption": caption, "scheduledAt": when.astimezone(UTC).isoformat(), "source": "mcp"},
+        publishing.hub_schedule, cfg, f"{Path(label).stem}.jpg", final, fields
     )
     if code != 200 or not resp.get("ok"):
         return _app_error(code, resp)
-    item = resp.get("item") or {}
+    ids = resp.get("ids") or [resp.get("id")]
     change_id = audit.record(
-        "mhphotos_schedule_instagram", [photo_id], {**plan, "queue_id": item.get("id")}, approved_by=how
+        "mhphotos_schedule_instagram", [photo_id] if photo_id else [],
+        {**plan, "queue_ids": ids, "inbox_item": inbox_item_id}, approved_by=how,
     )
-    return {"applied": True, "change_id": change_id, "queue_id": item.get("id"), **plan}
+    return {"applied": True, "change_id": change_id, "queue_ids": ids, **plan}
 
 
 @mcp.tool()
-async def mhphotos_instagram_queue() -> dict[str, Any]:
-    """The MHPhotos Instagram queue: scheduled, published and failed items."""
+async def mhphotos_instagram_queue(status: str | None = None, limit: int = 30) -> dict[str, Any]:
+    """The SocialHub queue (newest first): scheduled, published and failed items.
+
+    status filter: geplant | veroeffentlicht | fehler.
+    """
     cfg = _app_cfg()
     if isinstance(cfg, dict):
         return cfg
-    code, data = await anyio.to_thread.run_sync(publishing.instagram_queue, cfg)
+    code, data = await anyio.to_thread.run_sync(publishing.hub_queue, cfg)
     if code != 200:
         return _app_error(code, data)
-    items = sorted(data.get("items", []), key=lambda i: i.get("scheduledAt") or "")
+    rows = [r for r in data.get("items", []) if status is None or r.get("status") == status]
+    rows.sort(key=lambda r: r.get("scheduled_at") or "", reverse=True)
     return {
         "items": [
             {
-                "id": i.get("id"), "type": i.get("type"), "status": i.get("status"),
-                "scheduled_at": i.get("scheduledAt"), "caption": (i.get("caption") or "")[:120],
-                "error": i.get("error"), "attempts": i.get("attempts"),
+                "id": r.get("id"), "account": r.get("account_name") or r.get("account_id"),
+                "type": r.get("type"), "status": r.get("status"), "scheduled_at": r.get("scheduled_at"),
+                "caption": (r.get("caption") or "")[:120], "error": r.get("error"),
+                "permalink": r.get("permalink"),
             }
-            for i in items
+            for r in rows[: max(1, min(limit, 100))]
         ]
     }
 
@@ -1416,28 +1606,31 @@ async def mhphotos_instagram_queue() -> dict[str, Any]:
 async def mhphotos_cancel_instagram(
     queue_id: str, confirm: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
-    """Remove a not-yet-published item from the MHPhotos Instagram queue (it will not be posted)."""
+    """Remove a not-yet-published item from the SocialHub queue (it will not be posted)."""
     cfg = _app_cfg()
     if isinstance(cfg, dict):
         return cfg
     if not publishing.instagram_enabled():
         return {"error": publishing.instagram_disabled_message(), "code": "disabled"}
-    code, data = await anyio.to_thread.run_sync(publishing.instagram_queue, cfg)
+    if not publishing.valid_queue_id(queue_id):
+        return {"error": "queue_id looks like q-1a2b3c4d; see mhphotos_instagram_queue"}
+    code, data = await anyio.to_thread.run_sync(publishing.hub_queue, cfg)
     if code != 200:
         return _app_error(code, data)
-    item = next((i for i in data.get("items", []) if i.get("id") == queue_id), None)
+    item = next((r for r in data.get("items", []) if r.get("id") == queue_id), None)
     if item is None:
         return {"error": f"Queue item not found: {queue_id}. Use mhphotos_instagram_queue."}
     if item.get("status") == "veroeffentlicht":
         return {"error": "Already published on Instagram; delete the post in Instagram itself."}
-    summary = {"id": queue_id, "status": item.get("status"), "scheduled_at": item.get("scheduledAt"),
+    summary = {"id": queue_id, "status": item.get("status"), "scheduled_at": item.get("scheduled_at"),
+               "account": item.get("account_name") or item.get("account_id"),
                "caption": (item.get("caption") or "")[:120]}
     if not confirm:
         return {"dry_run": True, **summary, "hint": "Call again with confirm=true to remove it from the queue."}
     approved, how = await gate.approve(ctx, f"Instagram-Beitrag aus der Warteschlange entfernen: {summary['caption'][:60]}")
     if not approved:
         return gate.refusal(how)
-    code, resp = await anyio.to_thread.run_sync(publishing.instagram_cancel, cfg, queue_id)
+    code, resp = await anyio.to_thread.run_sync(publishing.hub_cancel, cfg, queue_id)
     if code != 200:
         return _app_error(code, resp)
     change_id = audit.record("mhphotos_cancel_instagram", [], summary, approved_by=how)
@@ -1465,6 +1658,7 @@ TOOLSETS: dict[str, set[str]] = {
         "send_to_mhphotos_inbox", "mhphotos_galleries", "mhphotos_inbox", "mhphotos_analyze_inbox",
         "mhphotos_publish", "mhphotos_instagram_posts", "mhphotos_instagram_images",
         "mhphotos_schedule_instagram", "mhphotos_instagram_queue", "mhphotos_cancel_instagram",
+        "mhphotos_inbox_images", "mhphotos_inbox_contact_sheet", "mhphotos_edit_preview",
     },
 }
 

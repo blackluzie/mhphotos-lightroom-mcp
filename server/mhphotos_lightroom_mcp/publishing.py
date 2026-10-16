@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -176,7 +177,8 @@ def api(
     req = urllib.request.Request(cfg.base_url.rstrip("/") + path, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, json.loads(resp.read() or b"{}")
+            payload = json.loads(resp.read() or b"{}")
+            return resp.status, payload if isinstance(payload, dict) else {"items": payload}
     except urllib.error.HTTPError as exc:
         try:
             payload = json.loads(exc.read() or b"{}")
@@ -185,6 +187,23 @@ def api(
         return exc.code, payload if isinstance(payload, dict) else {}
     except (urllib.error.URLError, OSError, ValueError):
         return 0, {"error": "MHPhotos app not reachable"}
+
+
+def api_bytes(
+    cfg: InboxConfig, path: str, timeout: float = 120.0, max_bytes: int = 40 * 1024 * 1024
+) -> tuple[int, bytes | None]:
+    """Binary GET (e.g. an inbox image). Returns (status, bytes); bytes is None on any failure."""
+    req = urllib.request.Request(
+        cfg.base_url.rstrip("/") + path, headers={"X-Admin-Token": cfg.token}, method="GET"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = resp.read(max_bytes + 1)
+            return (resp.status, data) if len(data) <= max_bytes else (413, None)
+    except urllib.error.HTTPError as exc:
+        return exc.code, None
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0, None
 
 
 def _quote(item_id: str) -> str:
@@ -256,13 +275,18 @@ def fetch_image(url: str, timeout: float = 30.0) -> tuple[bytes | None, str | No
     return data, None
 
 
-# --- Instagram queue of the MHPhotos app ---------------------------------------------------
-INSTA_ENDPOINT = "/api/admin/insta-queue"
-INSTA_MAX_BYTES = 8 * 1024 * 1024
+# --- Instagram via the SocialHub queue of the MHPhotos app -----------------------------------
+# This is the path the MHPhotos app itself uses (accounts, duplicate check, best posting time).
+HUB_ACCOUNTS = ("mhphotos", "malou", "martin")
+HUB_QUEUE = "/api/admin/social-hub-queue"
+HUB_DUPLICATE = "/api/admin/social-hub-duplicate"
+HUB_PROXY = "/api/admin/social-hub"
+HUB_MAX_BYTES = 8 * 1024 * 1024
+_QUEUE_ID = re.compile(r"^q-[a-z0-9]{1,32}$")
 
 
 def instagram_enabled() -> bool:
-    """Operator opt-in for scheduling posts that the MHPhotos app publishes to Instagram."""
+    """Operator opt-in for scheduling posts that the SocialHub publishes to Instagram."""
     return os.environ.get(INSTAGRAM_ENV, "").strip().lower() in {"1", "true", "yes"}
 
 
@@ -270,23 +294,41 @@ def instagram_disabled_message() -> str:
     return f"Scheduling Instagram posts is disabled. The operator must set {INSTAGRAM_ENV}=1."
 
 
-def instagram_queue(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
-    return api(cfg, "GET", INSTA_ENDPOINT)
+def parse_accounts(raw: str) -> list[str] | None:
+    """'mhphotos' or 'mhphotos,martin' -> validated unique list, or None if invalid."""
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+    if not names or len(set(names)) != len(names) or any(n not in HUB_ACCOUNTS for n in names):
+        return None
+    return names
 
 
-def instagram_cancel(cfg: InboxConfig, item_id: str) -> tuple[int, dict[str, Any]]:
-    return api(cfg, "DELETE", f"{INSTA_ENDPOINT}/{_quote(item_id)}")
+def valid_queue_id(queue_id: str) -> bool:
+    return bool(_QUEUE_ID.match(queue_id))
 
 
-def instagram_schedule(
+def hub_queue(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", HUB_QUEUE)
+
+
+def hub_cancel(cfg: InboxConfig, queue_id: str) -> tuple[int, dict[str, Any]]:
+    if not valid_queue_id(queue_id):
+        return 400, {"error": "invalid queue id"}
+    return api(cfg, "DELETE", f"{HUB_PROXY}/queue/{queue_id}")
+
+
+def hub_duplicate(cfg: InboxConfig, thumb_png_b64: str, account: str) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "POST", HUB_DUPLICATE, {"thumbPng": thumb_png_b64, "accountId": account})
+
+
+def hub_schedule(
     cfg: InboxConfig, filename: str, data: bytes, fields: dict[str, str], timeout: float = 120.0
 ) -> tuple[int, dict[str, Any]]:
-    """Multipart upload into the Instagram queue (status 'geplant' until the app publishes it)."""
-    if len(data) > INSTA_MAX_BYTES:
+    """Multipart upload into the SocialHub queue (status 'geplant' until the hub publishes it)."""
+    if len(data) > HUB_MAX_BYTES:
         return 413, {"error": "image larger than 8 MB"}
     body, ctype = _multipart(fields, filename, data)
     req = urllib.request.Request(
-        cfg.base_url.rstrip("/") + INSTA_ENDPOINT,
+        cfg.base_url.rstrip("/") + HUB_QUEUE,
         data=body, method="POST",
         headers={"Content-Type": ctype, "X-Admin-Token": cfg.token, "Accept": "application/json"},
     )
@@ -301,3 +343,8 @@ def instagram_schedule(
         return exc.code, payload if isinstance(payload, dict) else {}
     except (urllib.error.URLError, OSError, ValueError):
         return 0, {"error": "MHPhotos app not reachable"}
+
+
+def inbox_image(cfg: InboxConfig, item_id: str) -> tuple[int, bytes | None]:
+    """The stored original of an inbox item (JPEG/PNG/WebP/AVIF)."""
+    return api_bytes(cfg, f"{ENDPOINT}/{_quote(item_id)}/image")
