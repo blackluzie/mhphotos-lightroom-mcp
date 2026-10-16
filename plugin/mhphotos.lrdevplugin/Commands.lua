@@ -6,6 +6,7 @@ local LrApplication = import 'LrApplication'
 local LrTasks = import 'LrTasks'
 local LrStringUtils = import 'LrStringUtils'
 local LrDate = import 'LrDate'
+local LrApplicationView = import 'LrApplicationView'
 
 local Commands = {}
 
@@ -112,7 +113,8 @@ local function invalidateCache() filterCache = {} end
 
 local function writeAccess(name, fn)
   invalidateCache()
-  local result = catalog():withWriteAccessDo(name, fn, { timeout = 15 })
+  -- asynchronous=false: wait here (up to 15 s) instead of queueing the action for later
+  local result = catalog():withWriteAccessDo(name, fn, { timeout = 15, asynchronous = false })
   if result ~= 'executed' then
     error('write_blocked: Lightroom did not grant catalog write access (' .. tostring(result) .. ')', 0)
   end
@@ -183,6 +185,7 @@ function Commands.list_photos(args)
   if args.collection_id then
     local coll = catalog():getCollectionByLocalIdentifier(tonumber(args.collection_id))
     if not coll then notFound('Collection not found: ' .. tostring(args.collection_id)) end
+    if not coll.getPhotos then error('this id is a collection set (it holds collections, not photos)', 0) end
     source = coll:getPhotos()
   else
     source = catalog():getAllPhotos()
@@ -393,6 +396,7 @@ end
 function Commands.add_to_collection(args)
   local coll = catalog():getCollectionByLocalIdentifier(tonumber(args.collection_id))
   if not coll then notFound('Collection not found: ' .. tostring(args.collection_id)) end
+  if not coll.addPhotos then error('this id is a collection set; pick a collection inside it', 0) end
   if coll.isSmartCollection and coll:isSmartCollection() then
     error('smart collections cannot receive photos manually', 0)
   end
@@ -444,18 +448,31 @@ function Commands.remove_keywords(args)
   return { updated = #photos }
 end
 
--- One copy per call so every copy is unambiguously tied to its source photo.
+-- Lightroom only creates virtual copies of the SELECTED photos, and a selection can only contain
+-- photos of the active source (and works reliably in the Library grid). So: grid view, source
+-- "All Photographs", select exactly one photo, create its copy. One copy per call keeps every
+-- copy unambiguously tied to its source. The Lightroom selection/view changes as a side effect.
+local function selectOnly(photo)
+  local cat = catalog()
+  pcall(function() LrApplicationView.switchToModule('library') end)
+  pcall(function() LrApplicationView.gridView() end)
+  pcall(function() cat:setActiveSources(cat.kAllPhotos) end)
+  cat:setSelectedPhotos(photo, {})
+end
+
 function Commands.create_virtual_copies(args)
   local photos = findAll(args.photo_ids)
   if #photos > 10 then error('at most 10 virtual copies per call', 0) end
   local copies = {}
   for _, p in ipairs(photos) do
+    selectOnly(p)
     local made
     writeAccess('MHPhotos: virtual copy', function()
-      catalog():setSelectedPhotos(p, {})
-      made = catalog():createVirtualCopies()
+      made = catalog():createVirtualCopies('MHPhotos')
     end)
-    if type(made) ~= 'table' or not made[1] then error('Lightroom created no virtual copy', 0) end
+    if type(made) ~= 'table' or not made[1] then
+      error('Lightroom created no virtual copy (is the Library module in grid view?)', 0)
+    end
     copies[#copies + 1] = { source_id = p:getRawMetadata('uuid'), id = made[1]:getRawMetadata('uuid') }
   end
   return { copies = copies }
@@ -521,6 +538,32 @@ function Commands.selftest()
     end)
   end
   check('list_presets', function() return #Commands.list_presets().presets .. ' presets' end)
+
+  -- API surface: do the functions that the WRITE commands need exist in this Lightroom? (nothing is called)
+  local function has(label, owner, names)
+    check('API present: ' .. label, function()
+      local missing = {}
+      for _, n in ipairs(names) do
+        if type(owner[n]) ~= 'function' then missing[#missing + 1] = n end
+      end
+      if #missing > 0 then error('missing: ' .. table.concat(missing, ', '), 0) end
+      return #names .. ' functions'
+    end)
+  end
+  has('catalog', catalog(), { 'withWriteAccessDo', 'createCollection', 'getCollectionByLocalIdentifier',
+    'createKeyword', 'createVirtualCopies', 'setSelectedPhotos', 'setActiveSources', 'findPhotoByUuid' })
+  has('LrApplication', LrApplication, { 'developPresetFolders', 'addDevelopPresetForPlugin' })
+  has('LrApplicationView', LrApplicationView, { 'switchToModule', 'gridView' })
+  if first[1] then
+    local photo = catalog():findPhotoByUuid(first[1].id)
+    has('photo', photo, { 'setRawMetadata', 'addKeyword', 'removeKeyword', 'applyDevelopPreset',
+      'applyDevelopSettings', 'requestJpegThumbnail', 'getDevelopSettings' })
+  end
+  check('API present: LrExportSession', function()
+    local ok, mod = pcall(import, 'LrExportSession')
+    if not ok or type(mod) ~= 'function' and type(mod) ~= 'table' then error('cannot import LrExportSession', 0) end
+    return 'importable (export setting keys are only verified by a real export)'
+  end)
 
   local failed = 0
   for _, c in ipairs(checks) do if not c.ok then failed = failed + 1 end end

@@ -450,7 +450,8 @@ async def create_virtual_copies(
     """Create virtual copies (max 10) so edits can be tried without touching the originals.
 
     Apply presets/settings to the returned copy ids, compare with get_photo_previews, keep or
-    delete the copy in Lightroom. Changes the Lightroom selection. Needs operator opt-in.
+    delete the copy in Lightroom. Lightroom only copies the selected photos, so the plugin
+    switches to the Library grid and "All Photographs" and changes your selection. Needs opt-in.
     """
     if len(photo_ids) > 10:
         return {"error": "At most 10 virtual copies per call"}
