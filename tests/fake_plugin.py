@@ -56,13 +56,15 @@ class FakePlugin:
     def _run(self, name, a):
         b = self.backing
         if name == "list_collections":
-            return {"collections": [c.summary() for c in b.list_collections()]}
+            return {"collections": [c.summary(a.get("include_counts", False)) for c in b.list_collections()]}
         if name == "list_photos":
             filters = PhotoFilter(**a["filters"]) if a.get("filters") else None
             photos, total = b.list_photos(a["collection_id"], a["limit"], a["offset"], filters)
             return {"total": total, "photos": [p.metadata() for p in photos]}
         if name == "get_photo":
             return b.get_photo(a["photo_id"]).metadata()
+        if name == "selftest":
+            return {"environment": "fake", "checks": [{"name": "fake plugin", "ok": True, "detail": ""}]}
         if name == "get_preview":
             return {"image_base64": base64.b64encode(b.get_preview(a["photo_id"], a["size"])).decode()}
         if name == "get_develop_settings":
@@ -75,6 +77,18 @@ class FakePlugin:
             return b.apply_develop_settings(a["photo_ids"], a["settings"])
         if name == "create_preset":
             return b.create_preset(a["name"], a["settings"])
+        if name == "create_collection":
+            return b.create_collection(a["name"])
+        if name == "add_to_collection":
+            return b.add_to_collection(a["collection_id"], a["photo_ids"])
+        if name == "set_color_label":
+            return b.set_color_label(a["photo_ids"], a["label"])
+        if name == "set_title_caption":
+            return b.set_title_caption(a["photo_ids"], a.get("title"), a.get("caption"))
+        if name == "remove_keywords":
+            return b.remove_keywords(a["photo_ids"], a["keywords"])
+        if name == "create_virtual_copies":
+            return b.create_virtual_copies(a["photo_ids"])
         if name == "set_rating":
             return b.set_rating(a["photo_ids"], a["rating"])
         if name == "set_flag":

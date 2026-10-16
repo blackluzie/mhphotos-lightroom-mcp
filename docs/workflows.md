@@ -55,3 +55,31 @@ Instagram image links are temporary. If a link has expired the tool says so; syn
 Instagram library in the MHPhotos app and try again. Only https addresses on Instagram/Meta
 CDN hosts are downloaded (no redirects elsewhere, max 6 MB), because the links come from
 stored data and are treated as untrusted.
+
+## 4. Keep a pick: collection, color label, title
+After "best 5 of album 09 2026" the result should not live only in the chat:
+1. `create_collection("Südtirol 09 2026 Auswahl", confirm=true)`, then
+   `add_to_collection(collection_id, photo_ids, confirm=true)`.
+2. Optionally `set_color_label(photo_ids, "green", confirm=true)` and `set_title_caption(...)` (existing text
+   is only replaced with `overwrite=true`). Each of these can be undone with `undo_last_change`.
+
+## 5. Try an edit safely, compare, repeat
+1. `create_virtual_copies([photo_id], confirm=true)` gives a copy id; the original stays untouched.
+2. `apply_preset` or `apply_develop_settings` on the **copy**, then `get_photo_previews([original, copy])`.
+3. Not happy? Adjust values and apply again (each is a history step in Lightroom). Happy? Keep the copy.
+4. For a series: `sync_develop_settings(from_photo_id, to_photo_ids)` copies the look (without white balance by
+   default, since that differs per photo).
+
+## 6. Browse a big album cheaply
+`list_photos(collection_id=..., min_rating=3)`, then `get_contact_sheet(ids)` shows up to 30 photos as one
+numbered image. Look closely only at the few picks with `get_photo_previews`.
+
+## 7. Plan Instagram posts
+`mhphotos_schedule_instagram(photo_id, caption, scheduled_at, confirm=true)` exports the photo, resizes it for
+Instagram and puts it into the MHPhotos Instagram queue. **The MHPhotos app publishes it automatically at that
+time**; check with `mhphotos_instagram_queue` and cancel in time with `mhphotos_cancel_instagram`. The time must
+be 15 minutes to 60 days ahead, and you are asked directly before anything is queued.
+
+## 8. What is still open for 2026?
+`send_to_mhphotos_inbox(..., mark_in_lightroom=true)` adds the keyword `MHPhotos-Inbox`; matching an Instagram post
+(workflow 2, step 5) adds `Instagram`. `backlog_report(2026)` then lists the good photos that carry neither marker.

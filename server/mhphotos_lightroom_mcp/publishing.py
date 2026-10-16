@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +22,7 @@ from typing import Any
 URL_ENV = "MHPHOTOS_INBOX_URL"
 TOKEN_ENV = "MHPHOTOS_ADMIN_TOKEN"
 PUBLISH_ENV = "MHPHOTOS_ALLOW_PUBLISH"
+INSTAGRAM_ENV = "MHPHOTOS_ALLOW_INSTAGRAM"
 MAX_FILE_BYTES = 24 * 1024 * 1024  # the inbox rejects larger originals
 ENDPOINT = "/api/admin/lightroom-import"
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -39,10 +42,55 @@ class InboxConfig:
         return urllib.parse.urlparse(self.base_url).netloc
 
 
+TOKEN_FILE_ENV = "MHPHOTOS_ADMIN_TOKEN_FILE"
+KEYCHAIN_SERVICE = "mhphotos-admin-token"
+_keychain_cache: dict[str, str | None] = {}
+
+
+def _keychain_token() -> str | None:
+    """macOS Keychain entry (service 'mhphotos-admin-token'); cached per process."""
+    if "v" in _keychain_cache:
+        return _keychain_cache["v"]
+    value = None
+    if sys.platform == "darwin":
+        try:
+            res = subprocess.run(
+                ["/usr/bin/security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            value = res.stdout.strip() if res.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            value = None
+    _keychain_cache["v"] = value or None
+    return _keychain_cache["v"]
+
+
+def resolve_token() -> tuple[str | None, str]:
+    """Admin token and where it came from: env var, file, or macOS Keychain (never logged)."""
+    token = os.environ.get(TOKEN_ENV, "").strip()
+    if token:
+        return token, f"environment variable {TOKEN_ENV}"
+    file_name = os.environ.get(TOKEN_FILE_ENV, "").strip()
+    if file_name:
+        path = Path(file_name).expanduser()
+        try:
+            if path.is_absolute() and path.is_file():
+                value = path.read_text().strip()
+                if value:
+                    return value, f"file {path}"
+        except OSError:
+            pass
+        return None, f"file {path} (unreadable or empty)"
+    value = _keychain_token()
+    if value:
+        return value, f"macOS Keychain ({KEYCHAIN_SERVICE})"
+    return None, "not set"
+
+
 def inbox_config() -> InboxConfig | None:
     """Operator-provided target. https only (plain http just for localhost)."""
     url = os.environ.get(URL_ENV, "").strip()
-    token = os.environ.get(TOKEN_ENV, "").strip()
+    token, _ = resolve_token()
     if not url or not token:
         return None
     parsed = urllib.parse.urlparse(url)
@@ -55,7 +103,8 @@ def inbox_config() -> InboxConfig | None:
 def disabled_message() -> str:
     return (
         f"Publishing is disabled. The operator must set {URL_ENV} (https URL of the "
-        f"MHPhotos app) and {TOKEN_ENV}, plus MHPHOTOS_EXPORT_DIR."
+        f"MHPhotos app) and the admin token ({TOKEN_ENV}, {TOKEN_FILE_ENV} or the macOS "
+        f"Keychain entry '{KEYCHAIN_SERVICE}'), plus MHPHOTOS_EXPORT_DIR."
     )
 
 
@@ -205,3 +254,50 @@ def fetch_image(url: str, timeout: float = 30.0) -> tuple[bytes | None, str | No
     if len(data) > MAX_IMAGE_BYTES:
         return None, "image larger than 6 MB"
     return data, None
+
+
+# --- Instagram queue of the MHPhotos app ---------------------------------------------------
+INSTA_ENDPOINT = "/api/admin/insta-queue"
+INSTA_MAX_BYTES = 8 * 1024 * 1024
+
+
+def instagram_enabled() -> bool:
+    """Operator opt-in for scheduling posts that the MHPhotos app publishes to Instagram."""
+    return os.environ.get(INSTAGRAM_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+def instagram_disabled_message() -> str:
+    return f"Scheduling Instagram posts is disabled. The operator must set {INSTAGRAM_ENV}=1."
+
+
+def instagram_queue(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", INSTA_ENDPOINT)
+
+
+def instagram_cancel(cfg: InboxConfig, item_id: str) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "DELETE", f"{INSTA_ENDPOINT}/{_quote(item_id)}")
+
+
+def instagram_schedule(
+    cfg: InboxConfig, filename: str, data: bytes, fields: dict[str, str], timeout: float = 120.0
+) -> tuple[int, dict[str, Any]]:
+    """Multipart upload into the Instagram queue (status 'geplant' until the app publishes it)."""
+    if len(data) > INSTA_MAX_BYTES:
+        return 413, {"error": "image larger than 8 MB"}
+    body, ctype = _multipart(fields, filename, data)
+    req = urllib.request.Request(
+        cfg.base_url.rstrip("/") + INSTA_ENDPOINT,
+        data=body, method="POST",
+        headers={"Content-Type": ctype, "X-Admin-Token": cfg.token, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read() or b"{}")
+        except ValueError:
+            payload = {}
+        return exc.code, payload if isinstance(payload, dict) else {}
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0, {"error": "MHPhotos app not reachable"}

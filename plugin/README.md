@@ -16,6 +16,11 @@ docs and unit-tested with a simulated API only. It has not yet run inside Lightr
 3. *Library → Plug-in Extras → MHPhotos MCP: Status* should say `connected` within ~10 s.
 
 ## First test (use a disposable catalog with ~10 photos, never your production catalog)
+
+**Step 0: self test.** Library > Plug-in Extras > *MHPhotos MCP: Selbsttest (nur lesen)* (or ask Claude for `lightroom_selftest`).
+It runs every read command on a few photos and shows each failure with Lightroom's own error text, plus
+`~/.mhphotos-lightroom-mcp/selftest.json`. Fix those first; the list below goes deeper.
+
 Run in this order and tick off each step:
 - [ ] `connection_status` → `connected: true, mode: bridge`
 - [ ] `list_collections` matches Lightroom (names, counts; sets appear as `Set/Name`)
@@ -32,6 +37,13 @@ Run in this order and tick off each step:
 - [ ] Restart server with `MHPHOTOS_ALLOW_WRITES=1`: `set_rating` without confirm → dry run only
 - [ ] `set_rating`, `set_flag`, `add_keywords` with `confirm=true` → visible in Lightroom
 - [ ] Rating 0 clears the rating
+- [ ] `undo_last_change` after a rating/flag/keyword change restores the old values
+- [ ] `create_collection` + `add_to_collection`: album appears, photos inside
+- [ ] `set_color_label` (green) shows in Lightroom; `none` clears it
+- [ ] `set_title_caption`: visible in the Metadata panel; existing text is not overwritten without `overwrite=true`
+- [ ] `create_virtual_copies`: copy appears next to the original, original unchanged
+- [ ] `get_contact_sheet` with 6 photos: one numbered image
+- [ ] `list_collections(include_counts=true)` counts match; without it the call is fast
 - [ ] `apply_preset` (dry run, then confirm) on a test photo: preset visible in Develop, one history step "MHPhotos…", undoable
 - [ ] `apply_develop_settings` e.g. `{"Exposure2012": 0.5}`: slider moves
 - [ ] `create_preset`: preset appears under the plugin's folder in the Develop module's preset list
@@ -47,6 +59,8 @@ These API usages are the ones not verifiable without Lightroom:
 - `catalog:createKeyword(name, {}, true, nil, true)`
 - `photo:requestJpegThumbnail`, `LrStringUtils.encodeBase64`, `photo:getDevelopSettings`
 - `LrApplication.developPresetFolders`, `photo:applyDevelopPreset(preset, _PLUGIN)`, `photo:applyDevelopSettings`, `LrApplication.addDevelopPresetForPlugin`
+- `catalog:createCollection(name, nil, true)`, `collection:addPhotos`, `setRawMetadata('colorNameForLabel' / 'title' / 'caption')`, `photo:removeKeyword`
+- `catalog:setSelectedPhotos` + `catalog:createVirtualCopies` (one copy per call)
 - `LrExportSession` settings keys, and `LrFileUtils.readFile`
 - `capture_time`: Lightroom's raw time is relative to 2001-01-01 and has no time zone;
   the plugin presents it as if it were UTC.

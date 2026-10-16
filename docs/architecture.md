@@ -107,6 +107,32 @@ stored by the MHPhotos app, so they are untrusted: only `https` to `*.cdninstagr
 type must be `image/*` and the size is capped at 6 MB. The service-side links expire, which the
 tool reports.
 
+## Approval, audit and undo
+`confirm=true` is set by the model, so it only shows the model meant it. When the MCP client supports
+**elicitation**, `gate.approve` additionally asks the user (yes/no, with a short German summary of what will happen
+and to which photos) before anything is applied. `MHPHOTOS_CONFIRMATION`: `ask` (default; falls back to
+`confirm=true` if the client cannot ask), `require` (fail closed), `flag` (never ask). Dry runs never ask.
+
+Every confirmed change is appended to `audit.log` in the config folder (JSON lines, mode 0600, rotated at 5 MB):
+tool, photo ids, the change, the values before, how it was approved. `undo_last_change` restores the most recent
+undoable entry (rating, flag, color label, title/caption, keywords added by us), skips photos changed since, and
+is itself approved and logged. Presets and develop settings are not undone here; Lightroom's History panel does that.
+Secrets are never logged.
+
+## Secrets
+The MHPhotos admin token comes from `MHPHOTOS_ADMIN_TOKEN`, a file (`MHPHOTOS_ADMIN_TOKEN_FILE`, absolute path) or the
+macOS Keychain entry `mhphotos-admin-token`, in that order. It is sent only to `MHPHOTOS_INBOX_URL` (https; http only
+for localhost), never returned in results, never logged, and `doctor` prints only where it was found.
+
+## Toolsets
+`MHPHOTOS_TOOLSETS` removes tools before the server starts (`read` is always on). Fewer tools cost fewer tokens
+and shrink what a confused or manipulated client could attempt.
+
+## Performance notes
+Counting photos per collection walks every photo, so `list_collections` counts only with `include_counts=true`.
+Filtered searches scan the catalog once and cache the id list for 60 seconds so paging is cheap; any write command
+clears the cache.
+
 ## Adapter layer
 The server talks only to the `CatalogAdapter` protocol (`adapters.py`). `MockAdapter`
 gives deterministic data for development and CI; `BridgeAdapter` forwards to the plugin.

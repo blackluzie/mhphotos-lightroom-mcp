@@ -1,69 +1,67 @@
 # MHPhotos Lightroom MCP
 
-Open-source Model Context Protocol integration for Adobe Lightroom Classic and extensible photography workflows.
+Open-source Model Context Protocol server for Adobe Lightroom Classic. Ask Claude (or another MCP
+client) to find, look at, rate, edit and publish your photos, with a safety gate in front of everything
+that changes something.
 
-> **Early prototype:** The server runs against a built-in **mock catalog** only. No Lightroom connection is implemented yet. Do not use it with a production catalog.
+> **Status:** reads, edits and the MHPhotos workflow are implemented and tested against a simulated
+> Lightroom. The Lightroom plugin has **not yet run inside real Lightroom**. Use a disposable catalog
+> first and start with the plugin self test ([plugin/README.md](plugin/README.md)). Not affiliated with Adobe.
 
-## Quick start (prototype only)
-
+## Setup on a Mac in 5 steps (details: [docs/setup-mac.md](docs/setup-mac.md))
 ```bash
-git clone https://github.com/blackluzie/mhphotos-lightroom-mcp.git
-cd mhphotos-lightroom-mcp
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-pytest
-mhphotos-lightroom-mcp
+uvx --from git+https://github.com/blackluzie/mhphotos-lightroom-mcp mhphotos-lightroom-mcp install-plugin
+# Lightroom Classic > File > Plug-in Manager > Add > ~/Documents/MHPhotos-Lightroom-Plugin/mhphotos.lrdevplugin
+claude mcp add mhphotos-lightroom --env MHPHOTOS_ADAPTER=bridge -- \
+  uvx --from git+https://github.com/blackluzie/mhphotos-lightroom-mcp mhphotos-lightroom-mcp
+# then, in Claude:  "run lightroom_selftest"        (or in a terminal:  mhphotos-lightroom-mcp doctor)
 ```
+From a clone instead: `pip install -e '.[dev]'` (then `mhphotos-lightroom-mcp ...`); the committed `.mcp.json` starts the server
+in bridge mode with reads only.
 
-Tools (default backend is a **mock catalog**; nothing touches real photos until you opt in to the bridge):
+## Tools
+Everything is read-only unless noted. Changes are a **dry run** unless `confirm=true`, need an operator
+opt-in (environment variable) and, when your client supports it, **you are asked directly** (yes/no).
 
-| Tool | Purpose | Needs opt-in |
-|------|---------|:-:|
-| `connection_status` | Adapter mode, connection, enabled permissions | |
-| `list_collections` | Collections (albums) with id, name, photo count; `name_contains` to find e.g. "09 2026" | |
-| `list_photos` | Search photos (also by `location` text or GPS circle `near_lat`/`near_lon`/`radius_km`): `min_rating`, `year` or `captured_from`/`captured_to`, `keyword`, `flag`, optional collection; paginated, `limit` capped at 100 | |
-| `get_photo_metadata` | Rating, flag, keywords, capture time, camera | |
-| `set_rating` / `set_flag` / `add_keywords` | Edit metadata (dry run unless `confirm=true`) | `MHPHOTOS_ALLOW_WRITES=1` |
-| `export_photos` | JPEG export to an operator-set folder (dry run unless `confirm=true`) | `MHPHOTOS_EXPORT_DIR=/abs/path` |
-| `get_photo_previews` | Look at up to 12 photos at a time (images), with place and exposure | |
-| `get_develop_settings` / `list_presets` | Current develop settings of a photo; your Lightroom presets | |
-| `apply_preset` / `apply_develop_settings` / `create_preset` | Apply a preset or settings to photos, or create a new preset (dry run unless `confirm=true`; Lightroom keeps a history step) | `MHPHOTOS_ALLOW_WRITES=1` |
-| `mhphotos_galleries` / `mhphotos_inbox` / `mhphotos_instagram_posts` | Read MHPhotos categories, Foto-Inbox with AI suggestions, your Instagram posts | `MHPHOTOS_INBOX_URL`, `MHPHOTOS_ADMIN_TOKEN` |
-| `mhphotos_instagram_images` | Show Instagram posts as images to match them against Lightroom previews | same |
-| `mhphotos_analyze_inbox` | Ask MHPhotos for AI title/description/category suggestions (changes nothing public) | same |
-| `mhphotos_publish` | Publish inbox items on the **public** MHPhotos site (dry run unless `confirm=true`) | same + `MHPHOTOS_ALLOW_PUBLISH=1` |
-| `send_to_mhphotos_inbox` | Export and send to the MHPhotos Foto-Inbox for review, nothing goes public (dry run unless `confirm=true`) | `MHPHOTOS_INBOX_URL`, `MHPHOTOS_ADMIN_TOKEN`, `MHPHOTOS_EXPORT_DIR` |
+| Group | Tools |
+|-------|-------|
+| Look & search | `connection_status`, `lightroom_selftest`, `list_collections` (`name_contains`), `list_photos` (`min_rating`, `year`/dates, `keyword`, `flag`, `location`, GPS circle), `get_photo_metadata`, `get_photo_previews` (images), `get_contact_sheet` (one numbered overview image), `get_develop_settings`, `list_presets`, `backlog_report`, `list_changes` |
+| Organise (`MHPHOTOS_ALLOW_WRITES=1`) | `set_rating`, `set_flag`, `set_color_label`, `set_title_caption`, `add_keywords`, `create_collection`, `add_to_collection`, `undo_last_change` |
+| Edit looks (`MHPHOTOS_ALLOW_WRITES=1`) | `apply_preset`, `apply_develop_settings`, `sync_develop_settings`, `create_preset`, `create_virtual_copies` |
+| Export | `export_photos` (`MHPHOTOS_EXPORT_DIR`) |
+| MHPhotos site | `mhphotos_galleries`, `mhphotos_inbox`, `mhphotos_analyze_inbox`, `mhphotos_instagram_posts`, `mhphotos_instagram_images`, `send_to_mhphotos_inbox`, `mhphotos_publish` (public site, `MHPHOTOS_ALLOW_PUBLISH=1`), `mhphotos_schedule_instagram` / `mhphotos_instagram_queue` / `mhphotos_cancel_instagram` (`MHPHOTOS_ALLOW_INSTAGRAM=1`) |
 
-Example workflows (5-star photos of 2026 to mhphotos.de, Instagram posts): see [docs/workflows.md](docs/workflows.md).
+Example requests and the exact tool sequence behind them: [docs/workflows.md](docs/workflows.md).
 
-## Use with real Lightroom Classic
-1. Install the plugin in `plugin/mhphotos.lrdevplugin` (see [plugin/README.md](plugin/README.md)).
-2. Run the server with `MHPHOTOS_ADAPTER=bridge`. In Claude Code the committed `.mcp.json` does this for you: run `pip install -e .` once in this repo, start Claude Code here and approve the project server. It enables reads only; edits, export and inbox stay off until you add the environment variables from the tool table.
-3. Try it on a **disposable catalog first** and follow the checklist in `plugin/README.md`.
+## Configuration (environment of the MCP server)
+| Variable | Meaning |
+|----------|---------|
+| `MHPHOTOS_ADAPTER` | `mock` (default, sample data) or `bridge` (real Lightroom) |
+| `MHPHOTOS_ALLOW_WRITES` | `1` enables changes to the catalog (see groups above) |
+| `MHPHOTOS_EXPORT_DIR` | absolute folder; enables export, inbox upload and Instagram queue |
+| `MHPHOTOS_INBOX_URL` | https URL of the MHPhotos app (enables the MHPhotos tools) |
+| `MHPHOTOS_ADMIN_TOKEN` / `MHPHOTOS_ADMIN_TOKEN_FILE` / macOS Keychain `mhphotos-admin-token` | admin token of the MHPhotos app, looked up in this order. Prefer the Keychain: `security add-generic-password -s mhphotos-admin-token -a "$USER" -w` |
+| `MHPHOTOS_ALLOW_PUBLISH` | `1` allows `mhphotos_publish` (goes live on the public site) |
+| `MHPHOTOS_ALLOW_INSTAGRAM` | `1` allows scheduling/cancelling Instagram posts |
+| `MHPHOTOS_CONFIRMATION` | `ask` (default), `require` (refuse if the client cannot ask you), `flag` (never ask) |
+| `MHPHOTOS_TOOLSETS` | e.g. `read,develop`; limits the offered tools (`all`, `read`, `edit`, `develop`, `mhphotos`) |
+| `MHPHOTOS_BRIDGE_PORT`, `MHPHOTOS_BRIDGE_TOKEN`, `MHPHOTOS_CONFIG_DIR` | bridge port (47831), fixed token, config/audit folder (`~/.mhphotos-lightroom-mcp`) |
 
-## Architecture
+## Safety in short
+- Loopback-only bridge with token; the plugin connects to the server, never the reverse.
+- Reads need no opt-in. Changes: operator opt-in **and** `confirm=true` **and** (if supported) your yes/no.
+- Every confirmed change is written to a local audit log (`list_changes`); rating, flag, color label,
+  title/caption and keyword changes can be undone with `undo_last_change`.
+- No deletes, no direct catalog database access, no secrets in the log or in tool results.
+- Details: [docs/architecture.md](docs/architecture.md), [SECURITY.md](SECURITY.md).
 
-- `server/`: Python MCP server, adapters, bridge, permission gate
-- `plugin/`: Lightroom Classic SDK (Lua) plugin + Lua tests
-- `tests/`: automated tests (Python, plus a runner for the Lua tests)
-- `docs/architecture.md`: protocol, security, permission model
-- `docs/cloud-assessment.md`: Lightroom cloud API assessment
+## Repository
+- `server/` Python MCP server, adapters, bridge, gate, audit, CLI (`doctor`, `install-plugin`)
+- `plugin/` Lightroom Classic plugin (Lua) and its Lua tests
+- `tests/` Python tests (tools, gate, bridge with a fake plugin, MHPhotos fake app, stdio end-to-end)
+- `docs/` architecture, workflows, Mac setup, cloud API assessment
 
-## Roadmap / status
-
-1. ~~Local authenticated bridge and mock adapter~~ done
-2. ~~Read-only commands for photos, collections and metadata~~ done (plugin untested inside Lightroom)
-3. ~~Permission-gated edits and export~~ done (plugin untested inside Lightroom)
-4. ~~Assess Lightroom cloud API~~ done: see `docs/cloud-assessment.md`, not built
-5. ~~MHPhotos publishing~~ done: `send_to_mhphotos_inbox` feeds the MHPhotos Foto-Inbox (`apps-platform/apps/mhphotos`, `/api/admin/lightroom-import`); approval stays in the MHPhotos app
-
-Lightroom Classic catalogs should be stored locally, even if originals live on mounted NAS volumes. The server never writes to the catalog SQLite database.
+Lightroom Classic catalogs should be stored locally, even if originals live on mounted NAS volumes.
 
 ## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Contributions welcome.
-
-## License
-
-MIT. Independent community project; not affiliated with or endorsed by Adobe.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). MIT licensed.

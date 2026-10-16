@@ -6,7 +6,6 @@ only reachable through the permission gate in ``permissions.py``.
 
 from __future__ import annotations
 
-import base64
 import dataclasses
 import math
 from dataclasses import dataclass, field
@@ -14,10 +13,14 @@ from pathlib import Path
 from typing import Any, Protocol
 
 # Optional metadata the plugin may report (exposure, lens, place, GPS).
-EXTRA_KEYS = ("iso", "aperture", "shutter_speed", "focal_length_mm", "lens", "location", "gps")
+EXTRA_KEYS = (
+    "iso", "aperture", "shutter_speed", "focal_length_mm", "lens", "location", "gps",
+    "title", "caption", "color_label", "virtual_copy_of",
+)
 MAX_PAGE_SIZE = 100
 MAX_BATCH = 100
 FLAGS = ("none", "picked", "rejected")
+COLOR_LABELS = ("none", "red", "yellow", "green", "blue", "purple")
 
 
 def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -83,9 +86,13 @@ class Collection:
     photo_ids: tuple[str, ...] = ()
     photo_count: int | None = None
 
-    def summary(self) -> dict[str, Any]:
-        count = self.photo_count if self.photo_count is not None else len(self.photo_ids)
-        return {"id": self.id, "name": self.name, "photo_count": count}
+    def summary(self, include_counts: bool = False) -> dict[str, Any]:
+        out: dict[str, Any] = {"id": self.id, "name": self.name}
+        if include_counts:
+            out["photo_count"] = (
+                self.photo_count if self.photo_count is not None else len(self.photo_ids)
+            )
+        return out
 
 
 @dataclass(frozen=True)
@@ -135,7 +142,10 @@ class CatalogAdapter(Protocol):
     def is_connected(self) -> bool: ...
 
     # --- reads ---
-    def list_collections(self) -> list[Collection]: ...
+    def list_collections(self, include_counts: bool = False) -> list[Collection]: ...
+
+    def selftest(self) -> dict[str, Any]:
+        """Read-only self check of every read command. {"checks": [{name, ok, detail}]}"""
 
     def list_photos(
         self,
@@ -168,6 +178,24 @@ class CatalogAdapter(Protocol):
 
     def apply_preset(self, photo_ids: list[str], preset: str) -> dict[str, Any]: ...
 
+    def create_collection(self, name: str) -> dict[str, Any]:
+        """Create (or return the existing) collection of that name: {"id", "name"}."""
+
+    def add_to_collection(self, collection_id: str, photo_ids: list[str]) -> dict[str, Any]: ...
+
+    def set_color_label(self, photo_ids: list[str], label: str) -> dict[str, Any]: ...
+
+    def set_title_caption(
+        self, photo_ids: list[str], title: str | None, caption: str | None
+    ) -> dict[str, Any]:
+        """None leaves a field untouched; an empty string clears it."""
+
+    def remove_keywords(self, photo_ids: list[str], keywords: list[str]) -> dict[str, Any]:
+        """Only used by undo, to remove keywords this server added."""
+
+    def create_virtual_copies(self, photo_ids: list[str]) -> dict[str, Any]:
+        """{"copies": [{"source_id", "id"}]}"""
+
     def apply_develop_settings(
         self, photo_ids: list[str], settings: dict[str, Any]
     ) -> dict[str, Any]: ...
@@ -175,15 +203,21 @@ class CatalogAdapter(Protocol):
     def create_preset(self, name: str, settings: dict[str, Any]) -> dict[str, Any]: ...
 
 
-# 1x1 placeholder JPEG for the mock (not a real preview).
-_MOCK_JPEG = base64.b64decode(
-    "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////"
-    "wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
-)
+def _mock_preview(photo_id: str, size: int) -> bytes:
+    """A real JPEG (flat colour derived from the id) so image handling can be tested."""
+    import io
+
+    from PIL import Image as PILImage
+
+    h = sum((i + 1) * ord(c) for i, c in enumerate(photo_id))
+    colour = (40 + h * 53 % 180, 40 + h * 97 % 180, 40 + h * 193 % 180)
+    out = io.BytesIO()
+    PILImage.new("RGB", (size * 3 // 2, size), colour).save(out, "JPEG", quality=80)
+    return out.getvalue()
 
 
 class MockAdapter:
-    """In-memory catalog with sample data. Export writes tiny placeholder files only."""
+    """In-memory catalog with sample data. Export writes small flat-colour JPEGs only."""
 
     name = "mock"
 
@@ -238,8 +272,14 @@ class MockAdapter:
     def is_connected(self) -> bool:
         return True
 
-    def list_collections(self) -> list[Collection]:
+    def list_collections(self, include_counts: bool = False) -> list[Collection]:
         return list(self._collections)
+
+    def selftest(self) -> dict[str, Any]:
+        return {
+            "environment": "mock",
+            "checks": [{"name": "mock adapter", "ok": True, "detail": "no Lightroom involved"}],
+        }
 
     def list_photos(self, collection_id, limit, offset, filters=None):
         if collection_id is None:
@@ -262,7 +302,7 @@ class MockAdapter:
 
     def get_preview(self, photo_id: str, size: int) -> bytes:
         self.get_photo(photo_id)
-        return _MOCK_JPEG
+        return _mock_preview(photo_id, size)
 
     def get_develop_settings(self, photo_id: str) -> dict[str, Any]:
         self.get_photo(photo_id)
@@ -294,6 +334,54 @@ class MockAdapter:
         self._presets.append({"folder": "MHPhotos MCP Bridge", "name": name})
         return {"created": name, "folder": "MHPhotos MCP Bridge", "parameters": len(settings)}
 
+    def create_collection(self, name):
+        for c in self._collections:
+            if c.name == name:
+                return {"id": c.id, "name": c.name, "existed": True}
+        cid = f"c{len(self._collections) + 1}"
+        self._collections.append(Collection(cid, name, ()))
+        return {"id": cid, "name": name, "existed": False}
+
+    def add_to_collection(self, collection_id, photo_ids):
+        photos = self._all(photo_ids)
+        for i, c in enumerate(self._collections):
+            if c.id == collection_id:
+                merged = tuple(dict.fromkeys((*c.photo_ids, *(p.id for p in photos))))
+                self._collections[i] = dataclasses.replace(c, photo_ids=merged)
+                return {"updated": len(photos)}
+        raise NotFoundError(f"Collection not found: {collection_id}")
+
+    def _set_extra(self, photo_ids, **values):
+        for p in self._all(photo_ids):
+            self._photos[p.id] = dataclasses.replace(p, extra={**p.extra, **values})
+        return {"updated": len(photo_ids)}
+
+    def set_color_label(self, photo_ids, label):
+        return self._set_extra(photo_ids, color_label=label)
+
+    def set_title_caption(self, photo_ids, title, caption):
+        values = {k: v for k, v in (("title", title), ("caption", caption)) if v is not None}
+        return self._set_extra(photo_ids, **values)
+
+    def remove_keywords(self, photo_ids, keywords):
+        drop = {k.lower() for k in keywords}
+        for p in self._all(photo_ids):
+            kept = tuple(k for k in p.keywords if k.lower() not in drop)
+            self._photos[p.id] = dataclasses.replace(p, keywords=kept)
+        return {"updated": len(photo_ids)}
+
+    def create_virtual_copies(self, photo_ids):
+        copies = []
+        for p in self._all(photo_ids):
+            n = sum(1 for k in self._photos if k.startswith(f"{p.id}-vc")) + 1
+            cid = f"{p.id}-vc{n}"
+            self._photos[cid] = dataclasses.replace(
+                p, id=cid, extra={**p.extra, "virtual_copy_of": p.id}
+            )
+            self._develop[cid] = dict(self._develop[p.id])
+            copies.append({"source_id": p.id, "id": cid})
+        return {"copies": copies}
+
     def _all(self, photo_ids: list[str]) -> list[Photo]:
         return [self.get_photo(i) for i in photo_ids]  # raises before any change
 
@@ -319,6 +407,6 @@ class MockAdapter:
         names = [p.filename.rsplit(".", 1)[0] + ".jpg" for p in photos]
         dest = Path(dest_dir)
         dest.mkdir(parents=True, exist_ok=True)
-        for name in names:  # tiny placeholder file so the whole pipeline is testable
-            (dest / name).write_bytes(b"\xff\xd8\xff\xd9")
+        for photo, name in zip(photos, names, strict=True):  # a real (flat colour) JPEG
+            (dest / name).write_bytes(_mock_preview(photo.id, 640))
         return {"exported": names, "destination": dest_dir, "mock": True}

@@ -2,6 +2,7 @@
 
 import json
 import threading
+from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 TOKEN = "secret"
@@ -10,6 +11,11 @@ TOKEN = "secret"
 class FakeMHPhotos:
     def __init__(self):
         self.calls: list[tuple[str, str, dict]] = []
+        self.insta_queue: list[dict] = [
+            {"id": "iq-old", "type": "post", "status": "veroeffentlicht", "caption": "alt",
+             "scheduledAt": "2026-01-01T10:00:00.000Z", "attempts": 1},
+        ]
+        self.insta_uploads: list[dict] = []
         self.galleries = [
             {"id": "heimat/muensterland", "title": "Münsterland", "area": "heimat"},
             {"id": "unterwegs/staedte", "title": "Städte", "area": "unterwegs"},
@@ -52,11 +58,38 @@ class FakeMHPhotos:
 
             def _handle(self, method):
                 n = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                raw = self.rfile.read(n) if n else b""
+                ctype = self.headers.get("Content-Type", "")
+                if ctype.startswith("multipart/"):
+                    msg = BytesParser().parsebytes(b"Content-Type: " + ctype.encode() + b"\r\n\r\n" + raw)
+                    body = {}
+                    for part in msg.get_payload():
+                        body[part.get_param("name", header="content-disposition")] = part.get_payload(decode=True)
+                else:
+                    body = json.loads(raw or b"{}") if raw else {}
                 outer.calls.append((method, self.path, body))
                 if self.headers.get("X-Admin-Token") != TOKEN:
                     return self._reply(401, {"error": "unauthorized"})
                 path = self.path
+                if path == "/api/admin/insta-queue":
+                    if method == "GET":
+                        return self._reply(200, {"items": outer.insta_queue})
+                    if method == "POST":
+                        outer.insta_uploads.append(body)
+                        item = {
+                            "id": f"iq-{len(outer.insta_uploads)}", "type": body["type"].decode(),
+                            "caption": body["caption"].decode(), "scheduledAt": body["scheduledAt"].decode(),
+                            "status": "geplant", "attempts": 0,
+                        }
+                        outer.insta_queue.append(item)
+                        return self._reply(200, {"ok": True, "item": item})
+                if method == "DELETE" and path.startswith("/api/admin/insta-queue/"):
+                    wanted = path.rsplit("/", 1)[1]
+                    before = len(outer.insta_queue)
+                    outer.insta_queue = [i for i in outer.insta_queue if i["id"] != wanted]
+                    if len(outer.insta_queue) == before:
+                        return self._reply(404, {"error": "Eintrag nicht gefunden"})
+                    return self._reply(200, {"ok": True})
                 if method == "GET" and path == "/api/admin/galleries":
                     return self._reply(200, {"galleries": outer.galleries})
                 if method == "GET" and path == "/api/admin/lightroom-import":
@@ -79,6 +112,9 @@ class FakeMHPhotos:
 
             def do_PATCH(self):
                 self._handle("PATCH")
+
+            def do_DELETE(self):
+                self._handle("DELETE")
 
         self.httpd = HTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()

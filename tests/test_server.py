@@ -16,7 +16,9 @@ async def test_connection_status_reports_mock():
 async def test_list_collections():
     colls = (await server.list_collections())["collections"]
     assert {c["name"] for c in colls} == {"Portraits", "Landschaft", "Leer"}
-    assert next(c for c in colls if c["id"] == "c1")["photo_count"] == 3
+    assert all("photo_count" not in c for c in colls)  # counts are opt-in (slow on big catalogs)
+    counted = (await server.list_collections(include_counts=True))["collections"]
+    assert next(c for c in counted if c["id"] == "c1")["photo_count"] == 3
 
 
 async def test_list_photos_whole_catalog_and_paging():

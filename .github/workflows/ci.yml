@@ -33,3 +33,12 @@ jobs:
         run: python -m pytest -q
       - name: Lint
         run: python -m ruff check server tests
+      - name: Package smoke test (wheel installs, ships the plugin, CLI works)
+        run: |
+          python -m pip install build
+          python -m build --wheel --outdir "$RUNNER_TEMP/dist"
+          python -m venv "$RUNNER_TEMP/clean"
+          "$RUNNER_TEMP/clean/bin/pip" install "$RUNNER_TEMP"/dist/*.whl
+          "$RUNNER_TEMP/clean/bin/mhphotos-lightroom-mcp" install-plugin "$RUNNER_TEMP/plugin-out"
+          test -f "$RUNNER_TEMP/plugin-out/mhphotos.lrdevplugin/Info.lua"
+          MHPHOTOS_CONFIG_DIR="$RUNNER_TEMP/cfg" "$RUNNER_TEMP/clean/bin/mhphotos-lightroom-mcp" doctor

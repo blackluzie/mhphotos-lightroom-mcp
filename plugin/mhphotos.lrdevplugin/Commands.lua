@@ -5,6 +5,7 @@
 local LrApplication = import 'LrApplication'
 local LrTasks = import 'LrTasks'
 local LrStringUtils = import 'LrStringUtils'
+local LrDate = import 'LrDate'
 
 local Commands = {}
 
@@ -72,6 +73,15 @@ local function photoMetadata(photo)
   s.shutter_speed = photo:getFormattedMetadata('shutterSpeed')
   s.focal_length_mm = photo:getRawMetadata('focalLength')
   s.lens = photo:getFormattedMetadata('lens')
+  local title, caption = photo:getFormattedMetadata('title'), photo:getFormattedMetadata('caption')
+  if type(title) == 'string' and title ~= '' then s.title = title end
+  if type(caption) == 'string' and caption ~= '' then s.caption = caption end
+  local label = photo:getRawMetadata('colorNameForLabel')
+  if type(label) == 'string' and label ~= '' then s.color_label = label end
+  if photo:getRawMetadata('isVirtualCopy') then
+    local master = photo:getRawMetadata('masterPhoto')
+    if master then s.virtual_copy_of = master:getRawMetadata('uuid') end
+  end
   local place = locationString(photo)
   if place ~= '' then s.location = place end
   local lat, lon = gpsOf(photo)
@@ -94,7 +104,14 @@ local function findAll(ids)
   return photos
 end
 
+-- Filtered id lists are cached briefly so paging through results does not rescan the catalog.
+-- Any write command clears the cache.
+local filterCache = {}
+local CACHE_TTL = 60
+local function invalidateCache() filterCache = {} end
+
 local function writeAccess(name, fn)
+  invalidateCache()
   local result = catalog():withWriteAccessDo(name, fn, { timeout = 15 })
   if result ~= 'executed' then
     error('write_blocked: Lightroom did not grant catalog write access (' .. tostring(result) .. ')', 0)
@@ -102,22 +119,21 @@ local function writeAccess(name, fn)
 end
 
 -- ---------------------------------------------------------------- reads
-local function walkCollections(parent, prefix, out)
+local function walkCollections(parent, prefix, out, withCounts)
   for _, c in ipairs(parent:getChildCollections() or {}) do
-    out[#out + 1] = {
-      id = tostring(c.localIdentifier),
-      name = prefix .. c:getName(),
-      photo_count = #(c:getPhotos() or {}),
-    }
+    local entry = { id = tostring(c.localIdentifier), name = prefix .. c:getName() }
+    -- counting walks every photo of the collection: only on request (slow for smart collections)
+    if withCounts then entry.photo_count = #(c:getPhotos() or {}) end
+    out[#out + 1] = entry
   end
   for _, set in ipairs(parent:getChildCollectionSets() or {}) do
-    walkCollections(set, prefix .. set:getName() .. '/', out)
+    walkCollections(set, prefix .. set:getName() .. '/', out, withCounts)
   end
 end
 
-function Commands.list_collections()
+function Commands.list_collections(args)
   local out = {}
-  walkCollections(catalog(), '', out)
+  walkCollections(catalog(), '', out, args and args.include_counts == true)
   return { collections = out }
 end
 
@@ -149,6 +165,15 @@ local function matchesFilters(photo, f)
   return true
 end
 
+local function cacheKey(args)
+  local parts = { tostring(args.collection_id) }
+  local names = {}
+  for k in pairs(args.filters) do names[#names + 1] = k end
+  table.sort(names)
+  for _, k in ipairs(names) do parts[#parts + 1] = k .. '=' .. tostring(args.filters[k]) end
+  return table.concat(parts, '|')
+end
+
 function Commands.list_photos(args)
   local limit = math.max(1, math.min(tonumber(args.limit) or 25, MAX_PAGE))
   local offset = math.max(0, tonumber(args.offset) or 0)
@@ -163,12 +188,19 @@ function Commands.list_photos(args)
     source = catalog():getAllPhotos()
   end
   if filters then
-    -- Filtering walks every photo once (fine for thousands, slow for 100k+).
-    local kept = {}
-    for _, p in ipairs(source) do
-      if matchesFilters(p, filters) then kept[#kept + 1] = p end
+    -- Filtering walks every photo once (fine for thousands, slow for 100k+); cached for paging.
+    local key = cacheKey({ collection_id = args.collection_id, filters = filters })
+    local hit = filterCache[key]
+    if hit and os.time() - hit.at <= CACHE_TTL then
+      source = hit.photos
+    else
+      local kept = {}
+      for _, p in ipairs(source) do
+        if matchesFilters(p, filters) then kept[#kept + 1] = p end
+      end
+      filterCache[key] = { at = os.time(), photos = kept }
+      source = kept
     end
-    source = kept
   end
   local photos = {}
   for i = offset + 1, math.min(offset + limit, #source) do
@@ -342,6 +374,157 @@ function Commands.create_preset(args)
   for _ in pairs(args.settings) do count = count + 1 end
   LrApplication.addDevelopPresetForPlugin(_PLUGIN, name, args.settings)
   return { created = name, folder = 'MHPhotos MCP Bridge', parameters = count }
+end
+
+-- ---------------------------------------------------------------- organising (writes)
+local LABELS = { none = true, red = true, yellow = true, green = true, blue = true, purple = true }
+
+function Commands.create_collection(args)
+  local name = args.name
+  if type(name) ~= 'string' or name == '' or #name > 120 then error('collection name required', 0) end
+  local coll
+  writeAccess('MHPhotos: create collection', function()
+    coll = catalog():createCollection(name, nil, true) -- true: return the existing one of that name
+  end)
+  if not coll then error('Lightroom did not create the collection', 0) end
+  return { id = tostring(coll.localIdentifier), name = name }
+end
+
+function Commands.add_to_collection(args)
+  local coll = catalog():getCollectionByLocalIdentifier(tonumber(args.collection_id))
+  if not coll then notFound('Collection not found: ' .. tostring(args.collection_id)) end
+  if coll.isSmartCollection and coll:isSmartCollection() then
+    error('smart collections cannot receive photos manually', 0)
+  end
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: add to collection', function() coll:addPhotos(photos) end)
+  return { updated = #photos }
+end
+
+function Commands.set_color_label(args)
+  if not LABELS[args.label] then error('label must be none, red, yellow, green, blue or purple', 0) end
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: color label', function()
+    for _, p in ipairs(photos) do p:setRawMetadata('colorNameForLabel', args.label) end
+  end)
+  return { updated = #photos }
+end
+
+function Commands.set_title_caption(args)
+  if args.title == nil and args.caption == nil then error('title or caption required', 0) end
+  for _, v in ipairs({ args.title or '', args.caption or '' }) do
+    if type(v) ~= 'string' or #v > 4000 then error('title/caption must be text (max 4000 bytes)', 0) end
+  end
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: title/caption', function()
+    for _, p in ipairs(photos) do
+      if args.title ~= nil then p:setRawMetadata('title', args.title) end
+      if args.caption ~= nil then p:setRawMetadata('caption', args.caption) end
+    end
+  end)
+  return { updated = #photos }
+end
+
+-- Only used by undo: removes keywords (by name) that this server had added.
+function Commands.remove_keywords(args)
+  local names = {}
+  for _, n in ipairs(args.keywords or {}) do names[#names + 1] = tostring(n):lower() end
+  if #names == 0 then error('keywords required', 0) end
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: remove keywords', function()
+    for _, p in ipairs(photos) do
+      for _, kw in ipairs(p:getRawMetadata('keywords') or {}) do
+        local kwName = kw:getName():lower()
+        for _, n in ipairs(names) do
+          if kwName == n then p:removeKeyword(kw); break end
+        end
+      end
+    end
+  end)
+  return { updated = #photos }
+end
+
+-- One copy per call so every copy is unambiguously tied to its source photo.
+function Commands.create_virtual_copies(args)
+  local photos = findAll(args.photo_ids)
+  if #photos > 10 then error('at most 10 virtual copies per call', 0) end
+  local copies = {}
+  for _, p in ipairs(photos) do
+    local made
+    writeAccess('MHPhotos: virtual copy', function()
+      catalog():setSelectedPhotos(p, {})
+      made = catalog():createVirtualCopies()
+    end)
+    if type(made) ~= 'table' or not made[1] then error('Lightroom created no virtual copy', 0) end
+    copies[#copies + 1] = { source_id = p:getRawMetadata('uuid'), id = made[1]:getRawMetadata('uuid') }
+  end
+  return { copies = copies }
+end
+
+-- ---------------------------------------------------------------- self test (read only)
+-- Exercises every read command on a few photos and reports each result, so API mismatches
+-- show up as exact messages instead of guesswork. Never changes anything.
+function Commands.selftest()
+  local checks = {}
+  local function check(name, fn)
+    local t0 = LrDate.currentTime()
+    local ok, res = pcall(fn)
+    local detail = res
+    if not ok then
+      detail = type(res) == 'table' and ((res.code or '') .. ' ' .. tostring(res.message)) or tostring(res)
+    end
+    checks[#checks + 1] = {
+      name = name, ok = ok, detail = tostring(detail or ''),
+      ms = math.floor((LrDate.currentTime() - t0) * 1000),
+    }
+    return ok, res
+  end
+
+  local env = 'unknown'
+  pcall(function() env = 'Lightroom ' .. tostring(LrApplication.versionString()) end)
+
+  local first = {}
+  check('catalog access', function() return #catalog():getAllPhotos() .. ' photos in catalog' end)
+  check('list_collections', function()
+    return #Commands.list_collections({}).collections .. ' collections'
+  end)
+  check('list_collections with counts', function()
+    return #Commands.list_collections({ include_counts = true }).collections .. ' collections counted'
+  end)
+  check('list_photos', function()
+    local r = Commands.list_photos({ limit = 3 })
+    first = r.photos
+    return r.total .. ' total, ' .. #r.photos .. ' listed'
+  end)
+  check('list_photos with filters', function()
+    local r = Commands.list_photos({ limit = 1, filters = { min_rating = 1, captured_from = '1990-01-01' } })
+    return r.total .. ' photos rated 1+ with capture date'
+  end)
+  if #first == 0 then
+    checks[#checks + 1] = { name = 'photo checks', ok = false, detail = 'catalog has no photos to test', ms = 0 }
+  else
+    for i = 1, #first do
+      check('get_photo #' .. i, function()
+        local m = Commands.get_photo({ photo_id = first[i].id })
+        return m.filename .. ' flag=' .. tostring(m.flag) .. ' keywords=' .. #m.keywords
+          .. ' camera=' .. tostring(m.camera) .. ' location=' .. tostring(m.location)
+          .. ' gps=' .. tostring(m.gps ~= nil) .. ' iso=' .. tostring(m.iso)
+      end)
+    end
+    check('get_preview (256 px)', function()
+      return #Commands.get_preview({ photo_id = first[1].id, size = 256 }).image_base64 .. ' base64 characters'
+    end)
+    check('get_develop_settings', function()
+      local n = 0
+      for _ in pairs(Commands.get_develop_settings({ photo_id = first[1].id }).settings) do n = n + 1 end
+      return n .. ' scalar settings'
+    end)
+  end
+  check('list_presets', function() return #Commands.list_presets().presets .. ' presets' end)
+
+  local failed = 0
+  for _, c in ipairs(checks) do if not c.ok then failed = failed + 1 end end
+  return { environment = env, checks = checks, passed = #checks - failed, failed = failed }
 end
 
 function Commands.run(name, args)

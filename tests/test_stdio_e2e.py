@@ -10,32 +10,11 @@ from types import SimpleNamespace
 import anyio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mhphotos_lightroom_mcp import server
 
 from .fake_plugin import FakePlugin
 
-ALL_TOOLS = {
-    "connection_status",
-    "list_collections",
-    "list_photos",
-    "get_photo_metadata",
-    "set_rating",
-    "set_flag",
-    "add_keywords",
-    "export_photos",
-    "send_to_mhphotos_inbox",
-    "mhphotos_galleries",
-    "mhphotos_inbox",
-    "mhphotos_analyze_inbox",
-    "mhphotos_publish",
-    "mhphotos_instagram_posts",
-    "get_photo_previews",
-    "mhphotos_instagram_images",
-    "get_develop_settings",
-    "list_presets",
-    "apply_preset",
-    "apply_develop_settings",
-    "create_preset",
-}
+ALL_TOOLS = {t.name for t in anyio.run(server.mcp.list_tools)}  # what this build registers
 
 
 def _params(**env):
