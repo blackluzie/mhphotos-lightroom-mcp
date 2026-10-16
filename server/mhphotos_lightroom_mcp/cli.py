@@ -234,6 +234,27 @@ def run(argv: list[str]) -> int:
         code, message = install_plugin(argv[1] if len(argv) > 1 else None)
         print(message)
         return code
-    print("Usage: mhphotos-lightroom-mcp [doctor | install-plugin [DEST_FOLDER] | call TOOL [JSON] [--out DIR]]\n"
+    if cmd == "watch":
+        from . import watcher
+
+        rest = argv[1:]
+        once, dry = "--once" in rest, "--dry-run" in rest
+        rest = [a for a in rest if a not in {"--once", "--dry-run"}]
+        folder = Path(rest[0]).expanduser() if rest else None
+        try:
+            return watcher.run(folder, once=once, dry_run=dry)
+        except KeyboardInterrupt:
+            return 0
+    if cmd == "install-service":
+        from . import watcher
+
+        if len(argv) < 2:
+            print("Usage: mhphotos-lightroom-mcp install-service https://<your MHPhotos domain> [WATCH_FOLDER]")
+            return 2
+        code, message = watcher.install_service(argv[1], Path(argv[2]) if len(argv) > 2 else None)
+        print(message)
+        return code
+    print("Usage: mhphotos-lightroom-mcp [doctor | install-plugin [DEST_FOLDER] | call TOOL [JSON] [--out DIR]\n"
+          "       | watch [FOLDER] [--once] [--dry-run] | install-service URL [FOLDER]]\n"
           "Without arguments the MCP server starts (stdio).")
     return 0 if cmd in {"-h", "--help", "help"} else 2
