@@ -33,9 +33,24 @@ local function post(cfg, path, payload, timeout)
   return LrHttp.post(cfg.url .. path, Json.encode(payload), headers(cfg.token), 'POST', timeout)
 end
 
+-- State lives in a module table, but menu scripts (Status) run in their own Lua environment and
+-- may not see it, so every status change is also written to a file next to bridge.json.
+local function mark(status)
+  State.status = status
+  pcall(function()
+    local home = LrPathUtils.getStandardFilePath('home')
+    local f = io.open(LrPathUtils.child(LrPathUtils.child(home, '.mhphotos-lightroom-mcp'), 'plugin-status.txt'), 'w')
+    if f then
+      f:write(os.date('%Y-%m-%d %H:%M:%S ') .. status .. ' | last command: ' .. tostring(State.lastCommand or '-') .. '\n')
+      f:close()
+    end
+  end)
+end
+
 local function execute(cfg, command)
   State.lastCommand = command.name
-  local ok, res = pcall(Commands.run, command.name, command.args)
+  mark('running ' .. command.name)
+  local ok, res = LrTasks.pcall(Commands.run, command.name, command.args)
   local payload
   if ok then
     payload = { id = command.id, ok = true, data = res }
@@ -49,28 +64,31 @@ local function execute(cfg, command)
     payload = { id = command.id, ok = false, error = msg }
   end
   post(cfg, '/v1/result', payload, 30)
+  mark('connected (finished ' .. command.name .. ')')
 end
 
 function Loop.run()
+  mark('loop started')
   while not State.stop do
     local cfg = readConfig()
     if not cfg then
-      State.status = 'no bridge.json (start the MCP server with MHPHOTOS_ADAPTER=bridge)'
+      mark('no bridge.json (start the MCP server with MHPHOTOS_ADAPTER=bridge)')
       LrTasks.sleep(3)
     else
-      local body, hdrs = post(cfg, '/v1/poll', {}, 20)
+      mark('polling')
+      local body, hdrs = post(cfg, '/v1/poll', { client = 'lightroom' }, 20)
       local status = hdrs and hdrs.status
       if status == 200 and body then
-        State.status = 'connected'
+        mark('connected')
         local ok, msg = pcall(Json.decode, body)
         if ok and type(msg) == 'table' and type(msg.command) == 'table' then
           execute(cfg, msg.command)
         end
       elseif status == 401 then
-        State.status = 'unauthorized (token changed?) - re-reading config'
+        mark('unauthorized (token changed?) - re-reading config')
         LrTasks.sleep(2)
       else
-        State.status = 'MCP server unreachable'
+        mark('MCP server unreachable (http status ' .. tostring(status) .. ')')
         LrTasks.sleep(3)
       end
     end

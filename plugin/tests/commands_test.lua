@@ -90,7 +90,7 @@ function import(name)
     return { switchToModule = function(m) viewCalls[#viewCalls + 1] = 'module:' .. m end,
              gridView = function() viewCalls[#viewCalls + 1] = 'grid' end }
   end
-  if name == 'LrTasks' then return { sleep = function() end } end
+  if name == 'LrTasks' then return { sleep = function() end, pcall = pcall } end
   if name == 'LrDate' then return { currentTime = function() return os.clock() end } end
   if name == 'LrStringUtils' then return { encodeBase64 = function(d) return 'B64(' .. d .. ')' end } end
   if name == 'LrApplication' then

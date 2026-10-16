@@ -8,7 +8,7 @@ local LrPathUtils = import 'LrPathUtils'
 LrTasks.startAsyncTask(function()
   local Commands = require 'Commands'
   local Json = require 'Json'
-  local ok, report = pcall(Commands.selftest)
+  local ok, report = LrTasks.pcall(Commands.selftest)
   if not ok then
     LrDialogs.message('MHPhotos MCP Selbsttest', 'Selbsttest abgebrochen: ' .. tostring(report), 'critical')
     return
