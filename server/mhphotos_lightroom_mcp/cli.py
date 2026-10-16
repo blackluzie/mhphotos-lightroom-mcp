@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import urllib.error
 import urllib.request
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Any
+
+import anyio
 
 from . import bridge, gate, permissions, publishing
 
@@ -137,6 +141,72 @@ def doctor() -> tuple[int, list[tuple[str, str, str]]]:
     return (1 if failed else 0), rows
 
 
+# ---- headless tool calls (cloud session, terminal) ---------------------------------------------
+class _NoLightroom:
+    """Adapter for `call`: there is no Lightroom here, so every Lightroom operation says so."""
+
+    name = "none"
+
+    def is_connected(self) -> bool:
+        return False
+
+    def __getattr__(self, _name: str):
+        def unavailable(*_a: Any, **_k: Any):
+            raise bridge.BridgeUnavailable(
+                "Lightroom is not available in `call` mode; use the MCP server with the plugin for Lightroom tools."
+            )
+
+        return unavailable
+
+
+def callable_tools() -> set[str]:
+    from . import server
+
+    return set(server.TOOLSETS["mhphotos"]) | {"list_changes"}
+
+
+def _plain(value: Any, out_dir: Path, counter: list[int]) -> Any:
+    """JSON-ready copy; image results are written to files and replaced by their path."""
+    from mcp.server.fastmcp import Image
+
+    if isinstance(value, Image):
+        counter[0] += 1
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"image-{counter[0]:02d}.jpg"
+        path.write_bytes(value.data or b"")
+        return {"image_file": str(path)}
+    if isinstance(value, list):
+        return [_plain(v, out_dir, counter) for v in value]
+    if isinstance(value, dict):
+        return {k: _plain(v, out_dir, counter) for k, v in value.items()}
+    return value
+
+
+def call_tool(name: str, args_json: str | None, out_dir: Path) -> tuple[int, str]:
+    """Run one MHPhotos tool without an MCP client. Prints JSON; images become files.
+
+    Only the MHPhotos tools (and list_changes) are available. Nobody can be asked yes/no here, so
+    `confirm=true` is the whole approval (the caller, e.g. a permission prompt, is the human) and
+    MHPHOTOS_CONFIRMATION=require makes every confirmed change refuse.
+    """
+    from . import server
+
+    if name not in callable_tools():
+        return 2, f"Unknown or unavailable tool '{name}'. Available: {', '.join(sorted(callable_tools()))}"
+    try:
+        args = json.loads(args_json) if args_json else {}
+    except ValueError:
+        return 2, "Arguments must be a JSON object, e.g. '{\"item_ids\": [\"lr-1\"]}'"
+    if not isinstance(args, dict):
+        return 2, "Arguments must be a JSON object"
+    server.set_adapter(_NoLightroom())
+    try:
+        result = anyio.run(lambda: getattr(server, name)(**args))
+    except TypeError as exc:
+        return 2, f"Bad arguments for {name}: {exc}"
+    return 0, json.dumps(_plain(result, out_dir, [0]), ensure_ascii=False, indent=2)
+
+
 def run(argv: list[str]) -> int:
     cmd = argv[0]
     if cmd == "doctor":
@@ -144,10 +214,26 @@ def run(argv: list[str]) -> int:
         for status, label, detail in rows:
             print(f"{status} {label}: {detail}")
         return code
+    if cmd == "call":
+        rest = argv[1:]
+        out_dir = Path("mhphotos-out")
+        if "--out" in rest:
+            i = rest.index("--out")
+            if i + 1 >= len(rest):
+                print("--out needs a folder")
+                return 2
+            out_dir = Path(rest[i + 1])
+            rest = rest[:i] + rest[i + 2 :]
+        if not rest:
+            print("Usage: mhphotos-lightroom-mcp call TOOL ['{\"json\": \"args\"}'] [--out DIR]")
+            return 2
+        code, text = call_tool(rest[0], rest[1] if len(rest) > 1 else None, out_dir)
+        print(text, file=sys.stderr if code else sys.stdout)
+        return code
     if cmd == "install-plugin":
         code, message = install_plugin(argv[1] if len(argv) > 1 else None)
         print(message)
         return code
-    print("Usage: mhphotos-lightroom-mcp [doctor | install-plugin [DEST_FOLDER]]\n"
+    print("Usage: mhphotos-lightroom-mcp [doctor | install-plugin [DEST_FOLDER] | call TOOL [JSON] [--out DIR]]\n"
           "Without arguments the MCP server starts (stdio).")
     return 0 if cmd in {"-h", "--help", "help"} else 2

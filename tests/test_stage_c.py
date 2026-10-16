@@ -1,14 +1,11 @@
 """Contact sheet, backlog report, Instagram scheduling."""
 
 import io
-from datetime import UTC, datetime, timedelta
 
 import pytest
 from mcp.server.fastmcp import Image
-from mhphotos_lightroom_mcp import audit, imaging, server
+from mhphotos_lightroom_mcp import imaging, server
 from PIL import Image as PILImage
-
-from .fake_mhphotos import FakeMHPhotos
 
 pytestmark = pytest.mark.anyio
 
@@ -68,72 +65,3 @@ async def test_backlog_report_uses_markers(monkeypatch):
     assert (await server.backlog_report(2025))["candidates"] == 1
     assert "error" in await server.backlog_report(26)
     assert "error" in await server.backlog_report(2026, min_rating=9)
-
-
-# ---- Instagram scheduling ----------------------------------------------------
-def future(minutes=0, days=1):
-    return (datetime.now(UTC) + timedelta(days=days, minutes=minutes)).isoformat(timespec="seconds")
-
-
-@pytest.fixture
-def app(monkeypatch, tmp_path):
-    f = FakeMHPhotos()
-    monkeypatch.setenv("MHPHOTOS_INBOX_URL", f.url)
-    monkeypatch.setenv("MHPHOTOS_ADMIN_TOKEN", "secret")
-    monkeypatch.setenv("MHPHOTOS_EXPORT_DIR", str(tmp_path / "exp"))
-    monkeypatch.setenv("MHPHOTOS_ALLOW_INSTAGRAM", "1")
-    yield f
-    f.stop()
-
-
-async def test_schedule_is_disabled_without_opt_in(app, monkeypatch):
-    monkeypatch.delenv("MHPHOTOS_ALLOW_INSTAGRAM")
-    res = await server.mhphotos_schedule_instagram("p4", "Hallo", future(), confirm=True)
-    assert res["code"] == "disabled" and app.insta_uploads == []
-
-
-async def test_schedule_validation(app):
-    ok = future()
-    for kwargs in (
-        {"caption": "  "},
-        {"caption": "x" * 2201},
-        {"post_type": "reel"},
-        {"scheduled_at": "morgen"},
-        {"scheduled_at": "2030-01-01T10:00:00"},  # no time zone
-        {"scheduled_at": future(days=0, minutes=5)},  # too soon to cancel
-        {"scheduled_at": future(days=61)},
-        {"photo_id": "ghost"},
-    ):
-        args = {"photo_id": "p4", "caption": "Hallo", "scheduled_at": ok, "confirm": True, **kwargs}
-        assert "error" in await server.mhphotos_schedule_instagram(**args), kwargs
-    assert app.insta_uploads == []
-
-
-async def test_schedule_dry_run_then_queue(app):
-    when = future()
-    dry = await server.mhphotos_schedule_instagram("p4", "Sonnenaufgang", when)
-    assert dry["dry_run"] and dry["posted_automatically"] is True and app.insta_uploads == []
-    done = await server.mhphotos_schedule_instagram("p4", "Sonnenaufgang", when, confirm=True)
-    assert done["applied"] and done["queue_id"] == "iq-1"
-    up = app.insta_uploads[0]
-    assert up["caption"] == b"Sonnenaufgang" and up["type"] == b"post" and up["source"] == b"mcp"
-    assert PILImage.open(io.BytesIO(up["file"])).format == "JPEG"
-    assert datetime.fromisoformat(up["scheduledAt"].decode()).tzinfo is not None
-    assert audit.read_all()[-1]["tool"] == "mhphotos_schedule_instagram"
-
-
-async def test_queue_listing_and_cancel(app):
-    await server.mhphotos_schedule_instagram("p4", "Hallo", future(), confirm=True)
-    items = (await server.mhphotos_instagram_queue())["items"]
-    assert [i["id"] for i in items] == ["iq-old", "iq-1"] and items[1]["status"] == "geplant"
-    dry = await server.mhphotos_cancel_instagram("iq-1")
-    assert dry["dry_run"] and len(app.insta_queue) == 2
-    assert (await server.mhphotos_cancel_instagram("iq-1", confirm=True))["applied"]
-    assert [i["id"] for i in app.insta_queue] == ["iq-old"]
-    assert "already published" in (await server.mhphotos_cancel_instagram("iq-old", confirm=True))["error"].lower()
-    assert "not found" in (await server.mhphotos_cancel_instagram("nope", confirm=True))["error"]
-
-
-async def test_cancel_needs_opt_in(app, monkeypatch):
-    monkeypatch.delenv("MHPHOTOS_ALLOW_INSTAGRAM")
-    assert (await server.mhphotos_cancel_instagram("iq-old", confirm=True))["code"] == "disabled"

@@ -29,7 +29,10 @@ opt-in (environment variable) and, when your client supports it, **you are asked
 | Organise (`MHPHOTOS_ALLOW_WRITES=1`) | `set_rating`, `set_flag`, `set_color_label`, `set_title_caption`, `add_keywords`, `create_collection`, `add_to_collection`, `undo_last_change` |
 | Edit looks (`MHPHOTOS_ALLOW_WRITES=1`) | `apply_preset`, `apply_develop_settings`, `sync_develop_settings`, `create_preset`, `create_virtual_copies` |
 | Export | `export_photos` (`MHPHOTOS_EXPORT_DIR`) |
-| MHPhotos site | `mhphotos_galleries`, `mhphotos_inbox`, `mhphotos_analyze_inbox`, `mhphotos_instagram_posts`, `mhphotos_instagram_images`, `send_to_mhphotos_inbox`, `mhphotos_publish` (public site, `MHPHOTOS_ALLOW_PUBLISH=1`), `mhphotos_schedule_instagram` / `mhphotos_instagram_queue` / `mhphotos_cancel_instagram` (`MHPHOTOS_ALLOW_INSTAGRAM=1`) |
+| MHPhotos site | `mhphotos_galleries`, `mhphotos_inbox`, `mhphotos_inbox_images`, `mhphotos_inbox_contact_sheet`, `mhphotos_edit_preview` (basic edit before/after), `mhphotos_analyze_inbox`, `mhphotos_instagram_posts`, `mhphotos_instagram_images`, `send_to_mhphotos_inbox`, `mhphotos_publish` (public site, `MHPHOTOS_ALLOW_PUBLISH=1`), `mhphotos_schedule_instagram` / `mhphotos_instagram_queue` / `mhphotos_cancel_instagram` (social queue, `MHPHOTOS_ALLOW_INSTAGRAM=1`) |
+
+The MHPhotos tools also run **without Lightroom and without an MCP client**: `mhphotos-lightroom-mcp call TOOL '{json}'`
+(images are saved as files). That is how they are used from a cloud session on a phone; see [docs/kreuzfahrt.md](docs/kreuzfahrt.md).
 
 Example requests and the exact tool sequence behind them: [docs/workflows.md](docs/workflows.md).
 
@@ -38,7 +41,7 @@ Example requests and the exact tool sequence behind them: [docs/workflows.md](do
 |----------|---------|
 | `MHPHOTOS_ADAPTER` | `mock` (default, sample data) or `bridge` (real Lightroom) |
 | `MHPHOTOS_ALLOW_WRITES` | `1` enables changes to the catalog (see groups above) |
-| `MHPHOTOS_EXPORT_DIR` | absolute folder; enables export, inbox upload and Instagram queue |
+| `MHPHOTOS_EXPORT_DIR` | absolute folder; enables export, inbox upload and scheduling a Lightroom photo for Instagram |
 | `MHPHOTOS_INBOX_URL` | https URL of the MHPhotos app (enables the MHPhotos tools) |
 | `MHPHOTOS_ADMIN_TOKEN` / `MHPHOTOS_ADMIN_TOKEN_FILE` / macOS Keychain `mhphotos-admin-token` | admin token of the MHPhotos app, looked up in this order. Prefer the Keychain: `security add-generic-password -s mhphotos-admin-token -a "$USER" -w` |
 | `MHPHOTOS_ALLOW_PUBLISH` | `1` allows `mhphotos_publish` (goes live on the public site) |
