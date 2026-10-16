@@ -4,6 +4,9 @@ return {
   LrToolkitIdentifier = 'de.mhphotos.lightroom-mcp',
   LrPluginName = 'MHPhotos MCP Bridge',
   LrInitPlugin = 'Init.lua',
+  -- Without this Lightroom initialises a menu-only plugin lazily (on first menu use), so the
+  -- polling loop in Init.lua would not start by itself after launching or reloading.
+  LrForceInitPlugin = true,
   LrShutdownPlugin = 'Shutdown.lua',
   LrLibraryMenuItems = {
     { title = 'MHPhotos MCP: Status', file = 'Status.lua' },
