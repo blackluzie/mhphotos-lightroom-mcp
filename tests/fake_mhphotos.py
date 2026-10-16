@@ -21,12 +21,12 @@ def _jpeg(colour):
 class FakeMHPhotos:
     def __init__(self):
         self.calls: list[tuple[str, str, dict]] = []
-        self.hub_queue: list[dict] = [
+        self.social_queue: list[dict] = [
             {"id": "q-old", "account_id": "mhphotos", "account_name": "MHPhotos", "type": "post",
              "status": "veroeffentlicht", "caption": "alt", "scheduled_at": "2026-01-01T10:00:00.000Z",
              "permalink": "https://instagram.com/p/old"},
         ]
-        self.hub_uploads: list[dict] = []
+        self.social_uploads: list[dict] = []
         self.duplicate: dict | None = None  # set to simulate "already planned"
         self.images = {k: _jpeg(c) for k, c in (("lr-1", (200, 80, 40)), ("lr-2", (40, 120, 200)),
                                                   ("lr-3", (60, 160, 60)), ("lr-4", (180, 180, 40)))}
@@ -88,15 +88,15 @@ class FakeMHPhotos:
                 path = self.path
                 if path == "/api/admin/social-hub-queue":
                     if method == "GET":
-                        return self._reply(200, outer.hub_queue)
+                        return self._reply(200, outer.social_queue)
                     if method == "POST":
-                        outer.hub_uploads.append(body)
+                        outer.social_uploads.append(body)
                         accounts = body["accountId"].decode().split(",")
                         ids = []
                         for acc in accounts:
-                            rid = f"q-{len(outer.hub_queue):04d}"
+                            rid = f"q-{len(outer.social_queue):04d}"
                             ids.append(rid)
-                            outer.hub_queue.append({
+                            outer.social_queue.append({
                                 "id": rid, "account_id": acc, "account_name": acc.title(),
                                 "type": body["type"].decode(), "caption": body["caption"].decode(),
                                 "scheduled_at": body["scheduledAt"].decode(), "status": "geplant",
@@ -108,9 +108,9 @@ class FakeMHPhotos:
                     return self._reply(200, {"duplicate": False, "hash": "0123456789abcdef"})
                 if method == "DELETE" and path.startswith("/api/admin/social-hub/queue/"):
                     wanted = path.rsplit("/", 1)[1]
-                    before = len(outer.hub_queue)
-                    outer.hub_queue = [r for r in outer.hub_queue if r["id"] != wanted]
-                    if len(outer.hub_queue) == before:
+                    before = len(outer.social_queue)
+                    outer.social_queue = [r for r in outer.social_queue if r["id"] != wanted]
+                    if len(outer.social_queue) == before:
                         return self._reply(404, {"error": "Eintrag nicht gefunden"})
                     return self._reply(200, {"ok": True})
                 if method == "GET" and path.startswith("/api/admin/lightroom-import/") and path.endswith("/image"):

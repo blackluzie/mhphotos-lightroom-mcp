@@ -1414,7 +1414,7 @@ async def mhphotos_edit_preview(
     return [{"id": inbox_item_id, "adjust": clean}, Image(data=both, format="jpeg")]
 
 
-# ---------------------------------------------------------------- Instagram via the SocialHub
+# ---------------------------------------------------------------- Instagram via the social queue
 MIN_LEAD = timedelta(minutes=15)
 MAX_LEAD = timedelta(days=60)
 
@@ -1447,12 +1447,12 @@ async def mhphotos_schedule_instagram(
     confirm: bool = False,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Queue a photo for Instagram in the MHPhotos SocialHub (it publishes automatically at that time).
+    """Queue a photo for Instagram in the MHPhotos social queue (it publishes automatically at that time).
 
     Source: either a Lightroom photo (photo_id, needs the Lightroom bridge and MHPHOTOS_EXPORT_DIR) or
     an MHPhotos inbox item (inbox_item_id, works without Lightroom). accounts: mhphotos (default),
     malou, martin, or a comma list. post_type: post|story. adjust: optional basic edits for the
-    Instagram copy only (see mhphotos_edit_preview). The SocialHub duplicate check runs first; a photo
+    Instagram copy only (see mhphotos_edit_preview). The MHPhotos duplicate check runs first; a photo
     that is already planned/posted is refused unless allow_duplicate=true. scheduled_at: ISO 8601 with
     offset, 15 minutes to 60 days ahead. Cancel in time with mhphotos_cancel_instagram. Dry run unless
     confirm=true; needs MHPHOTOS_ALLOW_INSTAGRAM=1 and the MHPhotos config.
@@ -1471,7 +1471,7 @@ async def mhphotos_schedule_instagram(
         return {"error": "post_type must be post or story"}
     names = publishing.parse_accounts(accounts)
     if names is None:
-        return {"error": f"accounts must be a comma list of: {', '.join(publishing.HUB_ACCOUNTS)}"}
+        return {"error": f"accounts must be a comma list of: {', '.join(publishing.SOCIAL_ACCOUNTS)}"}
     edits, err = imaging.validate_adjust(adjust)
     if err:
         return {"error": err}
@@ -1503,12 +1503,12 @@ async def mhphotos_schedule_instagram(
             return original
         look = original
 
-    # SocialHub duplicate check (best effort, like the app): same photo planned or posted already?
+    # MHPhotos duplicate check (best effort, like the app): same photo planned or posted already?
     dup: dict[str, Any] | None = None
     img_hash = ""
     try:
         thumb = await anyio.to_thread.run_sync(imaging.thumb_png_b64, look)
-        code, resp = await anyio.to_thread.run_sync(publishing.hub_duplicate, cfg, thumb, names[0])
+        code, resp = await anyio.to_thread.run_sync(publishing.social_duplicate, cfg, thumb, names[0])
         if code == 200:
             img_hash = str(resp.get("hash") or "")
             if resp.get("duplicate"):
@@ -1563,7 +1563,7 @@ async def mhphotos_schedule_instagram(
     if img_hash:
         fields["imgHash"] = img_hash
     code, resp = await anyio.to_thread.run_sync(
-        publishing.hub_schedule, cfg, f"{Path(label).stem}.jpg", final, fields
+        publishing.social_schedule, cfg, f"{Path(label).stem}.jpg", final, fields
     )
     if code != 200 or not resp.get("ok"):
         return _app_error(code, resp)
@@ -1577,14 +1577,14 @@ async def mhphotos_schedule_instagram(
 
 @mcp.tool()
 async def mhphotos_instagram_queue(status: str | None = None, limit: int = 30) -> dict[str, Any]:
-    """The SocialHub queue (newest first): scheduled, published and failed items.
+    """MHPhotos queue (newest first): scheduled, published and failed items.
 
     status filter: geplant | veroeffentlicht | fehler.
     """
     cfg = _app_cfg()
     if isinstance(cfg, dict):
         return cfg
-    code, data = await anyio.to_thread.run_sync(publishing.hub_queue, cfg)
+    code, data = await anyio.to_thread.run_sync(publishing.social_queue, cfg)
     if code != 200:
         return _app_error(code, data)
     rows = [r for r in data.get("items", []) if status is None or r.get("status") == status]
@@ -1606,7 +1606,7 @@ async def mhphotos_instagram_queue(status: str | None = None, limit: int = 30) -
 async def mhphotos_cancel_instagram(
     queue_id: str, confirm: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
-    """Remove a not-yet-published item from the SocialHub queue (it will not be posted)."""
+    """Remove a not-yet-published item from the social queue (it will not be posted)."""
     cfg = _app_cfg()
     if isinstance(cfg, dict):
         return cfg
@@ -1614,7 +1614,7 @@ async def mhphotos_cancel_instagram(
         return {"error": publishing.instagram_disabled_message(), "code": "disabled"}
     if not publishing.valid_queue_id(queue_id):
         return {"error": "queue_id looks like q-1a2b3c4d; see mhphotos_instagram_queue"}
-    code, data = await anyio.to_thread.run_sync(publishing.hub_queue, cfg)
+    code, data = await anyio.to_thread.run_sync(publishing.social_queue, cfg)
     if code != 200:
         return _app_error(code, data)
     item = next((r for r in data.get("items", []) if r.get("id") == queue_id), None)
@@ -1630,7 +1630,7 @@ async def mhphotos_cancel_instagram(
     approved, how = await gate.approve(ctx, f"Instagram-Beitrag aus der Warteschlange entfernen: {summary['caption'][:60]}")
     if not approved:
         return gate.refusal(how)
-    code, resp = await anyio.to_thread.run_sync(publishing.hub_cancel, cfg, queue_id)
+    code, resp = await anyio.to_thread.run_sync(publishing.social_cancel, cfg, queue_id)
     if code != 200:
         return _app_error(code, resp)
     change_id = audit.record("mhphotos_cancel_instagram", [], summary, approved_by=how)

@@ -70,5 +70,5 @@ In den Einstellungen der Cloud-Umgebung (Menü in der Titelleiste der Sitzung, d
 ## Sicherheit für Beiträge, während du nicht zuschaust
 - Instagram-Beiträge erscheinen **automatisch** zur geplanten Zeit. Plane immer mit Vorlauf und lass dir die Warteschlange zeigen.
 - Das Standard-Konto ist `mhphotos`. `malou` und `martin` (privat) nur, wenn du sie ausdrücklich nennst.
-- Der SocialHub-Duplikat-Check läuft vor jedem Beitrag; ein bereits geplantes oder gepostetes Foto wird abgelehnt.
+- Der MHPhotos-Duplikat-Check läuft vor jedem Beitrag; ein bereits geplantes oder gepostetes Foto wird abgelehnt.
 - Alle Änderungen stehen im lokalen Änderungsprotokoll (`list_changes`); in der Cloud-Sitzung liegt es nur für die Dauer der Sitzung.

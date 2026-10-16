@@ -70,16 +70,16 @@ def test_call_schedule_flow_dry_run_then_confirm(app):
     fake, env = app
     args = {"caption": "Moin", "scheduled_at": when(), "inbox_item_id": "lr-1"}
     code, out, _ = run(env, "mhphotos_schedule_instagram", json.dumps(args))
-    assert code == 0 and json.loads(out)["dry_run"] is True and fake.hub_uploads == []
+    assert code == 0 and json.loads(out)["dry_run"] is True and fake.social_uploads == []
     code, out, _ = run(env, "mhphotos_schedule_instagram", json.dumps({**args, "confirm": True}))
-    assert code == 0 and json.loads(out)["applied"] is True and len(fake.hub_uploads) == 1
+    assert code == 0 and json.loads(out)["applied"] is True and len(fake.social_uploads) == 1
 
 
 def test_call_confirm_require_mode_refuses_because_nobody_can_be_asked(app):
     fake, env = app
     args = {"caption": "Moin", "scheduled_at": when(), "inbox_item_id": "lr-1", "confirm": True}
     _, out, _ = run({**env, "MHPHOTOS_CONFIRMATION": "require"}, "mhphotos_schedule_instagram", json.dumps(args))
-    assert json.loads(out)["code"] == "approval_unavailable" and fake.hub_uploads == []
+    assert json.loads(out)["code"] == "approval_unavailable" and fake.social_uploads == []
 
 
 def test_call_publish_goes_through_the_normal_gate(app):

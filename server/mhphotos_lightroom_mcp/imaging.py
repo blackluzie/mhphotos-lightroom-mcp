@@ -80,7 +80,7 @@ def downscale_jpeg(data: bytes, size: int = 768, quality: int = 85) -> bytes:
 
 
 def thumb_png_b64(data: bytes) -> str:
-    """8x8 PNG (base64) for the SocialHub duplicate check; the server computes the hash from it."""
+    """8x8 PNG (base64) for the MHPhotos duplicate check; the server computes the hash from it."""
     with PILImage.open(io.BytesIO(data)) as img:
         img = ImageOps.exif_transpose(img).convert("RGB").resize((8, 8), PILImage.Resampling.BOX)
         out = io.BytesIO()

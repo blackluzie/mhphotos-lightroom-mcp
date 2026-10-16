@@ -1,4 +1,4 @@
-"""Working from the MHPhotos inbox without Lightroom: look, edit a copy, schedule via the SocialHub."""
+"""Working from the MHPhotos inbox without Lightroom: look, edit a copy, schedule via the social queue."""
 
 import io
 from datetime import UTC, datetime, timedelta
@@ -103,17 +103,17 @@ async def test_edit_preview_shows_before_and_after(app):
     info, image = await server.mhphotos_edit_preview("lr-1", {"exposure": 0.5, "crop": "1:1"}, size=300)
     assert info["adjust"] == {"exposure": 0.5, "crop": "1:1"}
     assert PILImage.open(io.BytesIO(image.data)).size == (2 * 300 + 3 * 8, 300 + 16)
-    assert app.hub_uploads == []  # nothing saved or sent
+    assert app.social_uploads == []  # nothing saved or sent
     assert "error" in (await server.mhphotos_edit_preview("lr-1", {}))[0]
     assert "error" in (await server.mhphotos_edit_preview("lr-1", {"exposure": 9}))[0]
     assert (await server.mhphotos_edit_preview("ghost", {"exposure": 0.2}))[0]["id"] == "ghost"
 
 
-# ---- Instagram via the SocialHub -----------------------------------------------------------
+# ---- Instagram via the social queue -----------------------------------------------------------
 async def test_schedule_disabled_without_opt_in(app, monkeypatch):
     monkeypatch.delenv("MHPHOTOS_ALLOW_INSTAGRAM")
     res = await server.mhphotos_schedule_instagram("Hallo", future(), inbox_item_id="lr-1", confirm=True)
-    assert res["code"] == "disabled" and app.hub_uploads == []
+    assert res["code"] == "disabled" and app.social_uploads == []
 
 
 async def test_schedule_validation(app):
@@ -135,21 +135,21 @@ async def test_schedule_validation(app):
         {"inbox_item_id": "ghost"},
     ):
         assert "error" in await server.mhphotos_schedule_instagram(**{**base, **override}), override
-    assert app.hub_uploads == []
+    assert app.social_uploads == []
 
 
 async def test_schedule_from_inbox_dry_run_then_queue(app):
     when = future()
     dry = await server.mhphotos_schedule_instagram("Sonnenuntergang", when, inbox_item_id="lr-1")
     assert dry["dry_run"] and dry["accounts"] == ["mhphotos"] and dry["posted_automatically"] is True
-    assert app.hub_uploads == []
+    assert app.social_uploads == []
     done = await server.mhphotos_schedule_instagram(
         "Sonnenuntergang", when, inbox_item_id="lr-1", adjust={"exposure": 0.3, "crop": "4:5"}, confirm=True
     )
     assert done["applied"] and done["queue_ids"] == ["q-0001"]
-    up = app.hub_uploads[0]
+    up = app.social_uploads[0]
     assert up["caption"] == b"Sonnenuntergang" and up["type"] == b"post" and up["accountId"] == b"mhphotos"
-    assert up["imgHash"] == b"0123456789abcdef"  # from the SocialHub duplicate check
+    assert up["imgHash"] == b"0123456789abcdef"  # from the MHPhotos duplicate check
     sent = PILImage.open(io.BytesIO(up["file"]))
     assert sent.format == "JPEG" and sent.size[0] * 5 == sent.size[1] * 4  # cropped to 4:5, <= 1440 px
     assert datetime.fromisoformat(up["scheduledAt"].decode()).tzinfo is not None
@@ -162,23 +162,23 @@ async def test_schedule_story_to_two_accounts(app):
         "Moin", future(), inbox_item_id="lr-2", accounts="mhphotos,martin", post_type="story", confirm=True
     )
     assert len(res["queue_ids"]) == 2
-    assert app.hub_uploads[0]["accountId"] == b"mhphotos,martin" and app.hub_uploads[0]["type"] == b"story"
+    assert app.social_uploads[0]["accountId"] == b"mhphotos,martin" and app.social_uploads[0]["type"] == b"story"
 
 
 async def test_schedule_refuses_duplicates_unless_allowed(app):
     app.duplicate = {"account_name": "MHPhotos", "scheduled_at": "2026-10-20T16:00:00.000Z", "status": "geplant", "distance": 2}
     res = await server.mhphotos_schedule_instagram("Nochmal", future(), inbox_item_id="lr-1", confirm=True)
-    assert res["code"] == "duplicate" and res["duplicate"]["status"] == "geplant" and app.hub_uploads == []
+    assert res["code"] == "duplicate" and res["duplicate"]["status"] == "geplant" and app.social_uploads == []
     dry = await server.mhphotos_schedule_instagram("Nochmal", future(), inbox_item_id="lr-1", allow_duplicate=True)
     assert dry["dry_run"] and dry["duplicate"]["distance"] == 2
     ok = await server.mhphotos_schedule_instagram("Nochmal", future(), inbox_item_id="lr-1", allow_duplicate=True, confirm=True)
-    assert ok["applied"] and len(app.hub_uploads) == 1
+    assert ok["applied"] and len(app.social_uploads) == 1
 
 
 async def test_schedule_from_lightroom_photo(app):
     res = await server.mhphotos_schedule_instagram("Aasee", future(), photo_id="p4", confirm=True)
     assert res["applied"] and res["photo"] == "DSC_0100.nef"
-    assert PILImage.open(io.BytesIO(app.hub_uploads[0]["file"])).format == "JPEG"
+    assert PILImage.open(io.BytesIO(app.social_uploads[0]["file"])).format == "JPEG"
     assert audit.read_all()[-1]["photo_ids"] == ["p4"]
 
 
@@ -194,7 +194,7 @@ async def test_schedule_from_lightroom_needs_export_dir(app, monkeypatch):
 async def test_hub_error_is_reported(app):
     app.images["lr-1"] = b"not an image"
     res = await server.mhphotos_schedule_instagram("x", future(), inbox_item_id="lr-1", confirm=True)
-    assert "error" in res and app.hub_uploads == []
+    assert "error" in res and app.social_uploads == []
 
 
 async def test_queue_listing_and_cancel(app):
@@ -203,9 +203,9 @@ async def test_queue_listing_and_cancel(app):
     assert items[0]["id"] == "q-0001" and items[0]["status"] == "geplant"
     assert [i["id"] for i in (await server.mhphotos_instagram_queue(status="veroeffentlicht"))["items"]] == ["q-old"]
     dry = await server.mhphotos_cancel_instagram("q-0001")
-    assert dry["dry_run"] and len(app.hub_queue) == 2
+    assert dry["dry_run"] and len(app.social_queue) == 2
     assert (await server.mhphotos_cancel_instagram("q-0001", confirm=True))["applied"]
-    assert [r["id"] for r in app.hub_queue] == ["q-old"]
+    assert [r["id"] for r in app.social_queue] == ["q-old"]
     assert "already published" in (await server.mhphotos_cancel_instagram("q-old", confirm=True))["error"].lower()
     assert "not found" in (await server.mhphotos_cancel_instagram("q-nope", confirm=True))["error"]
     assert "queue_id" in (await server.mhphotos_cancel_instagram("../etc/passwd", confirm=True))["error"]

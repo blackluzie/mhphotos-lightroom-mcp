@@ -29,7 +29,7 @@ opt-in (environment variable) and, when your client supports it, **you are asked
 | Organise (`MHPHOTOS_ALLOW_WRITES=1`) | `set_rating`, `set_flag`, `set_color_label`, `set_title_caption`, `add_keywords`, `create_collection`, `add_to_collection`, `undo_last_change` |
 | Edit looks (`MHPHOTOS_ALLOW_WRITES=1`) | `apply_preset`, `apply_develop_settings`, `sync_develop_settings`, `create_preset`, `create_virtual_copies` |
 | Export | `export_photos` (`MHPHOTOS_EXPORT_DIR`) |
-| MHPhotos site | `mhphotos_galleries`, `mhphotos_inbox`, `mhphotos_inbox_images`, `mhphotos_inbox_contact_sheet`, `mhphotos_edit_preview` (basic edit before/after), `mhphotos_analyze_inbox`, `mhphotos_instagram_posts`, `mhphotos_instagram_images`, `send_to_mhphotos_inbox`, `mhphotos_publish` (public site, `MHPHOTOS_ALLOW_PUBLISH=1`), `mhphotos_schedule_instagram` / `mhphotos_instagram_queue` / `mhphotos_cancel_instagram` (SocialHub queue, `MHPHOTOS_ALLOW_INSTAGRAM=1`) |
+| MHPhotos site | `mhphotos_galleries`, `mhphotos_inbox`, `mhphotos_inbox_images`, `mhphotos_inbox_contact_sheet`, `mhphotos_edit_preview` (basic edit before/after), `mhphotos_analyze_inbox`, `mhphotos_instagram_posts`, `mhphotos_instagram_images`, `send_to_mhphotos_inbox`, `mhphotos_publish` (public site, `MHPHOTOS_ALLOW_PUBLISH=1`), `mhphotos_schedule_instagram` / `mhphotos_instagram_queue` / `mhphotos_cancel_instagram` (social queue, `MHPHOTOS_ALLOW_INSTAGRAM=1`) |
 
 The MHPhotos tools also run **without Lightroom and without an MCP client**: `mhphotos-lightroom-mcp call TOOL '{json}'`
 (images are saved as files). That is how they are used from a cloud session on a phone; see [docs/kreuzfahrt.md](docs/kreuzfahrt.md).

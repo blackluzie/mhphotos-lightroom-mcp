@@ -283,18 +283,18 @@ def fetch_image(url: str, timeout: float = 30.0) -> tuple[bytes | None, str | No
     return data, None
 
 
-# --- Instagram via the SocialHub queue of the MHPhotos app -----------------------------------
+# --- Instagram via the social queue of the MHPhotos app -----------------------------------
 # This is the path the MHPhotos app itself uses (accounts, duplicate check, best posting time).
-HUB_ACCOUNTS = ("mhphotos", "malou", "martin")
-HUB_QUEUE = "/api/admin/social-hub-queue"
-HUB_DUPLICATE = "/api/admin/social-hub-duplicate"
-HUB_PROXY = "/api/admin/social-hub"
-HUB_MAX_BYTES = 8 * 1024 * 1024
+SOCIAL_ACCOUNTS = ("mhphotos", "malou", "martin")
+SOCIAL_QUEUE = "/api/admin/social-hub-queue"
+SOCIAL_DUPLICATE = "/api/admin/social-hub-duplicate"
+SOCIAL_PROXY = "/api/admin/social-hub"
+SOCIAL_MAX_BYTES = 8 * 1024 * 1024
 _QUEUE_ID = re.compile(r"^q-[a-z0-9]{1,32}$")
 
 
 def instagram_enabled() -> bool:
-    """Operator opt-in for scheduling posts that the SocialHub publishes to Instagram."""
+    """Operator opt-in for scheduling posts that the MHPhotos social publishes to Instagram."""
     return os.environ.get(INSTAGRAM_ENV, "").strip().lower() in {"1", "true", "yes"}
 
 
@@ -305,7 +305,7 @@ def instagram_disabled_message() -> str:
 def parse_accounts(raw: str) -> list[str] | None:
     """'mhphotos' or 'mhphotos,martin' -> validated unique list, or None if invalid."""
     names = [n.strip() for n in raw.split(",") if n.strip()]
-    if not names or len(set(names)) != len(names) or any(n not in HUB_ACCOUNTS for n in names):
+    if not names or len(set(names)) != len(names) or any(n not in SOCIAL_ACCOUNTS for n in names):
         return None
     return names
 
@@ -314,29 +314,29 @@ def valid_queue_id(queue_id: str) -> bool:
     return bool(_QUEUE_ID.match(queue_id))
 
 
-def hub_queue(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
-    return api(cfg, "GET", HUB_QUEUE)
+def social_queue(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", SOCIAL_QUEUE)
 
 
-def hub_cancel(cfg: InboxConfig, queue_id: str) -> tuple[int, dict[str, Any]]:
+def social_cancel(cfg: InboxConfig, queue_id: str) -> tuple[int, dict[str, Any]]:
     if not valid_queue_id(queue_id):
         return 400, {"error": "invalid queue id"}
-    return api(cfg, "DELETE", f"{HUB_PROXY}/queue/{queue_id}")
+    return api(cfg, "DELETE", f"{SOCIAL_PROXY}/queue/{queue_id}")
 
 
-def hub_duplicate(cfg: InboxConfig, thumb_png_b64: str, account: str) -> tuple[int, dict[str, Any]]:
-    return api(cfg, "POST", HUB_DUPLICATE, {"thumbPng": thumb_png_b64, "accountId": account})
+def social_duplicate(cfg: InboxConfig, thumb_png_b64: str, account: str) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "POST", SOCIAL_DUPLICATE, {"thumbPng": thumb_png_b64, "accountId": account})
 
 
-def hub_schedule(
+def social_schedule(
     cfg: InboxConfig, filename: str, data: bytes, fields: dict[str, str], timeout: float = 120.0
 ) -> tuple[int, dict[str, Any]]:
-    """Multipart upload into the SocialHub queue (status 'geplant' until the hub publishes it)."""
-    if len(data) > HUB_MAX_BYTES:
+    """Multipart upload into the social queue (status 'geplant' until the hub publishes it)."""
+    if len(data) > SOCIAL_MAX_BYTES:
         return 413, {"error": "image larger than 8 MB"}
     body, ctype = _multipart(fields, filename, data)
     req = urllib.request.Request(
-        cfg.base_url.rstrip("/") + HUB_QUEUE,
+        cfg.base_url.rstrip("/") + SOCIAL_QUEUE,
         data=body, method="POST",
         headers={"Content-Type": ctype, "X-Admin-Token": cfg.token, "Accept": "application/json"},
     )
