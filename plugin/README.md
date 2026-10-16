@@ -52,18 +52,34 @@ Run in this order and tick off each step:
 - [ ] Quit Lightroom → tools return `unavailable`; restart Lightroom → reconnects by itself
 - [ ] Restart the MCP server (new token) → plugin reconnects without restarting Lightroom
 
-## Things most likely to need a fix on the first real run
-These API usages are the ones not verifiable without Lightroom:
-- `catalog:findPhotoByUuid`, `catalog:getCollectionByLocalIdentifier`
-- `catalog:withWriteAccessDo(name, fn, {timeout = 15})` return value `'executed'`
-- `catalog:createKeyword(name, {}, true, nil, true)`
-- `photo:requestJpegThumbnail`, `LrStringUtils.encodeBase64`, `photo:getDevelopSettings`
-- `LrApplication.developPresetFolders`, `photo:applyDevelopPreset(preset, _PLUGIN)`, `photo:applyDevelopSettings`, `LrApplication.addDevelopPresetForPlugin`
-- `catalog:createCollection(name, nil, true)`, `collection:addPhotos`, `setRawMetadata('colorNameForLabel' / 'title' / 'caption')`, `photo:removeKeyword`
-- `catalog:setSelectedPhotos` + `catalog:createVirtualCopies` (one copy per call)
-- `LrExportSession` settings keys, and `LrFileUtils.readFile`
-- `capture_time`: Lightroom's raw time is relative to 2001-01-01 and has no time zone;
-  the plugin presents it as if it were UTC.
+## What was checked against the SDK reference, and what was not
+Checked on 2026-10-16 against a mirror of Adobe's Lightroom Classic SDK reference
+([lrc.mcor.dev](https://lrc.mcor.dev/), not Adobe itself): every function and metadata key the plugin uses **exists**
+with the signature used here: `findPhotoByUuid`, `getCollectionByLocalIdentifier`, `createCollection(name, parent,
+canReturnPrior)`, `createKeyword(...)`, `withWriteAccessDo(name, fn, {timeout, asynchronous})`, `createVirtualCopies`,
+`setSelectedPhotos`, `setActiveSources`, `photo:requestJpegThumbnail(w, h, callback)`, `getDevelopSettings`,
+`applyDevelopPreset(preset, plugin)`, `applyDevelopSettings`, `addKeyword`/`removeKeyword`, `setRawMetadata` for
+`rating`, `pickStatus`, `colorNameForLabel`, `title`, `caption`, `LrApplication.developPresetFolders`,
+`addDevelopPresetForPlugin`, `LrFileUtils.readFile`, `LrHttp.post` (status in `headers.status`). The self test also
+confirms at run time that your Lightroom version has them ("API present: ...").
+
+Still **not verifiable without Lightroom** (behaviour, not names):
+- The export setting keys (`LR_format`, `LR_export_destinationType`, ...) are not listed in the reference; they follow
+  the keys Lightroom itself writes into export presets. `export_photos` is the first thing to test.
+- Setting `rating` to `nil` to clear it (rating 0).
+- `title`/`caption` are read with `getFormattedMetadata` (they are not raw-readable) and written with `setRawMetadata`.
+- `capture_time`: Lightroom's raw time is relative to 2001-01-01 and has no time zone; the plugin presents it as UTC.
+
+Known Lightroom behaviours to watch:
+- **Virtual copies** are only made for the *selected* photos, a selection only holds photos of the *active source*,
+  and Adobe's forum reports it works reliably only in the Library grid. The plugin therefore switches to the Library
+  grid, sets the source "All Photographs", selects the one photo and creates its copy (named "MHPhotos"). Your
+  selection and view change as a side effect.
+- **Presets created by `create_preset`** are stored under the plugin's own folder. A 2026 forum thread reports that
+  applying a plugin-created preset shifted **white balance** on Lightroom 15.0.1 although the preset had none (not
+  reproducible on 15.1). After the first `apply_preset` with such a preset, check the white balance.
+- Develop settings are marked *experimental* in the SDK; the keys may change in future Lightroom versions.
+- Collection **sets** cannot hold photos: ids of sets are rejected with a clear message.
 
 Errors from the plugin show up in the tool result (`code: plugin_error`). Use the
 *Status* menu item for the last command and connection state.

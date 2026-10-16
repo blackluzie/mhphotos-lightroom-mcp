@@ -46,19 +46,23 @@ local set = { getName = function() return 'Set' end,
   getChildCollectionSets = function() return {} end }
 
 local writes = 0
-local createdCollection, selected
+local lastWriteOpts
+local createdCollection, selected, activeSource, virtualCopyName
+local viewCalls = {}
 local fakeCatalog = {
   getChildCollections = function() return { coll } end,
   getChildCollectionSets = function() return { set } end,
   getAllPhotos = function() return photos end,
   findPhotoByUuid = function(_, id) for _, p in ipairs(photos) do if p.raw.uuid == id then return p end end end,
   getCollectionByLocalIdentifier = function(_, id) if id == 7 then return coll end end,
-  withWriteAccessDo = function(_, name, fn, opts) writes = writes + 1; fn(); return 'executed' end,
+  withWriteAccessDo = function(_, name, fn, opts) writes = writes + 1; lastWriteOpts = opts; fn(); return 'executed' end,
   createKeyword = function(_, name) return { getName = function() return name end } end,
   createCollection = function(_, name, parent, prior) createdCollection = { name = name, prior = prior, localIdentifier = 99,
     addPhotos = function(self, ps) self.added = ps end, isSmartCollection = function() return false end }; return createdCollection end,
   setSelectedPhotos = function(_, p) selected = p end,
-  createVirtualCopies = function()
+  setActiveSources = function(_, src) activeSource = src; return true end,
+  createVirtualCopies = function(_, copyName)
+    virtualCopyName = copyName
     local copy = newPhoto('copy-of-' .. selected.raw.uuid, 'IMG_copy.dng', 0, 0, {}, 0, 'x')
     copy.raw.isVirtualCopy = true; copy.raw.masterPhoto = selected
     photos[#photos + 1] = copy
@@ -66,8 +70,10 @@ local fakeCatalog = {
   end,
 }
 -- methods are called with ':' -> need self first
-local catalogProxy = setmetatable({}, { __index = function(_, k)
-  local f = fakeCatalog[k]; return function(self, ...) return f(self, ...) end end })
+local catalogProxy = setmetatable({ kAllPhotos = 'kAllPhotos' }, { __index = function(_, k)
+  local f = fakeCatalog[k]
+  if f == nil then return nil end
+  return function(self, ...) return f(self, ...) end end })
 
 local exported
 local createdPreset
@@ -80,6 +86,10 @@ local folders = {
 }
 _PLUGIN = { id = 'plugin' }
 function import(name)
+  if name == 'LrApplicationView' then
+    return { switchToModule = function(m) viewCalls[#viewCalls + 1] = 'module:' .. m end,
+             gridView = function() viewCalls[#viewCalls + 1] = 'grid' end }
+  end
   if name == 'LrTasks' then return { sleep = function() end } end
   if name == 'LrDate' then return { currentTime = function() return os.clock() end } end
   if name == 'LrStringUtils' then return { encodeBase64 = function(d) return 'B64(' .. d .. ')' end } end
@@ -241,10 +251,24 @@ local vc = Commands.run('create_virtual_copies', { photo_ids = { 'u1' } }).copie
 eq(vc[1].source_id, 'u1'); eq(vc[1].id, 'copy-of-u1')
 eq(Commands.run('get_photo', { photo_id = 'copy-of-u1' }).virtual_copy_of, 'u1')
 eq(pcall(Commands.run, 'create_virtual_copies', { photo_ids = {} }), false)
+-- the copy is made from the Library grid, with 'All Photographs' as source and only that photo selected
+eq(table.concat(viewCalls, ','), 'module:library,grid'); eq(activeSource, 'kAllPhotos')
+eq(selected.raw.uuid, 'u1'); eq(virtualCopyName, 'MHPhotos')
+-- write access never queues: it waits (asynchronous=false) with a timeout
+eq(lastWriteOpts.asynchronous, false); eq(lastWriteOpts.timeout, 15)
+-- a collection SET id (no getPhotos/addPhotos) gets a clear message, not a Lua crash
+local setObj = { localIdentifier = 70, getName = function() return 'S' end }
+local origGet = fakeCatalog.getCollectionByLocalIdentifier
+fakeCatalog.getCollectionByLocalIdentifier = function(_, id) if id == 70 then return setObj end return origGet(_, id) end
+local okA, errA = pcall(Commands.run, 'add_to_collection', { collection_id = '70', photo_ids = { 'u1' } })
+eq(okA, false); assert(tostring(errA):find('collection set'), tostring(errA))
+local okL, errL = pcall(Commands.run, 'list_photos', { collection_id = '70' })
+eq(okL, false); assert(tostring(errL):find('collection set'), tostring(errL))
+fakeCatalog.getCollectionByLocalIdentifier = origGet
 
 -- self test: all green on the fake, and a failing API call is reported without stopping the rest
 local st = Commands.run('selftest')
-eq(st.failed, 0); assert(st.passed >= 8, 'expected at least 8 checks'); eq(st.environment, 'Lightroom 15.0')
+eq(st.failed, 0); assert(st.passed >= 12, 'expected at least 12 checks, got ' .. st.passed); eq(st.environment, 'Lightroom 15.0')
 local origDev = p1.getDevelopSettings
 p1.getDevelopSettings = function() error('getDevelopSettings exploded') end
 local st2 = Commands.run('selftest')
@@ -253,5 +277,14 @@ for _, c in ipairs(st2.checks) do
   if not c.ok then eq(c.name, 'get_develop_settings'); assert(c.detail:find('exploded'), c.detail) end
 end
 p1.getDevelopSettings = origDev
+-- a Lightroom without one of the write functions is reported by name, without calling anything
+local origVC = fakeCatalog.createVirtualCopies
+fakeCatalog.createVirtualCopies = nil
+local st3 = Commands.run('selftest')
+eq(st3.failed, 1)
+for _, c in ipairs(st3.checks) do
+  if not c.ok then eq(c.name, 'API present: catalog'); assert(c.detail:find('createVirtualCopies'), c.detail) end
+end
+fakeCatalog.createVirtualCopies = origVC
 
 print('commands ok')
