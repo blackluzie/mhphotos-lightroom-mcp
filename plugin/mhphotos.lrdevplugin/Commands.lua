@@ -4,6 +4,8 @@
 
 local LrApplication = import 'LrApplication'
 local LrTasks = import 'LrTasks'
+-- LrTasks.pcall, not pcall: Lightroom's plain pcall cannot yield, and catalog calls yield
+-- ("Yielding is not allowed within a C or metamethod call").
 local LrStringUtils = import 'LrStringUtils'
 local LrDate = import 'LrDate'
 local LrApplicationView = import 'LrApplicationView'
@@ -454,9 +456,9 @@ end
 -- copy unambiguously tied to its source. The Lightroom selection/view changes as a side effect.
 local function selectOnly(photo)
   local cat = catalog()
-  pcall(function() LrApplicationView.switchToModule('library') end)
-  pcall(function() LrApplicationView.gridView() end)
-  pcall(function() cat:setActiveSources(cat.kAllPhotos) end)
+  LrTasks.pcall(function() LrApplicationView.switchToModule('library') end)
+  LrTasks.pcall(function() LrApplicationView.gridView() end)
+  LrTasks.pcall(function() cat:setActiveSources(cat.kAllPhotos) end)
   cat:setSelectedPhotos(photo, {})
 end
 
@@ -485,7 +487,7 @@ function Commands.selftest()
   local checks = {}
   local function check(name, fn)
     local t0 = LrDate.currentTime()
-    local ok, res = pcall(fn)
+    local ok, res = LrTasks.pcall(fn)
     local detail = res
     if not ok then
       detail = type(res) == 'table' and ((res.code or '') .. ' ' .. tostring(res.message)) or tostring(res)
@@ -498,7 +500,7 @@ function Commands.selftest()
   end
 
   local env = 'unknown'
-  pcall(function() env = 'Lightroom ' .. tostring(LrApplication.versionString()) end)
+  LrTasks.pcall(function() env = 'Lightroom ' .. tostring(LrApplication.versionString()) end)
 
   local first = {}
   check('catalog access', function() return #catalog():getAllPhotos() .. ' photos in catalog' end)

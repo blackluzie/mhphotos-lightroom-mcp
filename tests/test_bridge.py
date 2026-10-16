@@ -66,6 +66,12 @@ def test_auth_required(bridge):
     assert _req(bridge, "/v1/health", token=bridge.token, method="GET") == 200
 
 
+def test_empty_list_body_counts_as_empty_object(bridge):
+    # The Lua JSON encoder writes an empty table as [] and the real plugin polls with one.
+    assert _req(bridge, "/v1/poll", token=bridge.token, data=b"[]") == 200
+    assert bridge.is_connected()
+
+
 def test_bad_requests(bridge):
     assert _req(bridge, "/v1/poll", token=bridge.token, data=b"not json") == 400
     assert _req(bridge, "/v1/poll", token=bridge.token, data=b"[1]") == 400

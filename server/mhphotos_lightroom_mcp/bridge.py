@@ -180,6 +180,10 @@ class Bridge:
                     data = json.loads(raw or b"{}")
                 except ValueError:
                     return None
+                if data == []:
+                    # The plugin's JSON encoder writes an empty Lua table as [] (it cannot tell an
+                    # empty object from an empty array), so an empty list means "no fields".
+                    return {}
                 return data if isinstance(data, dict) else None
 
             def do_GET(self) -> None:

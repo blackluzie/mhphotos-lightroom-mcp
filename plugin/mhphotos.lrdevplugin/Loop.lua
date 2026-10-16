@@ -35,7 +35,7 @@ end
 
 local function execute(cfg, command)
   State.lastCommand = command.name
-  local ok, res = pcall(Commands.run, command.name, command.args)
+  local ok, res = LrTasks.pcall(Commands.run, command.name, command.args)
   local payload
   if ok then
     payload = { id = command.id, ok = true, data = res }
@@ -58,7 +58,7 @@ function Loop.run()
       State.status = 'no bridge.json (start the MCP server with MHPHOTOS_ADAPTER=bridge)'
       LrTasks.sleep(3)
     else
-      local body, hdrs = post(cfg, '/v1/poll', {}, 20)
+      local body, hdrs = post(cfg, '/v1/poll', { client = 'lightroom' }, 20)
       local status = hdrs and hdrs.status
       if status == 200 and body then
         State.status = 'connected'
