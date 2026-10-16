@@ -183,6 +183,10 @@ async def test_gate_modes(monkeypatch):
     assert gate.mode() == "ask"
     monkeypatch.setenv("MHPHOTOS_CONFIRMATION", "REQUIRE")
     assert gate.mode() == "require"
+    # strict: with nobody to ask (direct call / `call` command) a confirmed change is refused
+    assert await gate.approve(None, "x") == (False, "unsupported")
+    monkeypatch.setenv("MHPHOTOS_CONFIRMATION", "flag")
+    assert await gate.approve(None, "x") == (True, "flag")
     assert gate.refusal("declined")["declined"] is True
     assert gate.refusal("unsupported")["code"] == "approval_unavailable"
     assert gate.refusal("failed")["code"] == "approval_failed"
