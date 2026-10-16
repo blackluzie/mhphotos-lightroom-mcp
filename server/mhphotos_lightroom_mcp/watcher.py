@@ -12,6 +12,7 @@ import os
 import plistlib
 import re
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -150,7 +151,16 @@ def run(folder: Path | None = None, once: bool = False, dry_run: bool = False, i
                 return 2
         else:
             warned = False
-        counts = watcher.scan(cfg)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)  # recreated if it vanished (e.g. unmounted volume)
+            counts = watcher.scan(cfg)
+        except OSError as exc:
+            # A broken folder must not end the process: launchd would restart it in a tight loop.
+            watcher.log(f"cannot read {folder}: {type(exc).__name__}; trying again in {int(interval)}s")
+            if once:
+                return 1
+            time.sleep(interval)
+            continue
         if once:
             return 1 if counts["failed"] else 0
         time.sleep(interval)
@@ -193,6 +203,39 @@ def install_service(url: str, folder: Path | None = None) -> tuple[int, str]:
         "Needs the admin token in the Keychain: security add-generic-password -s mhphotos-admin-token "
         '-a "$USER" -w   (you are prompted for the value)'
     )
+
+
+def service_status() -> list[tuple[str, str, str]]:
+    """Rows for ``doctor``: (status, label, detail). Read-only; never touches the token."""
+    plist = Path.home() / "Library" / "LaunchAgents" / f"{SERVICE_LABEL}.plist"
+    if not plist.is_file():
+        return [("ok", "inbox hot folder", "service not installed (optional: install-service)")]
+    rows = []
+    folder = watch_dir()
+    try:
+        folder = Path(plistlib.loads(plist.read_bytes())["EnvironmentVariables"][WATCH_DIR_ENV])
+    except (OSError, KeyError, ValueError, plistlib.InvalidFileException):
+        rows.append(("warn", "inbox hot folder", f"{plist} is unreadable"))
+    if sys.platform == "darwin":
+        try:
+            res = subprocess.run(
+                ["/bin/launchctl", "print", f"gui/{os.getuid()}/{SERVICE_LABEL}"],
+                capture_output=True, timeout=5, check=False,
+            )
+            loaded = res.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            loaded = False
+        rows.append(("ok" if loaded else "warn", "inbox hot folder service",
+                     "running" if loaded else f"installed but not loaded: launchctl bootstrap gui/$(id -u) {plist}"))
+    if folder.is_dir():
+        waiting = sum(1 for p in folder.iterdir() if p.suffix.lower() in EXTENSIONS and not p.name.startswith("."))
+        failed = folder / FAILED_DIR
+        n_failed = sum(1 for p in failed.iterdir() if p.suffix.lower() in EXTENSIONS) if failed.is_dir() else 0
+        rows.append(("ok" if not n_failed else "warn", "inbox hot folder",
+                     f"{folder}: {waiting} waiting, {n_failed} in {FAILED_DIR}/"))
+    else:
+        rows.append(("warn", "inbox hot folder", f"{folder} does not exist"))
+    return rows
 
 
 def main() -> None:

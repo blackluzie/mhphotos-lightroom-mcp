@@ -197,3 +197,40 @@ def test_install_service_needs_https_address(tmp_path, monkeypatch):
 def test_cli_usage_mentions_the_commands(capsys):
     assert cli.run(["install-service"]) == 2
     assert "install-service" in capsys.readouterr().out
+
+
+def test_vanished_folder_does_not_end_the_service(folder, monkeypatch, capsys):
+    import shutil
+
+    shutil.rmtree(folder)
+    calls = {"n": 0}
+
+    def fake_sleep(_):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise KeyboardInterrupt
+
+    original = watcher.Watcher.scan
+
+    def flaky(self, cfg, now=None):
+        if calls["n"] == 0:
+            raise FileNotFoundError("gone")
+        return original(self, cfg, now)
+
+    monkeypatch.setattr(watcher.time, "sleep", fake_sleep)
+    monkeypatch.setattr(watcher.Watcher, "scan", flaky)
+    with pytest.raises(KeyboardInterrupt):
+        watcher.run(folder)
+    assert "cannot read" in capsys.readouterr().out and folder.is_dir()
+
+
+def test_doctor_rows_without_and_with_the_service(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert watcher.service_status()[0][2].startswith("service not installed")
+    hot = tmp_path / "hot"
+    watcher.install_service("https://example.de", hot)
+    (hot / "fehler").mkdir()
+    (hot / "fehler" / "x.jpg").write_bytes(b"x")
+    (hot / "new.jpg").write_bytes(b"x")
+    rows = {label: (status, detail) for status, label, detail in watcher.service_status()}
+    assert rows["inbox hot folder"][0] == "warn" and "1 waiting, 1 in fehler/" in rows["inbox hot folder"][1]

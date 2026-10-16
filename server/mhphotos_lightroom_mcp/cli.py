@@ -137,6 +137,11 @@ def doctor() -> tuple[int, list[tuple[str, str, str]]]:
             code, _ = publishing.galleries(cfg2)
             add(OK if code == 200 else FAIL, "MHPhotos app", _app_status(code, cfg2.host))
 
+    from . import watcher
+
+    for status, label, detail in watcher.service_status():
+        add({"ok": OK, "warn": WARN}.get(status, WARN), label, detail)
+
     failed = any(r[0] == FAIL for r in rows)
     return (1 if failed else 0), rows
 
