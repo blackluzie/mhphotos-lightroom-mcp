@@ -978,7 +978,7 @@ _OVERRIDE_KEYS = {"title": 120, "description": 2000, "alt": 220, "location": 120
 def _app_cfg() -> publishing.InboxConfig | dict[str, Any]:
     cfg = publishing.inbox_config()
     if cfg is None:
-        return {"error": publishing.disabled_message(), "code": "disabled"}
+        return {"error": publishing.config_missing_message(), "code": "disabled"}
     return cfg
 
 

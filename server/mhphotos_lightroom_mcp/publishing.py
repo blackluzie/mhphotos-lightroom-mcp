@@ -101,9 +101,17 @@ def inbox_config() -> InboxConfig | None:
     return InboxConfig(url, token)
 
 
+def config_missing_message() -> str:
+    """For tools that only talk to the MHPhotos app (no export folder needed)."""
+    return (
+        f"The MHPhotos app is not configured. The operator must set {URL_ENV} (https URL of the MHPhotos app) "
+        f"and the admin token ({TOKEN_ENV}, {TOKEN_FILE_ENV} or the macOS Keychain entry '{KEYCHAIN_SERVICE}')."
+    )
+
+
 def disabled_message() -> str:
     return (
-        f"Publishing is disabled. The operator must set {URL_ENV} (https URL of the "
+        f"Sending to the MHPhotos inbox is disabled. The operator must set {URL_ENV} (https URL of the "
         f"MHPhotos app) and the admin token ({TOKEN_ENV}, {TOKEN_FILE_ENV} or the macOS "
         f"Keychain entry '{KEYCHAIN_SERVICE}'), plus MHPHOTOS_EXPORT_DIR."
     )
