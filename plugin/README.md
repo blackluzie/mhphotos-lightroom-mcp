@@ -53,8 +53,9 @@ not yet checked, or checked with a note:
 - [ ] `apply_preset` (dry run, then confirm) on a test photo: preset visible in Develop, one history step "MHPhotos…", undoable
 - [x] `apply_develop_settings` e.g. `{"Exposure2012": 0.5}`: slider moves
 - [ ] `create_preset`: preset appears under the plugin's folder in the Develop module's preset list (**not confirmed**: Lightroom
-      accepts it and returns a handle, but neither `list_presets` nor the Develop panel shows it, so `apply_preset` cannot find it by
-      name; see Known behaviours)
+      accepts it and returns a handle, but neither `list_presets` nor the Develop panel shows it. The plugin keeps the handle until
+      the plugin is reloaded, so `apply_preset` by name should work in the same run; that is covered by the Lua tests but **not yet
+      tried in Lightroom**; see Known behaviours)
 - [x] A bad id in a batch changes nothing
 - [x] Restart with `MHPHOTOS_EXPORT_DIR=/some/abs/folder`: `export_photos` dry run, then confirm → JPEGs appear
 - [ ] Quit Lightroom → tools return `unavailable`; restart Lightroom → reconnects by itself (not tried; a plugin reload does reconnect by itself)
@@ -83,10 +84,9 @@ Known Lightroom behaviours to watch:
   inside a protected call. The Lua tests' fake API never yields and cannot catch this.
 - **The plugin's JSON encoder writes an empty table as `[]`.** The server therefore accepts `[]` as an empty object.
 - **Presets made by `create_preset`** are not listed by `LrApplication.developPresetFolders()` and did not show in the Develop
-  panel in the first run (Lightroom 15.6), so `apply_preset` cannot find them by name. `addDevelopPresetForPlugin` does
-  return a handle.
-- Lightroom reports "no colour" as `grey`; until it is mapped, `get_photo_metadata` shows `color_label: "gray"` for a photo
-  without a colour.
+  panel in the first run (Lightroom 15.6). `addDevelopPresetForPlugin` does return a handle; the plugin keeps it until reload
+  and `create_preset` reports `returned_by_lightroom` and `listed_in_presets`.
+- Lightroom reports "no colour" as `grey`; the tools map it to `none` (confirmed in Lightroom).
 - **Virtual copies** are only made for the *selected* photos, a selection only holds photos of the *active source*,
   and Adobe's forum reports it works reliably only in the Library grid. The plugin therefore switches to the Library
   grid, sets the source "All Photographs", selects the one photo and creates its copy (named "MHPhotos"). Your
