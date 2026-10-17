@@ -5,8 +5,11 @@ client) to find, look at, rate, edit and publish your photos, with a safety gate
 that changes something.
 
 > **Status:** reads, edits and the MHPhotos workflow are implemented and tested against a simulated
-> Lightroom. The Lightroom plugin has **not yet run inside real Lightroom**. Use a disposable catalog
-> first and start with the plugin self test ([plugin/README.md](plugin/README.md)). Not affiliated with Adobe.
+> Lightroom. The Lightroom plugin has had a **first run in real Lightroom Classic 15.6** (disposable catalog):
+> self test 16/16, export, rating/flag/keywords with undo, colour labels, title/caption, virtual copies, collections,
+> contact sheet and develop settings work. A server restart (new token) reconnects by itself. Not yet confirmed in real Lightroom: applying a preset made by
+> `create_preset` (Lightroom does not list it) and a Lightroom restart (see [plugin/README.md](plugin/README.md)).
+> Use a disposable catalog first and start with the plugin self test. Not affiliated with Adobe.
 
 ## Setup on a Mac in 5 steps (details: [docs/setup-mac.md](docs/setup-mac.md))
 ```bash

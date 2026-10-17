@@ -98,7 +98,7 @@ function import(name)
       activeCatalog = function() return catalogProxy end,
       versionString = function() return '15.0' end,
       developPresetFolders = function() return folders end,
-      addDevelopPresetForPlugin = function(plugin, title, settings) createdPreset = { plugin, title, settings } end,
+      addDevelopPresetForPlugin = function(plugin, title, settings) createdPreset = { plugin, title, settings }; return { handle = title } end,
     }
   end
   if name == 'LrExportSession' then
@@ -173,7 +173,12 @@ Commands.run('apply_develop_settings', { photo_ids = { 'u1', 'u2' }, settings = 
 eq(p2.appliedSettings[1][1].Exposure2012, 0.3)
 eq(pcall(Commands.run, 'apply_develop_settings', { photo_ids = { 'u1' }, settings = {} }), false)
 eq(pcall(Commands.run, 'apply_develop_settings', { photo_ids = { 'u1' }, settings = { Exposure2012 = 'x' } }), false)
-Commands.run('create_preset', { name = 'Mein Preset', settings = { Contrast2012 = 20 } })
+local created = Commands.run('create_preset', { name = 'Mein Preset', settings = { Contrast2012 = 20 } })
+eq(created.listed_in_presets, false); eq(created.returned_by_lightroom, true)
+-- not listed by Lightroom, but apply_preset still finds it through the kept handle
+local before = #p1.appliedPresets
+Commands.run('apply_preset', { photo_ids = { 'u1' }, preset = 'Mein Preset' })
+eq(#p1.appliedPresets, before + 1); eq(p1.appliedPresets[before + 1][1].handle, 'Mein Preset')
 eq(createdPreset[2], 'Mein Preset'); eq(createdPreset[3].Contrast2012, 20); eq(createdPreset[1], _PLUGIN)
 eq(pcall(Commands.run, 'create_preset', { name = '', settings = { Contrast2012 = 20 } }), false)
 
@@ -243,6 +248,9 @@ eq(p1.fmt.caption, '')
 eq(pcall(Commands.run, 'set_title_caption', { photo_ids = { 'u1' } }), false)
 local m1 = Commands.run('get_photo', { photo_id = 'u1' })
 eq(m1.title, 'Seiser Alm'); eq(m1.color_label, 'green')
+p1.raw.colorNameForLabel = 'grey'  -- Lightroom's wording for "no colour"
+eq(Commands.run('get_photo', { photo_id = 'u1' }).color_label, 'none')
+p1.raw.colorNameForLabel = 'green'
 Commands.run('add_keywords', { photo_ids = { 'u1' }, keywords = { 'zz-added' } })
 Commands.run('remove_keywords', { photo_ids = { 'u1' }, keywords = { 'ZZ-ADDED' } })
 for _, kw in ipairs(p1.raw.keywords) do assert(kw:getName() ~= 'zz-added', 'keyword should be gone') end
