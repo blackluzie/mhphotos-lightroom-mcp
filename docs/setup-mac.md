@@ -47,13 +47,19 @@ in that case instead, set `MHPHOTOS_CONFIRMATION=require`. Test it once with a h
 
 Check with `doctor`: it says whether the app is reachable and the token accepted.
 
-### If a sync service already runs on the Mac
-If you already run a service that moves Lightroom exports into MHPhotos, it has to authenticate against the same
-MHPhotos admin endpoints, so it most likely holds an admin token already (check that service's configuration;
-the source of that service is not part of this repository, so this is an assumption). You can put the same token
-into the Keychain as above. This project does not need that service; it talks to the MHPhotos API directly. If you
-prefer to keep one path, export into the service's watch folder with `MHPHOTOS_EXPORT_DIR` and use only the read
-and publish tools.
+### Hot folder: send finished JPEGs to the inbox by themselves
+`mhphotos-lightroom-mcp watch` sends every JPEG that lands in a folder (default `~/Pictures/MHPhotos-Inbox`) to the
+Foto-Inbox (status "wartet", nothing goes live) and moves it to `gesendet/`; rejected files go to `fehler/` with a
+`.fehler.txt`. Point a Lightroom export preset ("Export to" > specific folder) at that folder.
+```bash
+mhphotos-lightroom-mcp watch --once --dry-run          # list what would be sent
+mhphotos-lightroom-mcp install-service https://<your MHPhotos domain> [FOLDER]   # writes the launchd agent
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.mhphotos.inbox-watcher.plist
+```
+`install-service` only writes the agent; it holds no secret (the token stays in the Keychain, see step 1 above). Log:
+`~/Library/Logs/MHPhotos/inbox-watcher.log`. Stop: `launchctl bootout gui/$(id -u)/de.mhphotos.inbox-watcher`.
+The export folder of the MCP tools (`MHPHOTOS_EXPORT_DIR`) is a different folder on purpose, so exports Claude makes are
+not sent by accident.
 
 ## Updating and troubleshooting
 - `uvx` caches by version; force a refresh with `uvx --refresh --from git+... mhphotos-lightroom-mcp doctor`.
