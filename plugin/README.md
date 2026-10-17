@@ -30,7 +30,7 @@ not yet checked, or checked with a note:
 
 - [x] `connection_status` → `connected: true, mode: bridge`
 - [x] `list_collections` matches Lightroom (names, counts; sets appear as `Set/Name`)
-- [ ] `list_photos` (whole catalog, one collection, paging with limit/offset) (whole catalog, collection and `limit` confirmed; `offset` not)
+- [x] `list_photos` (whole catalog, one collection, paging with limit/offset)
 - [ ] `list_photos` filters: `min_rating=5`, `year=…`, `keyword=…`, `flag=picked` (results match what Lightroom shows)
 - [ ] `get_photo_metadata`: filename, rating, flag, keywords, camera correct;
       `capture_time` plausible (see note below)
@@ -48,7 +48,7 @@ not yet checked, or checked with a note:
 - [x] `set_color_label` (green) shows in Lightroom; `none` clears it
 - [x] `set_title_caption`: visible in the Metadata panel; existing text is not overwritten without `overwrite=true`
 - [x] `create_virtual_copies`: copy appears next to the original, original unchanged
-- [ ] `get_contact_sheet` with 6 photos: one numbered image (3 photos returned one numbered image; 6 not tried)
+- [x] `get_contact_sheet` with 6 photos: one numbered image
 - [ ] `list_collections(include_counts=true)` counts match; without it the call is fast
 - [ ] `apply_preset` (dry run, then confirm) on a test photo: preset visible in Develop, one history step "MHPhotos…", undoable
 - [x] `apply_develop_settings` e.g. `{"Exposure2012": 0.5}`: slider moves
@@ -58,7 +58,7 @@ not yet checked, or checked with a note:
       tried in Lightroom**; see Known behaviours)
 - [x] A bad id in a batch changes nothing
 - [x] Restart with `MHPHOTOS_EXPORT_DIR=/some/abs/folder`: `export_photos` dry run, then confirm → JPEGs appear
-- [ ] Quit Lightroom → tools return `unavailable`; restart Lightroom → reconnects by itself (not tried; a plugin reload does reconnect by itself)
+- [x] Quit Lightroom → tools return `unavailable`; restart Lightroom → reconnects by itself (2026-10-17: the plugin starts at launch; the server saw it 21 s after its own start)
 - [x] Restart the MCP server (new token) → plugin reconnects without restarting Lightroom
 
 ## What was checked against the SDK reference, and what was not
