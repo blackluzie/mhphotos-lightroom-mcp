@@ -80,7 +80,11 @@ local function photoMetadata(photo)
   if type(title) == 'string' and title ~= '' then s.title = title end
   if type(caption) == 'string' and caption ~= '' then s.caption = caption end
   local label = photo:getRawMetadata('colorNameForLabel')
-  if type(label) == 'string' and label ~= '' then s.color_label = label end
+  if type(label) == 'string' and label ~= '' then
+    -- Lightroom reports "no colour" as grey; the tools call it none (see set_color_label)
+    if label == 'grey' or label == 'gray' then label = 'none' end
+    s.color_label = label
+  end
   if photo:getRawMetadata('isVirtualCopy') then
     local master = photo:getRawMetadata('masterPhoto')
     if master then s.virtual_copy_of = master:getRawMetadata('uuid') end
@@ -317,6 +321,10 @@ function Commands.get_develop_settings(args)
   return { settings = out }
 end
 
+-- Presets made by create_preset. Lightroom returns a handle but does not list them in
+-- developPresetFolders(), so apply_preset could never find them by name; keep the handles.
+local createdPresets = {}
+
 local function allPresets()
   local out = {}
   for _, folder in ipairs(LrApplication.developPresetFolders() or {}) do
@@ -338,6 +346,7 @@ local function findPreset(wanted)
   for _, p in ipairs(allPresets()) do
     if wanted == p.name or wanted == (p.folder .. '/' .. p.name) then hits[#hits + 1] = p end
   end
+  if #hits == 0 and createdPresets[wanted] then return createdPresets[wanted] end
   if #hits == 0 then notFound('Preset not found: ' .. tostring(wanted)) end
   if #hits > 1 then notFound('Preset name is ambiguous, use Folder/Name: ' .. tostring(wanted)) end
   return hits[1].preset
@@ -377,8 +386,18 @@ function Commands.create_preset(args)
   if type(name) ~= 'string' or name == '' or #name > 80 then error('preset name required', 0) end
   local count = 0
   for _ in pairs(args.settings) do count = count + 1 end
-  LrApplication.addDevelopPresetForPlugin(_PLUGIN, name, args.settings)
-  return { created = name, folder = 'MHPhotos MCP Bridge', parameters = count }
+  if _PLUGIN == nil then error('Lightroom gave no plugin handle (_PLUGIN), cannot create a preset', 0) end
+  local returned = LrApplication.addDevelopPresetForPlugin(_PLUGIN, name, args.settings)
+  -- Report what Lightroom did: a preset that is not listed afterwards cannot be applied by name.
+  if returned ~= nil then createdPresets[name] = returned end
+  local listed = false
+  for _, p in ipairs(allPresets()) do
+    if p.name == name then listed = true; break end
+  end
+  return {
+    created = name, folder = 'MHPhotos MCP Bridge', parameters = count,
+    returned_by_lightroom = returned ~= nil, listed_in_presets = listed,
+  }
 end
 
 -- ---------------------------------------------------------------- organising (writes)
