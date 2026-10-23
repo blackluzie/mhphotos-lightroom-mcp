@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import __version__
+
 URL_ENV = "MHPHOTOS_INBOX_URL"
 TOKEN_ENV = "MHPHOTOS_ADMIN_TOKEN"
 PUBLISH_ENV = "MHPHOTOS_ALLOW_PUBLISH"
@@ -27,6 +29,8 @@ INSTAGRAM_ENV = "MHPHOTOS_ALLOW_INSTAGRAM"
 MAX_FILE_BYTES = 24 * 1024 * 1024  # the inbox rejects larger originals
 ENDPOINT = "/api/admin/lightroom-import"
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+# Cloudflare answers the default "Python-urllib" agent with 403 / error 1010, so always identify.
+USER_AGENT = f"mhphotos-lightroom-mcp/{__version__}"
 
 
 @dataclass(frozen=True)
@@ -145,7 +149,7 @@ def upload(cfg: InboxConfig, path: Path, meta: dict[str, Any], timeout: float = 
         cfg.endpoint,
         data=body,
         method="POST",
-        headers={"Content-Type": ctype, "X-Admin-Token": cfg.token},
+        headers={"Content-Type": ctype, "X-Admin-Token": cfg.token, "User-Agent": USER_AGENT},
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -179,7 +183,7 @@ def api(
 ) -> tuple[int, dict[str, Any]]:
     """JSON call to the MHPhotos admin API. Never raises; status 0 = not reachable."""
     data = None if body is None else json.dumps(body).encode()
-    headers = {"X-Admin-Token": cfg.token, "Accept": "application/json"}
+    headers = {"X-Admin-Token": cfg.token, "Accept": "application/json", "User-Agent": USER_AGENT}
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(cfg.base_url.rstrip("/") + path, data=data, method=method, headers=headers)
@@ -202,7 +206,7 @@ def api_bytes(
 ) -> tuple[int, bytes | None]:
     """Binary GET (e.g. an inbox image). Returns (status, bytes); bytes is None on any failure."""
     req = urllib.request.Request(
-        cfg.base_url.rstrip("/") + path, headers={"X-Admin-Token": cfg.token}, method="GET"
+        cfg.base_url.rstrip("/") + path, headers={"X-Admin-Token": cfg.token, "User-Agent": USER_AGENT}, method="GET"
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -268,7 +272,7 @@ def fetch_image(url: str, timeout: float = 30.0) -> tuple[bytes | None, str | No
         return None, "image URL is not an Instagram/Meta https address"
     opener = urllib.request.build_opener(_SafeRedirect)
     try:
-        with opener.open(urllib.request.Request(url), timeout=timeout) as resp:
+        with opener.open(urllib.request.Request(url, headers={"User-Agent": USER_AGENT}), timeout=timeout) as resp:
             ctype = resp.headers.get("Content-Type", "")
             if not ctype.startswith("image/"):
                 return None, f"not an image ({ctype or 'unknown type'})"
@@ -338,7 +342,12 @@ def social_schedule(
     req = urllib.request.Request(
         cfg.base_url.rstrip("/") + SOCIAL_QUEUE,
         data=body, method="POST",
-        headers={"Content-Type": ctype, "X-Admin-Token": cfg.token, "Accept": "application/json"},
+        headers={
+            "Content-Type": ctype,
+            "X-Admin-Token": cfg.token,
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        },
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
