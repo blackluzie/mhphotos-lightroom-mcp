@@ -76,6 +76,34 @@ function AutoExport.run_once(cfg, done, deps)
   return { status = 'exported', exported = #ids, names = names }
 end
 
+-- ---------------------------------------------------------------- setup dialog helpers
+-- Values shown in the setup dialog; existing = decoded autoexport.json or nil. The first setup
+-- starts switched off and in dry-run mode.
+function AutoExport.dialog_values(existing)
+  local e = type(existing) == 'table' and existing or {}
+  return {
+    enabled = e.enabled == true,
+    collection = type(e.collection) == 'string' and e.collection or '',
+    min_rating = clamp(e.min_rating, 1, 5, 4),
+    max_per_run = clamp(e.max_per_run, 1, 20, 5),
+    interval_minutes = clamp(e.interval_minutes, 5, 1440, 15),
+    dry_run = e.dry_run ~= false,
+  }
+end
+
+-- What the dialog saves. Keeps a dest_dir that was set by hand in the file.
+function AutoExport.build_config(values, existing)
+  local v = AutoExport.dialog_values(values)
+  local cfg = {
+    enabled = v.enabled, collection = v.collection, min_rating = v.min_rating,
+    max_per_run = v.max_per_run, interval_minutes = v.interval_minutes, dry_run = v.dry_run,
+  }
+  if type(existing) == 'table' and type(existing.dest_dir) == 'string' and existing.dest_dir ~= '' then
+    cfg.dest_dir = existing.dest_dir
+  end
+  return cfg
+end
+
 -- ---------------------------------------------------------------- persistence and loop
 function AutoExport.encode_done(done)
   local ids = {}

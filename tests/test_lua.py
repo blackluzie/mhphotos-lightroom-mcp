@@ -11,7 +11,7 @@ TESTS = Path(__file__).resolve().parent.parent / "plugin" / "tests"
 
 
 @pytest.mark.skipif(LUA is None, reason="lua not installed")
-@pytest.mark.parametrize("script", ["json_test.lua", "commands_test.lua", "autoexport_test.lua"])
+@pytest.mark.parametrize("script", ["json_test.lua", "commands_test.lua", "autoexport_test.lua", "version_test.lua"])
 def test_lua(script):
     res = subprocess.run([LUA, script], check=False, cwd=TESTS, capture_output=True, text=True, timeout=60)
     assert res.returncode == 0, res.stdout + res.stderr
