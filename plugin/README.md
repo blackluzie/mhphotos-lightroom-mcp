@@ -61,6 +61,27 @@ not yet checked, or checked with a note:
 - [x] Quit Lightroom → tools return `unavailable`; restart Lightroom → reconnects by itself (2026-10-17: the plugin starts at launch; the server saw it 21 s after its own start)
 - [x] Restart the MCP server (new token) → plugin reconnects without restarting Lightroom
 
+## Auto-export (optional, off by default)
+
+The plugin can export the best new photos of one collection by itself, so they reach the MHPhotos
+inbox without you or Claude doing anything (for example while the Mac runs at home during a cruise).
+Together with the hot-folder service (`install-service`) the chain is: Lightroom collection ->
+JPEG in `~/Pictures/MHPhotos-Inbox` -> inbox with status "wartet". Nothing is published.
+
+Create `~/.mhphotos-lightroom-mcp/autoexport.json` (it is read again every round, no reload needed):
+
+```json
+{ "enabled": true, "collection": "Kreuzfahrt", "min_rating": 4, "max_per_run": 5,
+  "interval_minutes": 15, "dry_run": true }
+```
+
+- `dry_run` stays `true` until you set `false` explicitly: first it only reports what it would export.
+- Each photo is exported once (`autoexport-done.json`), at most `max_per_run` per round.
+- `dest_dir` defaults to `~/Pictures/MHPhotos-Inbox` (absolute path or `~/...`).
+- It only reads the catalog and exports files; it never changes ratings, keywords or collections.
+- It is configured only by this file, never over the MCP bridge.
+- State: `~/.mhphotos-lightroom-mcp/autoexport-status.txt`.
+
 ## What was checked against the SDK reference, and what was not
 Checked on 2026-10-16 against a mirror of Adobe's Lightroom Classic SDK reference
 ([lrc.mcor.dev](https://lrc.mcor.dev/), not Adobe itself): every function and metadata key the plugin uses **exists**
