@@ -21,7 +21,6 @@ local function setup()
   local LrFunctionContext = import 'LrFunctionContext'
   local LrBinding = import 'LrBinding'
   local LrView = import 'LrView'
-  local Commands = require 'Commands'
   local Json = require 'Json'
   local AutoExport = require 'AutoExport'
 
@@ -34,31 +33,10 @@ local function setup()
   end
 
   trace('setup: modules loaded')
-  trace('setup: reading collections')
-  local okList, listed = LrTasks.pcall(Commands.list_collections, {})
-  trace('setup: collections read ok=' .. tostring(okList) .. ' type=' .. type(listed))
-  if not okList then
-    LrDialogs.message('MHPhotos Auto-Export', 'Sammlungen konnten nicht gelesen werden: ' .. tostring(listed), 'critical')
-    return
-  end
+  -- No catalog scan here: listing every collection is far too slow in a big catalog, so the
+  -- collection is typed in. A wrong name shows up in autoexport-status.txt ("collection not found").
   local values = AutoExport.dialog_values(existing)
-  trace('setup: values ready, collection list has ' .. tostring(#listed.collections))
-  local items, known = {}, {}
-  for _, c in ipairs(listed.collections) do
-    items[#items + 1] = { title = c.name, value = c.name }
-    known[c.name] = true
-  end
-  if values.collection ~= '' and not known[values.collection] then
-    items[#items + 1] = { title = values.collection .. ' (nicht gefunden)', value = values.collection }
-  end
-  trace('setup: items built: ' .. #items)
-  if #items == 0 then
-    LrDialogs.message('MHPhotos Auto-Export', 'Dieser Katalog hat noch keine Sammlung. Lege zuerst eine an.', 'info')
-    return
-  end
-  if values.collection == '' then values.collection = items[1].value end
-
-  trace('setup: ' .. #items .. ' collections, opening dialog')
+  trace('setup: opening dialog')
   LrFunctionContext.callWithContext('mhphotos-autoexport-setup', function(context)
     local f = LrView.osFactory()
     local props = LrBinding.makePropertyTable(context)
@@ -69,9 +47,10 @@ local function setup()
       bind_to_object = props,
       spacing = f:control_spacing(),
       f:static_text { title = 'Exportiert die besten neuen Fotos einer Sammlung in den MHPhotos-Eingangsordner.' },
+      f:static_text { title = 'Sammlung: genauen Namen eintippen (bei Sets auch Set/Name).' },
       f:row {
         f:static_text { title = 'Sammlung:', width = LrView.share('mhphotos_label') },
-        f:popup_menu { value = LrView.bind('collection'), items = items, width_in_chars = 32 },
+        f:edit_field { value = LrView.bind('collection'), width_in_chars = 32, immediate = true },
       },
       f:row {
         f:static_text { title = 'Mindestbewertung (Sterne):', width = LrView.share('mhphotos_label') },
@@ -94,6 +73,10 @@ local function setup()
     trace('setup: dialog closed with ' .. tostring(result))
     if result ~= 'ok' then return end
 
+    if props.enabled and (props.collection or '') == '' then
+      LrDialogs.message('MHPhotos Auto-Export', 'Bitte den Namen der Sammlung eintragen.', 'warning')
+      return
+    end
     local cfg = AutoExport.build_config({
       enabled = props.enabled, collection = props.collection, min_rating = props.min_rating,
       max_per_run = props.max_per_run, interval_minutes = props.interval_minutes, dry_run = props.dry_run,

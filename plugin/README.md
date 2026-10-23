@@ -68,7 +68,7 @@ inbox without you or Claude doing anything (for example while the Mac runs at ho
 Together with the hot-folder service (`install-service`) the chain is: Lightroom collection ->
 JPEG in `~/Pictures/MHPhotos-Inbox` -> inbox with status "wartet". Nothing is published.
 
-Easiest: *Library > Plug-in Extras > MHPhotos MCP: Auto-Export einrichten* opens a small window (collection,
+Easiest: *Library > Plug-in Extras > MHPhotos MCP: Auto-Export einrichten* opens a small window (collection name, typed in,
 minimum rating, photos per round, interval, dry run, active) and writes the file for you. By hand, create
 `~/.mhphotos-lightroom-mcp/autoexport.json` (it is read again every round, no reload needed):
 
