@@ -86,4 +86,18 @@ eq(back.a, true); eq(back.b, true)
 eq(next(AutoExport.decode_done('not json')), nil); eq(next(AutoExport.decode_done(nil)), nil)
 eq(next(AutoExport.decode_done(AutoExport.encode_done({}))), nil)
 
+-- setup dialog helpers: first setup is off + dry run; values are clamped; dest_dir survives
+local dv = AutoExport.dialog_values(nil)
+eq(dv.enabled, false); eq(dv.dry_run, true); eq(dv.min_rating, 4); eq(dv.collection, '')
+dv = AutoExport.dialog_values({ enabled = true, collection = 'K', dry_run = false, max_per_run = 99, min_rating = 0 })
+eq(dv.enabled, true); eq(dv.dry_run, false); eq(dv.max_per_run, 20); eq(dv.min_rating, 1)
+local saved = AutoExport.build_config({ enabled = true, collection = 'Kreuzfahrt', min_rating = 3, max_per_run = 2,
+  interval_minutes = 30, dry_run = true }, { dest_dir = '/Volumes/x' })
+eq(saved.dest_dir, '/Volumes/x'); eq(saved.collection, 'Kreuzfahrt'); eq(saved.interval_minutes, 30)
+eq(AutoExport.build_config({ collection = 'K' }, nil).dest_dir, nil)
+-- what the dialog saves is accepted by the loop's own config reader
+local Json = require 'Json'
+local reread = AutoExport.normalize(Json.decode(Json.encode(saved)), '/h')
+eq(reread.collection, 'Kreuzfahrt'); eq(reread.dry_run, true); eq(reread.dest_dir, '/Volumes/x')
+
 print('autoexport ok')
