@@ -83,6 +83,9 @@ class FakeMHPhotos:
                 else:
                     body = json.loads(raw or b"{}") if raw else {}
                 outer.calls.append((method, self.path, body))
+                if self.headers.get("User-Agent", "").startswith("Python-urllib"):
+                    # Cloudflare in front of mhphotos.de blocks the stock urllib agent.
+                    return self._reply(403, {"error": "error code: 1010"})
                 if self.headers.get("X-Admin-Token") != TOKEN:
                     return self._reply(401, {"error": "unauthorized"})
                 path = self.path

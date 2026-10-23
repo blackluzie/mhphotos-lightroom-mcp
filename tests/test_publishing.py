@@ -30,8 +30,13 @@ class _Inbox:
                     name = part.get_param("name", header="content-disposition")
                     fields[name] = part.get_payload(decode=True)
                 outer.requests.append(
-                    {"path": self.path, "token": self.headers.get("X-Admin-Token"), "fields": fields}
+                    {"path": self.path, "token": self.headers.get("X-Admin-Token"), "fields": fields,
+                     "agent": self.headers.get("User-Agent", "")}
                 )
+                if self.headers.get("User-Agent", "").startswith("Python-urllib"):
+                    self.send_response(403)  # Cloudflare error 1010 for the stock urllib agent
+                    self.end_headers()
+                    return
                 if self.headers.get("X-Admin-Token") != "secret":
                     self.send_response(401)
                     self.end_headers()
@@ -117,3 +122,14 @@ async def test_unknown_photo_sends_nothing(configured):
     res = await server.send_to_mhphotos_inbox(["p1", "nope"], confirm=True)
     assert "error" in res
     assert configured.requests == []
+
+
+def test_requests_carry_own_user_agent(configured, tmp_path):
+    """Cloudflare answers the default Python-urllib agent with 403 / 1010."""
+    f = tmp_path / "a.jpg"
+    f.write_bytes(b"\xff\xd8\xff\xd9")
+    cfg = publishing.inbox_config()
+    res = publishing.upload(cfg, f, {})
+    assert res["status"] != "error", res
+    assert configured.requests[0]["agent"] == publishing.USER_AGENT
+    assert publishing.USER_AGENT.startswith("mhphotos-lightroom-mcp/")
