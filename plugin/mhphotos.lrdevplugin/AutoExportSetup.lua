@@ -5,11 +5,22 @@ local LrTasks = import 'LrTasks'
 local LrDialogs = import 'LrDialogs'
 local LrFileUtils = import 'LrFileUtils'
 local LrPathUtils = import 'LrPathUtils'
-local LrFunctionContext = import 'LrFunctionContext'
-local LrBinding = import 'LrBinding'
-local LrView = import 'LrView'
 
-LrTasks.startAsyncTask(function()
+-- Errors in menu scripts are otherwise swallowed by Lightroom: trace the steps and show failures.
+local function trace(text)
+  pcall(function()
+    local dir = LrPathUtils.child(LrPathUtils.getStandardFilePath('home'), '.mhphotos-lightroom-mcp')
+    LrFileUtils.createAllDirectories(dir)
+    local f = io.open(LrPathUtils.child(dir, 'autoexport-setup.log'), 'a')
+    if f then f:write(os.date('%Y-%m-%d %H:%M:%S ') .. text .. '\n'); f:close() end
+  end)
+end
+
+local function setup()
+  trace('setup: start')
+  local LrFunctionContext = import 'LrFunctionContext'
+  local LrBinding = import 'LrBinding'
+  local LrView = import 'LrView'
   local Commands = require 'Commands'
   local Json = require 'Json'
   local AutoExport = require 'AutoExport'
@@ -22,6 +33,7 @@ LrTasks.startAsyncTask(function()
     if okRead and type(raw) == 'table' then existing = raw end
   end
 
+  trace('setup: modules loaded')
   local okList, listed = LrTasks.pcall(Commands.list_collections, {})
   if not okList then
     LrDialogs.message('MHPhotos Auto-Export', 'Sammlungen konnten nicht gelesen werden: ' .. tostring(listed), 'critical')
@@ -42,6 +54,7 @@ LrTasks.startAsyncTask(function()
   end
   if values.collection == '' then values.collection = items[1].value end
 
+  trace('setup: ' .. #items .. ' collections, opening dialog')
   LrFunctionContext.callWithContext('mhphotos-autoexport-setup', function(context)
     local f = LrView.osFactory()
     local props = LrBinding.makePropertyTable(context)
@@ -74,6 +87,7 @@ LrTasks.startAsyncTask(function()
     local result = LrDialogs.presentModalDialog {
       title = 'MHPhotos: Auto-Export einrichten', contents = contents, actionVerb = 'Speichern',
     }
+    trace('setup: dialog closed with ' .. tostring(result))
     if result ~= 'ok' then return end
 
     local cfg = AutoExport.build_config({
@@ -92,4 +106,15 @@ LrTasks.startAsyncTask(function()
     LrDialogs.message('MHPhotos Auto-Export', 'Gespeichert. Der Auto-Export ' .. state ..
       '\nStatus: ~/.mhphotos-lightroom-mcp/autoexport-status.txt', 'info')
   end)
+  trace('setup: done')
+end
+
+trace('menu script started')
+LrTasks.startAsyncTask(function()
+  local ok, err = LrTasks.pcall(setup)
+  if not ok then
+    local msg = type(err) == 'table' and tostring(err.message) or tostring(err)
+    trace('setup FAILED: ' .. msg)
+    LrDialogs.message('MHPhotos Auto-Export: Fehler', msg .. '\n\n(Protokoll: ~/.mhphotos-lightroom-mcp/autoexport-setup.log)', 'critical')
+  end
 end)
