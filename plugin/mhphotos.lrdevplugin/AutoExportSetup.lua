@@ -34,12 +34,15 @@ local function setup()
   end
 
   trace('setup: modules loaded')
+  trace('setup: reading collections')
   local okList, listed = LrTasks.pcall(Commands.list_collections, {})
+  trace('setup: collections read ok=' .. tostring(okList) .. ' type=' .. type(listed))
   if not okList then
     LrDialogs.message('MHPhotos Auto-Export', 'Sammlungen konnten nicht gelesen werden: ' .. tostring(listed), 'critical')
     return
   end
   local values = AutoExport.dialog_values(existing)
+  trace('setup: values ready, collection list has ' .. tostring(#listed.collections))
   local items, known = {}, {}
   for _, c in ipairs(listed.collections) do
     items[#items + 1] = { title = c.name, value = c.name }
@@ -48,6 +51,7 @@ local function setup()
   if values.collection ~= '' and not known[values.collection] then
     items[#items + 1] = { title = values.collection .. ' (nicht gefunden)', value = values.collection }
   end
+  trace('setup: items built: ' .. #items)
   if #items == 0 then
     LrDialogs.message('MHPhotos Auto-Export', 'Dieser Katalog hat noch keine Sammlung. Lege zuerst eine an.', 'info')
     return
