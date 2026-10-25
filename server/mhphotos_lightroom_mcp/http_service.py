@@ -70,6 +70,12 @@ async def export_photos(photo_ids: list[str], confirm: bool = False, ctx: Contex
     except (OSError, ValueError) as error:
         return {'error': str(error), 'code': 'export_incomplete', 'destination': str(batch)}
     change_id = server.audit.record('export_photos', photo_ids, {'destination': str(batch)}, approved_by=how)
+    marker = batch / '.ready.tmp'
+    marker.write_text(json.dumps({'files': [
+        {**item, 'name': Path(item['path']).name} for item in files
+    ]}))
+    marker.chmod(0o600)
+    marker.replace(batch / 'ready.json')
     return {'applied': True, 'change_id': change_id, 'files': files, 'format': 'rendered JPEG, not original RAW'}
 
 

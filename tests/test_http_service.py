@@ -1,4 +1,6 @@
 import asyncio
+import json
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mhphotos_lightroom_mcp import http_service, server
@@ -58,3 +60,7 @@ def test_verified_export_uses_separate_batches_and_preserves_prior_files(tmp_pat
     assert a['path'] != b['path']
     assert a['sha256'] == b['sha256']
     assert (a['width'], a['height']) == (100, 80)
+
+    marker = json.loads((Path(a['path']).parent / 'ready.json').read_text())
+    assert marker['files'][0]['name'] == 'photo.jpg'
+    assert marker['files'][0]['sha256'] == a['sha256']
