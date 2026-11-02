@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .oauth_http import validate_redirect
@@ -186,7 +187,16 @@ def main():
             if loaded:
                 subprocess.run(['launchctl', 'bootout', domain + '/' + label], check=True)
             subprocess.run(['launchctl', 'enable', domain + '/' + label], check=True)
-            subprocess.run(['launchctl', 'bootstrap', domain, str(path)], check=True)
+            for attempt in range(5):
+                started = subprocess.run(['launchctl', 'bootstrap', domain, str(path)],
+                    capture_output=True, text=True, check=False)
+                if started.returncode == 0:
+                    break
+                # macOS can briefly retain the previous job after successful bootout.
+                time.sleep(0.25 * (attempt + 1))
+            else:
+                raise RuntimeError('Could not load managed service: ' + label + ': ' + started.stderr)
+
         print('Managed services started. Reconnect OAuth clients after the HTTP restart.')
     if args.apply:
         for command in commands:
