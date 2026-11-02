@@ -1,7 +1,7 @@
 # Private Classic read/export connector
 
 `python -m mhphotos_lightroom_mcp.http_service` reuses the existing single-owner
-GitHub OAuth integration, HTTPS issuer, exact callback allowlist and persistent
+GitHub OAuth integration, HTTPS issuer, exact provider-neutral callback allowlist and persistent
 client registration database. Application secrets remain outside the repository.
 The consent page explicitly names catalog reads and confirmed local JPEG exports.
 Access and refresh tokens remain ephemeral; restart requires reconnection.
@@ -40,3 +40,6 @@ rendered JPEG with Lightroom adjustments, not the original RAW file. Validate
 the actual output file, dimensions and hash before downstream use. Missing
 originals, unavailable NAS storage or cold/background Lightroom tasks can cause
 timeouts; a heartbeat alone does not establish that an export works.
+
+Other OAuth MCP clients and native loopback callbacks: [mcp-clients.md](mcp-clients.md).
+Automated installation/recovery: [rebuild.md](rebuild.md).

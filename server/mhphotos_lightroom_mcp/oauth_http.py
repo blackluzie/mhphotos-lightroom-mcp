@@ -51,6 +51,33 @@ HEADERS = {
 }
 
 
+def validate_redirect(uri):
+    """Explicit HTTPS callbacks or an exact native-loopback callback; no patterns."""
+    url = urlsplit(uri)
+    try:
+        port = url.port
+    except ValueError as error:
+        raise ValueError('Invalid callback port') from error
+    if (not url.hostname or url.username or url.password or url.query or url.fragment
+            or not url.path.startswith('/') or any(c.isspace() for c in uri)
+            or any(c in uri for c in ('*', '<', '>', "'", '"', '\\', '%'))):
+        raise ValueError('Callback must be an exact URL without credentials, query, fragment or patterns')
+    if url.scheme == 'https':
+        if not re.fullmatch(r'[A-Za-z0-9.-]+', url.hostname):
+            raise ValueError('Invalid HTTPS callback hostname')
+        if url.hostname in {'localhost', '127.0.0.1', '::1'}:
+            raise ValueError('Native loopback callbacks must use HTTP with an explicit port')
+    elif not (url.scheme == 'http' and url.hostname in {'127.0.0.1', '::1'} and port):
+        raise ValueError('Callback requires HTTPS or an HTTP loopback IP with an explicit port')
+    return uri
+
+
+def callback_origin(uri):
+    validate_redirect(uri)
+    url = urlsplit(uri)
+    return url.scheme + '://' + url.netloc
+
+
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -68,7 +95,7 @@ class Provider:
         self.issuer = issuer
         self.resource = issuer + "/mcp"
         self.secret = secret
-        self.redirects = frozenset(redirects)
+        self.redirects = frozenset(validate_redirect(str(uri)) for uri in redirects)
         self.rate = []
         self.clients = {}
         self.client_db = None
@@ -147,7 +174,7 @@ class Provider:
         ):
             raise RegistrationError(
                 "invalid_client_metadata",
-                "Only configured ChatGPT callbacks and public PKCE clients allowed",
+                "Only configured exact callbacks and public PKCE clients allowed",
             )
         if len(self.clients) >= 100:
             raise RegistrationError(
@@ -441,8 +468,8 @@ def attach_routes(mcp, provider):
                 **HEADERS,
                 "Referrer-Policy": "strict-origin",
                 # Browsers apply form-action to the cross-origin 302 redirect as well.
-                # Only this service and the fixed ChatGPT HTTPS origin are permitted.
-                "Content-Security-Policy": "default-src 'none'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'",
+                # Only this service and the validated callback origin are permitted.
+                "Content-Security-Policy": "default-src 'none'; form-action 'self' " + callback_origin(str(item["params"].redirect_uri)) + "; frame-ancestors 'none'",
             },
         )
 
@@ -610,24 +637,11 @@ def create_http_server():
         raise ValueError(
             "MHPHOTOS_PUBLIC_URL must be an HTTPS origin without path, port or credentials"
         )
-    redirects = os.environ.get("MHPHOTOS_CHATGPT_REDIRECT_URIS", "").split()
+    redirects = os.environ.get("MHPHOTOS_REDIRECT_URIS", os.environ.get("MHPHOTOS_CHATGPT_REDIRECT_URIS", "")).split()
     if not redirects:
-        raise ValueError(
-            "Set exact ChatGPT callback URLs in MHPHOTOS_CHATGPT_REDIRECT_URIS"
-        )
+        raise ValueError("Set exact callback URLs in MHPHOTOS_REDIRECT_URIS")
     for uri in redirects:
-        url = urlsplit(uri)
-        if (
-            url.scheme != "https"
-            or url.netloc != "chatgpt.com"
-            or url.query
-            or url.fragment
-            or not (
-                re.fullmatch(r"/connector/oauth/[A-Za-z0-9_-]+", url.path)
-                or url.path == "/connector_platform_oauth_redirect"
-            )
-        ):
-            raise ValueError("Only exact ChatGPT connector callback URLs are allowed")
+        validate_redirect(uri)
     path = Path.home() / ".config/mhphotos-lightroom/github-client-secret"
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd) as handle:

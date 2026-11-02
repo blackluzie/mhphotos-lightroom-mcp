@@ -27,7 +27,8 @@ def test_full_http_oauth():
     asyncio.run(flow())
 
 
-async def flow():
+async def flow(redirect=REDIRECT):
+    REDIRECT = redirect
     provider = Provider(ORIGIN, "test-only", [REDIRECT])
     server = SecureHTTP(
         "test",
@@ -131,7 +132,7 @@ async def flow():
         assert consent.status_code == 200
         assert consent.headers["referrer-policy"] == "strict-origin"
         assert (
-            "form-action 'self' https://chatgpt.com;"
+            "form-action 'self' " + urlsplit(REDIRECT).scheme + "://" + urlsplit(REDIRECT).netloc + ";"
             in consent.headers["content-security-policy"]
         )
         assert "default-src 'none'" in consent.headers["content-security-policy"]

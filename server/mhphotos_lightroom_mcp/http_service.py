@@ -104,7 +104,7 @@ def main():
     config_path = Path.home() / '.config/mhphotos-lightroom/desktop.json'
     config = json.loads(config_path.read_text())
     os.environ['MHPHOTOS_PUBLIC_URL'] = config['public_url']
-    os.environ['MHPHOTOS_CHATGPT_REDIRECT_URIS'] = ' '.join(config['redirect_uris'])
+    os.environ['MHPHOTOS_REDIRECT_URIS'] = ' '.join(config['redirect_uris'])
     path = Path.home() / '.mhphotos-lightroom-mcp/bridge.json'
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd) as f:
