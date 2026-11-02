@@ -82,7 +82,7 @@ reconnect ChatGPT/Claude after HTTP restart even when the registry is restored.
 ## n8n / Hetzner
 
 The server stack and encrypted OneDrive recovery are in the other repository:
-<https://github.com/blackluzie/apps-platform/tree/feat/mhphotos-n8n-stack/infra/mhphotos-n8n>.
+<https://github.com/blackluzie/apps-platform/tree/main/infra/mhphotos-n8n>.
 The server restore drill rebuilds an **isolated disposable** copy, disables its
 workflows before server startup, verifies paired credential decryption and
 readiness, and has no external network or published ports. It preserves real
