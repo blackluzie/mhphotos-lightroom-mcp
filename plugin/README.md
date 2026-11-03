@@ -109,6 +109,9 @@ Known Lightroom behaviours to watch:
 - **Presets made by `create_preset`** are not listed by `LrApplication.developPresetFolders()` and did not show in the Develop
   panel in the first run (Lightroom 15.6). `addDevelopPresetForPlugin` does return a handle; the plugin keeps it until reload
   and `create_preset` reports `returned_by_lightroom` and `listed_in_presets`.
+  Since then `create_preset` additionally writes the preset as an XMP file to
+  `~/Library/Application Support/Adobe/CameraRaw/Settings/MHPhotos/` (never overwriting); Lightroom Classic lists it in the
+  preset group "MHPhotos" after a restart (**to be confirmed in real Lightroom**).
 - Lightroom reports "no colour" as `grey`; the tools map it to `none` (confirmed in Lightroom).
 - **Virtual copies** are only made for the *selected* photos, a selection only holds photos of the *active source*,
   and Adobe's forum reports it works reliably only in the Library grid. The plugin therefore switches to the Library

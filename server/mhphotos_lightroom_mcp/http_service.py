@@ -18,7 +18,18 @@ from .oauth_http import SCOPE, create_http_server
 READ_TOOLS = (
     'connection_status', 'list_collections', 'list_photos',
     'get_photo_metadata', 'get_photo_previews', 'get_contact_sheet',
+    'get_develop_settings', 'list_presets', 'list_changes',
 )
+# Catalog edits, offered only when the operator enabled them (desktop.json "allow_writes").
+# Nothing here deletes photos or publishes; ratings, flags, labels, titles and keywords are undoable,
+# develop changes are history steps in Lightroom. "Abgelehnt" is set_flag(flag="rejected").
+WRITE_TOOLS = (
+    'set_rating', 'set_flag', 'set_color_label', 'set_title_caption', 'add_keywords',
+    'create_collection', 'add_to_collection', 'create_virtual_copies', 'undo_last_change',
+    'apply_preset', 'apply_develop_settings', 'sync_develop_settings', 'create_preset',
+)
+ADDITIVE_TOOLS = {'create_collection', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords'}
+WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
 LOCAL_TOOLS = ('export_photos',)
 WEBHOOK_TOKEN = '.config/mhphotos-lightroom/n8n-webhook-token'
 
@@ -130,13 +141,16 @@ async def export_photos(photo_ids: list[str], confirm: bool = False) -> dict:
     return result
 
 
-def register_tools(app):
-    for name in READ_TOOLS + LOCAL_TOOLS:
+def register_tools(app, writes=None):
+    writes = os.environ.get(WRITES_FLAG) == '1' if writes is None else writes
+    names = READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ())
+    for name in names:
         function = export_photos if name == 'export_photos' else getattr(server, name)
+        overwrites = name in WRITE_TOOLS and name not in ADDITIVE_TOOLS
         app.add_tool(function,
             structured_output=False if name in {'get_photo_previews', 'get_contact_sheet'} else None,
             annotations=ToolAnnotations(readOnlyHint=name in READ_TOOLS,
-                destructiveHint=False, idempotentHint=name in READ_TOOLS, openWorldHint=False),
+                destructiveHint=overwrites, idempotentHint=name in READ_TOOLS, openWorldHint=False),
             meta={'securitySchemes': [{'type': 'oauth2', 'scopes': [SCOPE]}]})
 
 
@@ -148,7 +162,7 @@ def create_app():
 
 def main():
     # Never inherit an accidental write/publish opt-in from another launch context.
-    for key in ('MHPHOTOS_ALLOW_WRITES', 'MHPHOTOS_ALLOW_PUBLISH', 'MHPHOTOS_ALLOW_INSTAGRAM'):
+    for key in ('MHPHOTOS_ALLOW_WRITES', 'MHPHOTOS_ALLOW_PUBLISH', 'MHPHOTOS_ALLOW_INSTAGRAM', WRITES_FLAG):
         os.environ.pop(key, None)
     if not server.permissions.export_dir():
         raise ValueError('An operator-controlled export directory is required')
@@ -163,6 +177,12 @@ def main():
     os.environ['MHPHOTOS_GITHUB_CLIENT_ID'] = str(config['github_client_id'])
     os.environ['MHPHOTOS_GITHUB_OWNER_ID'] = str(config['github_owner_id'])
     os.environ['MHPHOTOS_GITHUB_LOGIN'] = config.get('github_login') or ''
+    if config.get('allow_writes') is True:
+        os.environ[WRITES_FLAG] = '1'
+        os.environ['MHPHOTOS_ALLOW_WRITES'] = '1'
+        # Stateless HTTP cannot ask the user (elicitation never arrives); the human check is the
+        # client's per-tool permission ("ask" in claude.ai) plus the mandatory dry run / confirm=true.
+        os.environ['MHPHOTOS_CONFIRMATION'] = 'flag'
     if webhook_url(config.get('n8n_webhook_url')):
         read_webhook_token(Path.home())  # Fail at start, not silently on the first export.
         os.environ['MHPHOTOS_N8N_WEBHOOK_URL'] = config['n8n_webhook_url']

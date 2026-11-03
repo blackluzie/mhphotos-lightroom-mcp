@@ -17,7 +17,7 @@ from typing import Any
 import anyio
 from mcp.server.fastmcp import Context, FastMCP, Image
 
-from . import audit, develop, gate, imaging, permissions, publishing
+from . import audit, develop, gate, imaging, permissions, preset_xmp, publishing
 from .adapters import (
     COLOR_LABELS,
     FLAGS,
@@ -942,8 +942,9 @@ async def create_preset(
 ) -> dict[str, Any]:
     """Create a new develop preset in Lightroom from settings (same parameters as apply_develop_settings).
 
-    It appears under the plugin's own preset folder. Dry run unless confirm=true; needs
-    operator opt-in. Creating a preset changes no photo.
+    It is usable by apply_preset right away and is also written as an XMP preset file, which
+    Lightroom Classic lists in the preset group "MHPhotos" after its next start. Dry run unless
+    confirm=true; needs operator opt-in. Creating a preset changes no photo.
     """
     if not develop.valid_preset_name(name):
         return {"error": f"name required (max {develop.MAX_PRESET_NAME} characters, no '/')"}
@@ -966,8 +967,15 @@ async def create_preset(
     result = await _run(_adapter.create_preset, name.strip(), clean)
     if _is_error(result):
         return result
-    change_id = audit.record("create_preset", [], {"name": name.strip(), "settings": clean}, approved_by=how)
-    return {"applied": True, "change_id": change_id, **result}
+    # The SDK preset is usable by apply_preset in this Lightroom run but not shown in the Develop
+    # panel; the XMP file makes it a normal, visible preset after the next Lightroom start.
+    try:
+        written = preset_xmp.write(name.strip(), clean)
+    except OSError as exc:
+        written = {"preset_file": None, "preset_file_note": f"XMP preset not written: {exc.strerror or exc}"}
+    change_id = audit.record("create_preset", [], {"name": name.strip(), "settings": clean,
+                             "preset_file": written.get("preset_file")}, approved_by=how)
+    return {"applied": True, "change_id": change_id, **result, **written}
 
 
 # ---------------------------------------------------------------- MHPhotos app
