@@ -20,6 +20,7 @@ READ_TOOLS = (
     'connection_status', 'list_collections', 'list_photos',
     'get_photo_metadata', 'get_photo_previews', 'get_contact_sheet',
     'get_develop_settings', 'list_presets', 'list_changes',
+    'catalog_audit_start', 'catalog_audit_status', 'catalog_audit_results',
 )
 # Catalog edits, offered only when the operator enabled them (desktop.json "allow_writes").
 # Nothing here deletes photos or publishes; ratings, flags, labels, titles and keywords are undoable,
@@ -28,8 +29,10 @@ WRITE_TOOLS = (
     'set_rating', 'set_flag', 'set_color_label', 'set_title_caption', 'add_keywords',
     'create_collection', 'add_to_collection', 'create_virtual_copies', 'undo_last_change',
     'apply_preset', 'apply_develop_settings', 'sync_develop_settings', 'create_preset',
+    'catalog_audit_collections',
 )
-ADDITIVE_TOOLS = {'create_collection', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords'}
+ADDITIVE_TOOLS = {'create_collection', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords',
+    'catalog_audit_collections'}
 WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
 # Read-only views of the MHPhotos app (Instagram library, inbox), offered when desktop.json
 # names the MHPhotos site ("mhphotos_url"); the admin token stays in the macOS Keychain.

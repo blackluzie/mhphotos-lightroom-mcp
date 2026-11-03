@@ -17,7 +17,16 @@ from typing import Any
 import anyio
 from mcp.server.fastmcp import Context, FastMCP, Image
 
-from . import audit, develop, gate, imaging, permissions, preset_xmp, publishing
+from . import (
+    audit,
+    catalog_audit,
+    develop,
+    gate,
+    imaging,
+    permissions,
+    preset_xmp,
+    publishing,
+)
 from .adapters import (
     COLOR_LABELS,
     FLAGS,
@@ -513,6 +522,131 @@ async def backlog_report(year: int, min_rating: int = 5, sample: int = 30) -> di
         "truncated": total > len(candidates),
         "note": 'Handled means: keyword "MHPhotos-Inbox" or "Instagram" present.',
     }
+
+
+# ---------------------------------------------------------------- catalog audit
+AUDIT_KINDS = ", ".join(catalog_audit.KINDS)
+
+
+@mcp.tool()
+async def catalog_audit_start(year: int | None = None, check_files: bool = False) -> dict[str, Any]:
+    """Start a read-only check of the whole catalog: photos in the wrong date folder, and duplicates.
+
+    Folders are JJJJ/JJJJ-MM/JJJJ-MM-TT; the capture time decides where a photo belongs. Runs in the
+    background (about 1000 photos per page; 250k+ photos take several minutes), follow it with
+    catalog_audit_status, then read catalog_audit_results. year limits the run to one year (by
+    capture date or year folder), useful for a first test. check_files also looks whether each file
+    still exists on disk (slow over a NAS). Duplicate candidates (same second, camera, pixel size,
+    file type and byte size) are confirmed by a fingerprint of the first and last MiB of each file.
+    Changes nothing; only one run at a time.
+    """
+    if year is not None and not 1900 <= year <= 2200:
+        return {"error": "year must be four digits"}
+    adapter = _adapter
+    started, job = catalog_audit.start(
+        lambda offset, limit, refresh: adapter.audit_page(offset, limit, refresh), year, check_files)
+    return {"started": started, **job.status(),
+            **({} if started else {"hint": "A run is already in progress; see catalog_audit_status."})}
+
+
+@mcp.tool()
+async def catalog_audit_status() -> dict[str, Any]:
+    """Progress of the running catalog check, or the summary of the last finished one."""
+    job = catalog_audit.current()
+    out: dict[str, Any] = job.status() if job else {"status": "none"}
+    if out["status"] in ("none", "done", "failed"):
+        saved = catalog_audit.load_result()
+        if saved:
+            out["last_result"] = {k: saved.get(k) for k in ("finished_at", "seconds", "year", "summary",
+                                                             "unsupported_keys")}
+    return out
+
+
+@mcp.tool()
+async def catalog_audit_results(
+    kind: str = "wrong_folder", year: int | None = None, level: str | None = None,
+    limit: int = 50, offset: int = 0,
+) -> dict[str, Any]:
+    """Findings of the last catalog check, page by page.
+
+    kind: wrong_folder (entries have found = folder it is in, expected = day folder it belongs in,
+    level year|month|day, day_diff for neighbouring days, often a time-zone or midnight effect),
+    no_date, implausible_date, unrecognised_folder, missing_file, duplicates (verified groups:
+    keep = the copy with the most work in it, remove = the others), possible_duplicates (same
+    shot and similar file name but different bytes; look at them with get_contact_sheet first).
+    year filters by capture year (wrong_folder: the target year); level filters wrong_folder.
+    """
+    if kind not in catalog_audit.KINDS:
+        return {"error": f"kind must be one of: {AUDIT_KINDS}"}
+    saved = catalog_audit.load_result()
+    if not saved:
+        return {"error": "No finished catalog check yet. Start one with catalog_audit_start."}
+    items = saved["findings"].get(kind, [])
+    if year is not None:
+        key = "expected" if kind == "wrong_folder" else "captured"
+        items = [i for i in items if str(i.get(key) or "")[:4] == str(year)]
+    if level is not None:
+        items = [i for i in items if i.get("level") == level]
+    if kind == "wrong_folder":
+        items = sorted(items, key=lambda i: (i["expected"], i["id"]))
+    limit, offset = max(1, min(limit, 200)), max(0, offset)
+    page = items[offset : offset + limit]
+    out = {"kind": kind, "checked_at": saved.get("finished_at"), "total": len(items), "items": page}
+    if offset + len(page) < len(items):
+        out["next_offset"] = offset + len(page)
+    return out
+
+
+@mcp.tool()
+async def catalog_audit_collections(
+    kind: str, year: int | None = None, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Put findings of the last catalog check into review collections below the set "Prüfen".
+
+    wrong_folder: "Prüfen › Ordner falsch › → 2021-07-14" (one per target day; per month when there
+    are more than 300 days), so you can drag each collection onto its folder in Lightroom's Folders
+    panel (Lightroom moves the files and keeps the catalog in order; never move them in Finder).
+    duplicates: "Prüfen › Duplikate › entfernen" and "behalten (Gegenstück)"; possible_duplicates
+    and the other kinds get one collection each. Moves and deletes nothing: the Lightroom SDK
+    cannot do either. Additive; running again adds to the same collections. year: only that
+    capture year. Dry run unless confirm=true; needs operator opt-in.
+    """
+    if kind not in catalog_audit.KINDS:
+        return {"error": f"kind must be one of: {AUDIT_KINDS}"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    saved = catalog_audit.load_result()
+    if not saved:
+        return {"error": "No finished catalog check yet. Start one with catalog_audit_start."}
+    if year is not None and kind != "wrong_folder":
+        saved = {**saved, "findings": {**saved["findings"], kind: [
+            i for i in saved["findings"][kind] if str(i.get("captured") or "")[:4] == str(year)]}}
+    groups, mode = catalog_audit.review_groups(saved, kind, year)
+    groups = [g for g in groups if g["photo_ids"]]
+    photos = sum(len(g["photo_ids"]) for g in groups)
+    plan = {"kind": kind, "checked_at": saved.get("finished_at"), "root": catalog_audit.ROOT_SET,
+            "collections": len(groups), "photos": photos, "layout": mode,
+            "first_collections": [f"{g['set']} › {g['name']} ({len(g['photo_ids'])})" for g in groups[:15]]}
+    if not groups:
+        return {**plan, "nothing_to_do": True}
+    if not confirm:
+        return {"dry_run": True, **plan, "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(
+        ctx, f"{len(groups)} Prüf-Sammlungen mit {photos} Fotos unter '{catalog_audit.ROOT_SET}' anlegen")
+    if not approved:
+        return gate.refusal(how)
+    added = missing = 0
+    for call in catalog_audit.chunk_groups(groups):
+        res = await _run(_adapter.create_review_collections, catalog_audit.ROOT_SET, call)
+        if _is_error(res):
+            return {**res, "partly_done": {"photos_added": added}} if added else res
+        added += sum(c["added"] for c in res["collections"])
+        missing += int(res.get("missing") or 0)
+    result = {"collections": len(groups), "photos_added": added, "photos_no_longer_in_catalog": missing}
+    change_id = audit.record("catalog_audit_collections", [], {"kind": kind, "year": year, "layout": mode},
+                             approved_by=how, result=result)
+    return {"applied": True, "change_id": change_id, **plan, **result,
+            "note": "Not undoable here; delete the set 'Prüfen' in Lightroom when you are done."}
 
 
 @mcp.tool()
@@ -1660,10 +1794,12 @@ TOOLSETS: dict[str, set[str]] = {
         "connection_status", "lightroom_selftest", "list_collections", "list_photos",
         "get_photo_metadata", "get_photo_previews", "get_contact_sheet", "get_develop_settings",
         "list_presets", "backlog_report", "list_changes",
+        "catalog_audit_start", "catalog_audit_status", "catalog_audit_results",
     },
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
         "create_collection", "add_to_collection", "export_photos", "undo_last_change",
+        "catalog_audit_collections",
     },
     "develop": {
         "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",

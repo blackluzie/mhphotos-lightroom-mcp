@@ -1,6 +1,6 @@
 # Plan: Katalog-Prüfung (falscher Ordner, Duplikate)
 
-Stand: 2026-11-03 · Status: **geplant, noch nicht gebaut**
+Stand: 2026-11-03 · Status: **gebaut** (Plugin 0.1.2, Werkzeuge `catalog_audit_*`; Ablauf: `docs/workflows.md` Nr. 11)
 
 ## Vorgaben vom Eigentümer
 
@@ -31,7 +31,9 @@ Verknüpfung.
    (vor 1990, in der Zukunft, 1970-01-01), fehlende Dateien.
 4. **Duplikate, zweistufig:**
    - Kandidaten: gleiche Aufnahmezeit (Sekunde) + Kamera + Pixelmaße (+ Dateigröße).
-   - Bestätigen: SHA-256 nur für Kandidaten (NAS-Last klein halten).
+   - Bestätigen: SHA-256 über Größe + erstes und letztes MiB, nur für Kandidaten (NAS-Last klein halten).
+   - „Möglich“ (andere Bytes): nur bei gleichem Dateinamen mit Kopie-Endung (`IMG_1-2`, `IMG_1 (1)`),
+     sonst wären Serienbilder derselben Sekunde Fehlalarme.
    - Nicht als doppelt zählen: virtuelle Kopien, RAW+JPEG-Paare, Serienbilder mit anderem Inhalt.
    - Behalten-Vorschlag: Foto mit Entwicklung, Sternen, Stichwörtern, Sammlungen, Veröffentlichung.
 5. **Prüf-Sammlungen** (Schreib-Werkzeuge): `Prüfen › Ordner › gehört nach JJJJ-MM-TT`,

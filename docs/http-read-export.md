@@ -8,7 +8,8 @@ Access and refresh tokens remain ephemeral; restart requires reconnection.
 
 The public tool allowlist is: `connection_status`, `list_collections`, `list_photos`,
 `get_photo_metadata`, `get_photo_previews`, `get_contact_sheet`, `get_develop_settings`,
-`list_presets`, `list_changes` (reads) and `export_photos`. No MHPhotos-site, publishing or
+`list_presets`, `list_changes`, `catalog_audit_start`, `catalog_audit_status`,
+`catalog_audit_results` (reads; the audit runs on the Mac and changes nothing) and `export_photos`. No MHPhotos-site, publishing or
 Instagram tools are registered, and nothing deletes photos.
 
 **MHPhotos reads (opt-in).** `rebuild-mac.sh --mhphotos-url https://<site>` stores `mhphotos_url`; the service
@@ -20,7 +21,8 @@ token is read from the Keychain entry `mhphotos-admin-token`, never from the cli
 `"allow_writes": true` in `desktop.json`; the service then also offers `set_rating`, `set_flag`
 (`"rejected"` = Lightroom's *Abgelehnt*), `set_color_label`, `set_title_caption`, `add_keywords`,
 `create_collection`, `add_to_collection`, `create_virtual_copies`, `undo_last_change`,
-`apply_preset`, `apply_develop_settings`, `sync_develop_settings` and `create_preset`, and the
+`apply_preset`, `apply_develop_settings`, `sync_develop_settings`, `create_preset` and
+`catalog_audit_collections` (review collections only; nothing is moved or removed), and the
 consent page names these rights. Every edit is a dry run until `confirm=true`. Because this
 stateless service cannot ask the user itself, the human check is the client's per-tool
 permission: in claude.ai set the write tools to "ask". Ratings, flags, labels, titles and

@@ -237,12 +237,45 @@ def main():
     if args.apply:
         for command in commands:
             subprocess.run(command, check=True)
-        target = home / 'Documents/MHPhotos-Lightroom-Plugin/mhphotos.lrdevplugin'
-        if not target.exists():
-            shutil.copytree(repo / 'plugin/mhphotos.lrdevplugin', target)
-            print('Plugin copied. Add it once in Lightroom Plug-in Manager:', target)
-        else:
-            print('Existing plugin preserved:', target)
+        print(install_plugin(repo / 'plugin/mhphotos.lrdevplugin',
+            home / 'Documents/MHPhotos-Lightroom-Plugin/mhphotos.lrdevplugin'))
+
+
+def plugin_version(plugin: Path) -> str | None:
+    try:
+        text = (plugin / 'Version.lua').read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith('return '):
+            return line.split("'")[1] if "'" in line else None
+    return None
+
+
+def install_plugin(source: Path, target: Path) -> str:
+    """Copy the plugin on first run; replace it when the repository has another version.
+
+    Settings live in ~/.mhphotos-lightroom-mcp, never inside the plugin folder, so replacing it
+    loses nothing. The old folder is swapped out only after the new copy is complete.
+    """
+    if target.is_symlink():
+        return f'Plugin is a symlink, left as it is: {target}'
+    if not target.exists():
+        shutil.copytree(source, target)
+        return f'Plugin copied. Add it once in Lightroom Plug-in Manager: {target}'
+    old, new = plugin_version(target), plugin_version(source)
+    if old == new:
+        return f'Plugin {old} is current: {target}'
+    staging, retired = target.with_name(target.name + '.new'), target.with_name(target.name + '.old')
+    for leftover in (staging, retired):
+        if leftover.exists():
+            shutil.rmtree(leftover)
+    shutil.copytree(source, staging)
+    target.rename(retired)
+    staging.rename(target)
+    shutil.rmtree(retired)
+    return (f'Plugin updated {old} -> {new}: {target}. In Lightroom: Plug-in Manager -> select it -> '
+            'Reload Plug-in (or restart Lightroom).')
 
 
 if __name__ == '__main__':
