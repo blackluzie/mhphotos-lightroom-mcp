@@ -202,6 +202,12 @@ class CatalogAdapter(Protocol):
 
     def create_preset(self, name: str, settings: dict[str, Any]) -> dict[str, Any]: ...
 
+    def audit_page(self, offset: int, limit: int, refresh: bool = False) -> dict[str, Any]:
+        """{"total", "offset", "next_offset", "photos": [compact records], "unsupported"}"""
+
+    def create_review_collections(self, root: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
+        """{"collections": [{"set", "name", "added"}], "missing"}"""
+
 
 def _mock_preview(photo_id: str, size: int) -> bytes:
     """A real JPEG (flat colour derived from the id) so image handling can be tested."""
@@ -263,6 +269,7 @@ class MockAdapter:
             {"folder": "User Presets", "name": "Landschaft Klar"},
             {"folder": "Adobe Color", "name": "Vivid"},
         ]
+        self.review_collections: list[dict[str, Any]] = []
         self._collections = [
             Collection("c1", "Portraits", ("p1", "p2", "p3")),
             Collection("c2", "Landschaft", ("p4", "p5")),
@@ -381,6 +388,33 @@ class MockAdapter:
             self._develop[cid] = dict(self._develop[p.id])
             copies.append({"source_id": p.id, "id": cid})
         return {"copies": copies}
+
+    def _audit_records(self) -> list[dict[str, Any]]:
+        out = []
+        for p in self._photos.values():
+            day = p.capture_time[:10]
+            if p.id == "p3":
+                day = "2026-05-01"  # sample: one photo in the folder of the day before
+            out.append({"id": p.id, "path": f"/Volumes/NAS/Fotos/{day[:4]}/{day[:7]}/{day}/{p.filename}",
+                        "size": 1000 + len(p.id), "fmt": p.filename.rsplit(".", 1)[-1].upper(),
+                        "w": 6000, "h": 4000, "t": p.capture_time, "cam": p.camera,
+                        **({"r": p.rating} if p.rating else {})})
+        return out
+
+    def audit_page(self, offset, limit, refresh=False):
+        recs = self._audit_records()
+        part = recs[offset : offset + limit]
+        return {"total": len(recs), "offset": offset, "next_offset": offset + len(part), "photos": part,
+                "unsupported": []}
+
+    def create_review_collections(self, root, groups):
+        made, missing = [], 0
+        for g in groups:
+            found = [i for i in g["photo_ids"] if i in self._photos]
+            missing += len(g["photo_ids"]) - len(found)
+            made.append({"set": g["set"], "name": g["name"], "added": len(found)})
+            self.review_collections.append({"root": root, **g, "photo_ids": found})
+        return {"collections": made, "missing": missing}
 
     def _all(self, photo_ids: list[str]) -> list[Photo]:
         return [self.get_photo(i) for i in photo_ids]  # raises before any change

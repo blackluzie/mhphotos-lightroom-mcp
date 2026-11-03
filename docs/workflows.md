@@ -111,3 +111,22 @@ entry `mhphotos-admin-token`) and the n8n inbox workflow.
    `instagramId`; when you take it over in the MHPhotos inbox, the app links the Instagram post to the new homepage
    photo, so it disappears from step 1.
 5. Optional (with `--allow-writes`): `add_keywords([photo_id], ["Instagram"], confirm=true)` marks the original.
+
+## 11. Catalog check: photos in the wrong date folder, duplicates
+Folders are `JJJJ/JJJJ-MM/JJJJ-MM-TT`; the capture time decides where a photo belongs. Plan: `docs/plan-katalog-pruefung.md`.
+1. `catalog_audit_start(year=2020)` for a first test, later without `year` for the whole catalog. It runs in the
+   background on the Mac and changes nothing; `catalog_audit_status()` shows progress and, at the end, the counts.
+2. `catalog_audit_results(kind="wrong_folder", year=…, level="year"|"month"|"day")`: `found` is the folder it is in,
+   `expected` the day folder it belongs in. `day_diff` ±1 is often a time-zone or midnight effect (camera clock on
+   travel), so check those before moving. Other kinds: `no_date`, `implausible_date`, `unrecognised_folder`,
+   `missing_file` (only with `check_files=true`), `duplicates`, `possible_duplicates`.
+3. Duplicates: candidates share capture second, camera, pixel size, file type and byte size; a fingerprint of the
+   first and last MiB confirms them. `keep` is the copy with the most work in it (edits, stars, pick, keywords,
+   label, virtual copies, right folder). `possible_duplicates` (same shot, same file name with a copy suffix,
+   different bytes) need a look with `get_contact_sheet`. Virtual copies and RAW+JPEG pairs never count.
+4. With `--allow-writes`: `catalog_audit_collections(kind, year, confirm=true)` builds review collections under
+   *Prüfen* (e.g. *Prüfen › Ordner falsch › → 2021-07-14*, *Prüfen › Duplikate › entfernen*). The Lightroom SDK
+   cannot move or remove photos: drag each collection's photos onto the target folder in the Folders panel, and
+   remove duplicates from the *entfernen* collection yourself. Never move files in Finder or on the NAS directly.
+5. Reading the files for fingerprints needs macOS access to network volumes for the service; if
+   `duplicate_files_unreadable` shows up in the summary, allow it in System Settings → Privacy & Security.

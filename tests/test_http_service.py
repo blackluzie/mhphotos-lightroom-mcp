@@ -18,6 +18,7 @@ def test_public_tools_only_read_and_local_export():
         'connection_status', 'list_collections', 'list_photos',
         'get_photo_metadata', 'get_photo_previews', 'get_contact_sheet', 'export_photos',
         'get_develop_settings', 'list_presets', 'list_changes',
+        'catalog_audit_start', 'catalog_audit_status', 'catalog_audit_results',
     }
     for tool in tools:
         assert tool.annotations.destructiveHint is False

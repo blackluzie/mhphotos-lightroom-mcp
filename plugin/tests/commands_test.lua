@@ -46,6 +46,7 @@ local set = { getName = function() return 'Set' end,
   getChildCollectionSets = function() return {} end }
 
 local writes = 0
+local createdSets = {}
 local lastWriteOpts
 local createdCollection, selected, activeSource, virtualCopyName
 local viewCalls = {}
@@ -57,7 +58,33 @@ local fakeCatalog = {
   getCollectionByLocalIdentifier = function(_, id) if id == 7 then return coll end end,
   withWriteAccessDo = function(_, name, fn, opts) writes = writes + 1; lastWriteOpts = opts; fn(); return 'executed' end,
   createKeyword = function(_, name) return { getName = function() return name end } end,
-  createCollection = function(_, name, parent, prior) createdCollection = { name = name, prior = prior, localIdentifier = 99,
+  batchGetRawMetadata = function(_, ps, keys)
+    local out = {}
+    for _, p in ipairs(ps) do
+      local t = {}
+      for _, k in ipairs(keys) do
+        if k == 'countVirtualCopies' then error('unknown key ' .. k) end
+        t[k] = p.raw[k]
+      end
+      out[p] = t
+    end
+    return out
+  end,
+  batchGetFormattedMetadata = function(_, ps, keys)
+    local out = {}
+    for _, p in ipairs(ps) do
+      local t = {}
+      for _, k in ipairs(keys) do t[k] = p.fmt[k] end
+      out[p] = t
+    end
+    return out
+  end,
+  createCollectionSet = function(_, name, parent, prior)
+    local s = { name = name, parent = parent, prior = prior }
+    createdSets[#createdSets + 1] = s
+    return s
+  end,
+  createCollection = function(_, name, parent, prior) createdCollection = { name = name, parent = parent, prior = prior, localIdentifier = 99,
     addPhotos = function(self, ps) self.added = ps end, isSmartCollection = function() return false end }; return createdCollection end,
   setSelectedPhotos = function(_, p) selected = p end,
   setActiveSources = function(_, src) activeSource = src; return true end,
@@ -91,7 +118,11 @@ function import(name)
              gridView = function() viewCalls[#viewCalls + 1] = 'grid' end }
   end
   if name == 'LrTasks' then return { sleep = function() end, pcall = pcall } end
-  if name == 'LrDate' then return { currentTime = function() return os.clock() end } end
+  if name == 'LrDate' then
+    return { currentTime = function() return os.clock() end,
+      -- the real one formats in the local time zone; UTC keeps the test deterministic
+      timeToUserFormat = function(t, fmt) return os.date('!' .. fmt, t + 978307200) end }
+  end
   if name == 'LrStringUtils' then return { encodeBase64 = function(d) return 'B64(' .. d .. ')' end } end
   if name == 'LrApplication' then
     return {
@@ -294,5 +325,46 @@ for _, c in ipairs(st3.checks) do
   if not c.ok then eq(c.name, 'API present: catalog'); assert(c.detail:find('createVirtualCopies'), c.detail) end
 end
 fakeCatalog.createVirtualCopies = origVC
+
+-- catalog audit page (read only)
+p1.raw.path = '/Volumes/NAS/Fotos/2001/2001-01/2001-01-01/IMG_1.dng'
+p1.raw.fileSize = 1234; p1.raw.fileFormat = 'DNG'; p1.raw.dimensions = { width = 6000, height = 4000 }
+p1.raw.lastEditTime = 5; p1.raw.colorNameForLabel = 'grey'
+p1.raw.rating = 5; p1.raw.pickStatus = 1; p1.raw.isVirtualCopy = nil
+p1.raw.keywords = { { getName = function() return 'a' end }, { getName = function() return 'b' end } }
+p2.raw.rating = 0; p2.raw.pickStatus = 0
+p1.fmt.cameraSerialNumber = 'SN1'
+p2.raw.path = '/Volumes/NAS/Fotos/2026/2026-10/IMG_2.dng'
+p2.raw.dateTimeOriginalISO8601 = '2026-10-14T00:30:00.12+02:00'
+p2.raw.colorNameForLabel = 'red'
+local ap = Commands.run('audit_page', { limit = 1 })
+eq(ap.total, #photos); eq(ap.offset, 0); eq(ap.next_offset, 1); eq(#ap.photos, 1)
+local a1 = ap.photos[1]
+eq(a1.id, 'u1'); eq(a1.path, p1.raw.path); eq(a1.size, 1234); eq(a1.fmt, 'DNG'); eq(a1.w, 6000); eq(a1.h, 4000)
+eq(a1.t, '2001-01-01T00:00:00'); eq(a1.r, 5); eq(a1.pick, 1); eq(a1.kw, 2); eq(a1.label, nil); eq(a1.edited, true)
+eq(a1.cam, 'Canon'); eq(a1.serial, 'SN1'); eq(a1.vc, nil)
+eq(ap.unsupported[1], 'countVirtualCopies')
+local a2 = Commands.run('audit_page', { offset = 1, limit = 1 }).photos[1]
+eq(a2.id, 'u2'); eq(a2.t, '2026-10-14T00:30:00', 'wall clock from the ISO string, not UTC'); eq(a2.r, nil)
+eq(a2.label, 'red'); eq(a2.edited, nil); eq(a2.pick, nil)
+local past = Commands.run('audit_page', { offset = 50, limit = 10 })
+eq(#past.photos, 0); eq(past.next_offset, 50)
+eq(#Commands.run('audit_page', { limit = 99999 }).photos, #photos, 'limit is capped, not rejected')
+
+-- review collections (write, additive): one set per kind below the root set
+writes = 0
+local rc = Commands.run('create_review_collections', { root = 'Prüfen', groups = {
+  { set = 'Ordner', name = '→ 2001-01-01', photo_ids = { 'u1', 'gone' } },
+  { set = 'Ordner', name = '→ 2026-10-14', photo_ids = { 'u2' } },
+} })
+eq(writes, 1, 'one write transaction'); eq(rc.missing, 1); eq(#rc.collections, 2); eq(rc.collections[1].added, 1)
+eq(createdSets[1].name, 'Prüfen'); eq(createdSets[1].parent, nil); eq(createdSets[1].prior, true)
+eq(createdSets[2].name, 'Ordner'); eq(createdSets[2].parent, createdSets[1]); eq(#createdSets, 2, 'set reused for the second group')
+eq(createdCollection.name, '→ 2026-10-14'); eq(createdCollection.parent, createdSets[2]); eq(createdCollection.added[1], p2)
+eq(select(2, pcall(Commands.run, 'create_review_collections', { root = '', groups = {} })):find('root') ~= nil, true)
+local many = {}
+for i = 1, 5001 do many[i] = 'u1' end
+local okMany, errMany = pcall(Commands.run, 'create_review_collections', { root = 'R', groups = { { set = 'S', name = 'N', photo_ids = many } } })
+eq(okMany, false); assert(tostring(errMany):find('5000'), tostring(errMany))
 
 print('commands ok')

@@ -9,6 +9,7 @@ local LrTasks = import 'LrTasks'
 local LrStringUtils = import 'LrStringUtils'
 local LrDate = import 'LrDate'
 local LrApplicationView = import 'LrApplicationView'
+local Audit = require 'Audit'
 
 local Commands = {}
 
@@ -499,6 +500,51 @@ function Commands.create_virtual_copies(args)
   return { copies = copies }
 end
 
+-- ---------------------------------------------------------------- catalog audit
+-- Read only: one page of the whole catalog with path, size, capture time and camera (Audit.lua).
+function Commands.audit_page(args) return Audit.page(args) end
+
+-- Write (additive): review collections below one collection set, e.g.
+-- Prüfen / Ordner / "→ 2021-07-14". Photos deleted since the audit are skipped and counted.
+local MAX_REVIEW_PHOTOS, MAX_REVIEW_GROUPS = 5000, 300
+
+local function validName(v) return type(v) == 'string' and v ~= '' and #v <= 120 end
+
+function Commands.create_review_collections(args)
+  if not validName(args.root) then error('root set name required (max 120 characters)', 0) end
+  local groups = args.groups
+  if type(groups) ~= 'table' or #groups == 0 or #groups > MAX_REVIEW_GROUPS then
+    error('1-' .. MAX_REVIEW_GROUPS .. ' groups required', 0)
+  end
+  local cat, total, missing, resolved = catalog(), 0, 0, {}
+  for i, g in ipairs(groups) do
+    if not validName(g.set) or not validName(g.name) then
+      error('every group needs set and name (max 120 characters)', 0)
+    end
+    total = total + #(g.photo_ids or {})
+    if total > MAX_REVIEW_PHOTOS then error('at most ' .. MAX_REVIEW_PHOTOS .. ' photos per call', 0) end
+    local photos = {}
+    for _, id in ipairs(g.photo_ids or {}) do
+      local p = cat:findPhotoByUuid(id)
+      if p then photos[#photos + 1] = p else missing = missing + 1 end
+    end
+    resolved[i] = photos
+  end
+  local made = {}
+  writeAccess('MHPhotos: Prüf-Sammlungen', function()
+    -- true: reuse an existing set/collection of that name (a second run adds to it)
+    local rootSet = cat:createCollectionSet(args.root, nil, true)
+    local sets = {}
+    for i, g in ipairs(groups) do
+      sets[g.set] = sets[g.set] or cat:createCollectionSet(g.set, rootSet, true)
+      local coll = cat:createCollection(g.name, sets[g.set], true)
+      if #resolved[i] > 0 then coll:addPhotos(resolved[i]) end
+      made[#made + 1] = { set = g.set, name = g.name, added = #resolved[i] }
+    end
+  end)
+  return { collections = made, missing = missing }
+end
+
 -- ---------------------------------------------------------------- self test (read only)
 -- Exercises every read command on a few photos and reports each result, so API mismatches
 -- show up as exact messages instead of guesswork. Never changes anything.
@@ -559,6 +605,12 @@ function Commands.selftest()
     end)
   end
   check('list_presets', function() return #Commands.list_presets().presets .. ' presets' end)
+  check('audit_page', function()
+    local r = Commands.audit_page({ limit = 3 })
+    local unsupported = #r.unsupported > 0 and (' (not in this Lightroom: ' .. table.concat(r.unsupported, ', ') .. ')') or ''
+    local first = r.photos[1]
+    return r.total .. ' photos, ' .. #r.photos .. ' read' .. (first and (' first capture=' .. tostring(first.t)) or '') .. unsupported
+  end)
 
   -- API surface: do the functions that the WRITE commands need exist in this Lightroom? (nothing is called)
   local function has(label, owner, names)
@@ -572,7 +624,8 @@ function Commands.selftest()
     end)
   end
   has('catalog', catalog(), { 'withWriteAccessDo', 'createCollection', 'getCollectionByLocalIdentifier',
-    'createKeyword', 'createVirtualCopies', 'setSelectedPhotos', 'setActiveSources', 'findPhotoByUuid' })
+    'createKeyword', 'createVirtualCopies', 'setSelectedPhotos', 'setActiveSources', 'findPhotoByUuid',
+    'createCollectionSet', 'batchGetRawMetadata', 'batchGetFormattedMetadata' })
   has('LrApplication', LrApplication, { 'developPresetFolders', 'addDevelopPresetForPlugin' })
   has('LrApplicationView', LrApplicationView, { 'switchToModule', 'gridView' })
   if first[1] then

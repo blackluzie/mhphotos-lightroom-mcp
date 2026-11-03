@@ -336,6 +336,13 @@ class BridgeAdapter:
     def add_keywords(self, photo_ids, keywords):
         return self._call("add_keywords", {"photo_ids": photo_ids, "keywords": keywords})
 
+    def audit_page(self, offset, limit, refresh=False):
+        # the first page also reads the catalog's photo list (seconds for 250k+ photos)
+        return self._call("audit_page", {"offset": offset, "limit": limit, "refresh": refresh}, timeout=300.0)
+
+    def create_review_collections(self, root, groups):
+        return self._call("create_review_collections", {"root": root, "groups": groups}, timeout=600.0)
+
     def export_photos(self, photo_ids, dest_dir):
         return self._call(
             "export_photos",

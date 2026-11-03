@@ -56,7 +56,8 @@ are preserved. No `tailscale reset`, global service restart or Docker operation
 is performed. Tailscale must already be installed, signed in and entitled to
 Serve/Funnel. Granting those account permissions is a prerequisite, not automated.
 
-On a new Mac add the copied `.lrdevplugin` once in Lightroom's Plug-in Manager,
+`--apply` copies the plugin to `~/Documents/MHPhotos-Lightroom-Plugin` and replaces it when the repository
+has a newer version (then reload it in the Plug-in Manager). On a new Mac add the copied `.lrdevplugin` once in Lightroom's Plug-in Manager,
 open the correct catalog, mount the NAS and reconnect MCP clients. Lightroom's UI
 registration and account logins cannot be recovered merely from source code.
 Run one metadata/preview/export check before relying on the connection. A healthy

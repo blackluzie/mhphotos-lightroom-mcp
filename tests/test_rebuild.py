@@ -133,3 +133,23 @@ def test_allow_writes_is_explicit_and_kept(tmp_path):
     configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_writes=False)
     conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
     assert conf['allow_writes'] is False
+
+
+def test_plugin_is_copied_updated_and_otherwise_left_alone(tmp_path):
+    from mhphotos_lightroom_mcp.rebuild import install_plugin
+
+    source, target = tmp_path / 'repo' / 'p.lrdevplugin', tmp_path / 'docs' / 'p.lrdevplugin'
+    source.mkdir(parents=True)
+    (source / 'Version.lua').write_text("-- version\nreturn '0.1.2'\n")
+    (source / 'Audit.lua').write_text('new')
+    assert 'copied' in install_plugin(source, target)
+    assert 'current' in install_plugin(source, target)
+    (target / 'Version.lua').write_text("return '0.1.1'\n")
+    (target / 'Audit.lua').unlink()
+    message = install_plugin(source, target)
+    assert '0.1.1 -> 0.1.2' in message and 'Reload' in message
+    assert (target / 'Audit.lua').read_text() == 'new'
+    assert not (target.parent / 'p.lrdevplugin.old').exists()
+    link = tmp_path / 'link.lrdevplugin'
+    link.symlink_to(source)
+    assert 'symlink' in install_plugin(source, link)
