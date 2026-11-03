@@ -128,3 +128,20 @@ def test_webhook_url_must_be_plain_https():
     for bad in ('http://n8n.example/w', 'https://u:p@n8n.example/w', 'https://n8n.example/w?x=1'):
         with pytest.raises(ValueError):
             http_service.webhook_url(bad)
+
+
+def test_confirmed_export_never_waits_for_a_client_question(tmp_path, monkeypatch):
+    # Stateless HTTP cannot deliver an elicitation; the export must not try (it would hang).
+    class JPEGExporter(MockAdapter):
+        def export_photos(self, photo_ids, dest_dir):
+            Image.new('RGB', (10, 10)).save(str(dest_dir) + '/photo.jpg')
+            return {'exported': ['photo.jpg']}
+
+    async def must_not_ask(*args, **kwargs):
+        raise AssertionError('http export must not elicit')
+    server.set_adapter(JPEGExporter())
+    monkeypatch.setattr(server.gate, 'approve', must_not_ask)
+    monkeypatch.setenv('MHPHOTOS_EXPORT_DIR', str(tmp_path / 'exports'))
+    monkeypatch.delenv('MHPHOTOS_N8N_WEBHOOK_URL', raising=False)
+    result = asyncio.run(http_service.export_photos(['p1'], confirm=True))
+    assert result['applied'] is True

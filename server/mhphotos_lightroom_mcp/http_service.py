@@ -8,7 +8,6 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
-from mcp.server.fastmcp import Context
 from mcp.types import ToolAnnotations
 from PIL import Image
 
@@ -67,11 +66,12 @@ async def notify_export_ready(batch: str, files: list[dict]):
         return False
 
 
-async def export_photos(photo_ids: list[str], confirm: bool = False, ctx: Context | None = None) -> dict:
+async def export_photos(photo_ids: list[str], confirm: bool = False) -> dict:
     """Export up to 12 photos as local JPEGs, verifying actual files. Dry run by default.
 
     Destination is operator-controlled; no catalog writes, uploads or publication.
     A JPEG export is not the source RAW file. Missing files are reported as failure.
+    Call once without confirm to show the plan, then with confirm=true.
     """
     if bad := server._check_ids(photo_ids):
         return bad
@@ -88,9 +88,10 @@ async def export_photos(photo_ids: list[str], confirm: bool = False, ctx: Contex
         names.append(meta.filename)
     if not confirm:
         return {'dry_run': True, 'files': names, 'destination': dest}
-    approved, how = await server.gate.approve(ctx, f'{len(names)} Foto(s) als lokale JPEGs nach {dest} exportieren')
-    if not approved:
-        return server.gate.refusal(how)
+    # This stateless JSON service cannot send a server-to-client question (elicitation): such a
+    # call never gets an answer and would hang. The human check is the client's own tool
+    # permission (claude.ai: set export_photos to "ask"); confirm=true records the intent.
+    how = 'confirm (client tool permission)'
     root = Path(dest).resolve()
     root.mkdir(parents=True, exist_ok=True)
     batch = root / ('export-' + uuid.uuid4().hex)
@@ -185,7 +186,8 @@ def main():
     bridge.start()
     import uvicorn
     try:
-        uvicorn.run(app, host='127.0.0.1', port=8766, access_log=False, proxy_headers=False)
+        uvicorn.run(app, host='127.0.0.1', port=8766, access_log=False, proxy_headers=False,
+            timeout_graceful_shutdown=10)
     finally:
         bridge.stop()
 

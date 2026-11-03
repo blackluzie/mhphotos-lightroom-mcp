@@ -14,11 +14,14 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import anyio
 from mcp.server.fastmcp import Context
 from mcp.shared.exceptions import McpError
 from pydantic import BaseModel, Field
 
 MODE_ENV = "MHPHOTOS_CONFIRMATION"
+# A client that never answers must not block a tool call (and the server shutdown) forever.
+ELICIT_TIMEOUT_SECONDS = 120
 
 
 class Approval(BaseModel):
@@ -38,7 +41,10 @@ async def approve(ctx: Context | None, message: str) -> tuple[bool, str]:
     if ctx is None:  # direct call (tests, the `call` command): there is nobody to ask
         return (False, "unsupported") if chosen == "require" else (True, "flag")
     try:
-        result = await ctx.elicit(message=message, schema=Approval)
+        with anyio.fail_after(ELICIT_TIMEOUT_SECONDS):
+            result = await ctx.elicit(message=message, schema=Approval)
+    except TimeoutError:
+        return False, "timeout"
     except McpError as exc:
         if "not supported" in str(exc).lower():  # the client cannot ask
             return (False, "unsupported") if chosen == "require" else (True, "flag (client cannot ask)")
@@ -60,4 +66,6 @@ def refusal(how: str) -> dict[str, Any]:
             f"{MODE_ENV}=require ist gesetzt. Nichts wurde geändert.",
             "code": "approval_unavailable",
         }
+    if how == "timeout":
+        return {"error": "Keine Antwort auf die Rückfrage. Nichts wurde geändert.", "code": "approval_timeout"}
     return {"error": "Die Bestätigung ist fehlgeschlagen. Nichts wurde geändert.", "code": "approval_failed"}

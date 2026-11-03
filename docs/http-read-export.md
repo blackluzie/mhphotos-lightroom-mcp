@@ -13,7 +13,10 @@ The service also clears all write/publish/Instagram environment opt-ins.
 
 Export is disabled without an operator-configured absolute `MHPHOTOS_EXPORT_DIR`.
 Clients cannot supply a destination; `confirm=false` returns a dry run. Confirmed
-exports retain the existing human-approval gate and write only local JPEG files.
+exports write only local JPEG files. This stateless HTTP service cannot ask the user
+itself (MCP elicitation needs a server-to-client request, which never arrives here and
+used to hang the call), so the human check is the client's tool permission: in claude.ai
+set *export_photos* to "ask" (hand icon) under the connector's tool permissions.
 Export is annotated as mutating, non-destructive and non-idempotent. It must not
 be advertised as a read-only tool. Catalog ratings and edits are not changed.
 

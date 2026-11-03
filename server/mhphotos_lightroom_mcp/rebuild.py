@@ -211,13 +211,14 @@ def main():
             if loaded:
                 subprocess.run(['launchctl', 'bootout', domain + '/' + label], check=True)
             subprocess.run(['launchctl', 'enable', domain + '/' + label], check=True)
-            for attempt in range(5):
+            # The old process may need up to ~10 s to close open client connections.
+            for attempt in range(20):
                 started = subprocess.run(['launchctl', 'bootstrap', domain, str(path)],
                     capture_output=True, text=True, check=False)
                 if started.returncode == 0:
                     break
                 # macOS can briefly retain the previous job after successful bootout.
-                time.sleep(0.25 * (attempt + 1))
+                time.sleep(1)
             else:
                 raise RuntimeError('Could not load managed service: ' + label + ': ' + started.stderr)
 
