@@ -119,7 +119,10 @@ Folders are `JJJJ/JJJJ-MM/JJJJ-MM-TT`; the capture time decides where a photo be
 2. `catalog_audit_results(kind="wrong_folder", year=…, level="year"|"month"|"day")`: `found` is the folder it is in,
    `expected` the day folder it belongs in. `day_diff` ±1 is often a time-zone or midnight effect (camera clock on
    travel), so check those before moving. Other kinds: `no_date`, `implausible_date`, `unrecognised_folder`,
-   `missing_file` (only with `check_files=true`), `duplicates`, `possible_duplicates`.
+   `missing_file` (only with `check_files=true`), `duplicates`, `possible_duplicates`, `non_photo` (screenshots,
+   messenger pictures, downloads: no camera plus other signs, or a screenshot file name), `jpeg_with_raw` (the
+   camera's JPEG next to its RAW; only the RAW is needed) and `reimported_export` (a JPEG export of a RAW that came
+   back into the catalog).
 3. Duplicates: candidates share capture second, camera, pixel size, file type and byte size; a fingerprint of the
    first and last MiB confirms them. `keep` is the copy with the most work in it (edits, stars, pick, keywords,
    label, virtual copies, right folder). `possible_duplicates` (same shot, same file name with a copy suffix,

@@ -44,7 +44,7 @@ Verknüpfung.
 1. Erst ein Jahr testen (z. B. 2020, 4.880 Fotos) → Laufzeit und Trefferqualität prüfen.
 2. Dann alle Jahre; Duplikat-Hash nur auf Kandidaten.
 
-## Nächste Ausbaustufe (gewünscht 2026-11-03, noch nicht gebaut)
+## Zweite Ausbaustufe (gebaut 2026-11-03, Plugin 0.1.3; Punkt 4 noch offen)
 
 1. **Keine echten Fotos aussortieren** (Screenshots, Messenger-Bilder, Downloads):
    Anzeichen kombinieren, nicht einzeln werten:
@@ -55,12 +55,14 @@ Verknüpfung.
    - typische Bildschirmmaße (z. B. 1170×2532, 1920×1080)
    - kleine Auflösung
 
-   Ergebnis: Sammlung „Prüfen › Sonstiges › keine Kamera-Fotos“. `audit_page` muss dafür zusätzlich ISO/Blende lesen.
+   Ergebnis: Sammlung „Prüfen › Sonstiges › keine Kamera-Fotos“ (`kind="non_photo"`, mit Gründen).
+   Regel: Screenshot-Dateiname genügt; sonst „keine Kamera“ plus mindestens zwei weitere Anzeichen.
 2. **RAW+JPEG gleichzeitig aufgenommen, nur RAW behalten**:
    - Ein JPEG gilt als Begleiter, wenn ein RAW mit gleicher Aufnahmesekunde, gleicher Kamera und gleichem Dateistamm existiert, meist im selben Ordner.
-   - Ergebnis: „Prüfen › Duplikate › JPEG neben RAW – entfernen“.
+   - Ergebnis (`kind="jpeg_with_raw"`): „Prüfen › Duplikate › JPEG neben RAW – entfernen“ und „… – erst prüfen“.
    - Ausnahme, nur melden: Das JPEG hat Sterne, Stichwörter, Entwicklung oder Sammlungen und das RAW nicht.
-3. **Re-importierte Exporte**: JPEG mit gleichem Dateistamm wie ein RAW, kleinere Pixelmaße, später erstellt. Nur melden.
+3. **Re-importierte Exporte** (`kind="reimported_export"`): JPEG mit gleichem Dateistamm und gleicher Aufnahmesekunde
+   wie ein RAW, aber in einem anderen Ordner oder deutlich kleiner. Sammlung „Prüfen › Sonstiges › Export wieder importiert“.
 4. **Excire Search** (läuft im Katalog des Eigentümers). Was Excire genau in den Katalog schreibt, noch prüfen:
    - Schreibt Excire Stichwörter in Lightroom, können die Werkzeuge danach filtern, z. B. „Text/Dokument“ zur Screenshot-Erkennung.
    - Excire sucht visuell ähnliche Bilder (anderer Ausschnitt, andere Größe). Das ergänzt unsere exakte Duplikatsuche.
@@ -75,6 +77,7 @@ Verknüpfung.
   - Connector in claude.ai neu verbinden: Schreib-Werkzeuge auf „fragen“, Lese-Werkzeuge auf „immer erlauben“
 - n8n, Karte „In Inbox hochladen“: Body-Feld `instagramId` (Ausdruck in `docs/examples/n8n-jpegs-to-inbox.json`), dann Publish.
 - Erster Probelauf: „Starte die Katalog-Prüfung für 2020“. macOS-Frage nach Netzwerk-Volumes erlauben.
+  Danach Stichproben ansehen: `non_photo` (Fehlalarme?), `jpeg_with_raw`, `wrong_folder` mit `day_diff`.
 - Echte Tests noch offen:
   - XMP-Presets nach Lightroom-Neustart
   - Schreib-Werkzeuge über den Connector

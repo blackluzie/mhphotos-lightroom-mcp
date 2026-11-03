@@ -573,7 +573,10 @@ async def catalog_audit_results(
     level year|month|day, day_diff for neighbouring days, often a time-zone or midnight effect),
     no_date, implausible_date, unrecognised_folder, missing_file, duplicates (verified groups:
     keep = the copy with the most work in it, remove = the others), possible_duplicates (same
-    shot and similar file name but different bytes; look at them with get_contact_sheet first).
+    shot and similar file name but different bytes; look at them with get_contact_sheet first),
+    non_photo (screenshots, messenger pictures, downloads; reasons lists the signs), jpeg_with_raw
+    (the camera's JPEG next to its RAW; check=true when the JPEG has stars/keywords/edits and the
+    RAW has none), reimported_export (a JPEG export of a RAW that came back into the catalog).
     year filters by capture year (wrong_folder: the target year); level filters wrong_folder.
     """
     if kind not in catalog_audit.KINDS:
@@ -607,7 +610,8 @@ async def catalog_audit_collections(
     are more than 300 days), so you can drag each collection onto its folder in Lightroom's Folders
     panel (Lightroom moves the files and keeps the catalog in order; never move them in Finder).
     duplicates: "Prüfen › Duplikate › entfernen" and "behalten (Gegenstück)"; possible_duplicates
-    and the other kinds get one collection each. Moves and deletes nothing: the Lightroom SDK
+    and the other kinds get one collection each; jpeg_with_raw: "JPEG neben RAW – entfernen" and
+    "– erst prüfen" (JPEGs with work in them). Moves and deletes nothing: the Lightroom SDK
     cannot do either. Additive; running again adds to the same collections. year: only that
     capture year. Dry run unless confirm=true; needs operator opt-in.
     """
@@ -620,7 +624,7 @@ async def catalog_audit_collections(
         return {"error": "No finished catalog check yet. Start one with catalog_audit_start."}
     if year is not None and kind != "wrong_folder":
         saved = {**saved, "findings": {**saved["findings"], kind: [
-            i for i in saved["findings"][kind] if str(i.get("captured") or "")[:4] == str(year)]}}
+            i for i in saved["findings"].get(kind, []) if str(i.get("captured") or "")[:4] == str(year)]}}
     groups, mode = catalog_audit.review_groups(saved, kind, year)
     groups = [g for g in groups if g["photo_ids"]]
     photos = sum(len(g["photo_ids"]) for g in groups)
