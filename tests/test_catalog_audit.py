@@ -196,3 +196,43 @@ def test_http_service_offers_audit_tools():
     assert {"catalog_audit_start", "catalog_audit_status", "catalog_audit_results"} <= set(http_service.READ_TOOLS)
     assert "catalog_audit_collections" in http_service.WRITE_TOOLS
     assert "catalog_audit_collections" in http_service.ADDITIVE_TOOLS
+
+
+@pytest.mark.parametrize(("record", "flagged"), [
+    ({"path": "/x/Screenshot 2024-01-02 at 10.00.png", "fmt": "PNG", "w": 2880, "h": 1800}, True),
+    ({"path": "/x/IMG_0001.PNG", "fmt": "PNG", "w": 1170, "h": 2532}, True),  # iPhone screenshot
+    ({"path": "/x/IMG-20210714-WA0003.jpg", "fmt": "JPG", "w": 1600, "h": 1200}, True),
+    ({"path": "/x/download.jpg", "fmt": "JPG", "w": 800, "h": 600}, True),
+    ({"path": "/x/IMG_1234.HEIC", "fmt": "HEIC", "w": 4032, "h": 3024, "cam": "iPhone 15", "exif": True}, False),
+    ({"path": "/x/scan_001.tif", "fmt": "TIFF", "w": 5000, "h": 3500}, False),  # scan: big, no camera only
+    ({"path": "/x/clip.mov", "fmt": "VIDEO", "w": 1920, "h": 1080}, False),
+])
+def test_non_photo(record, flagged):
+    assert bool(ca.non_photo_reasons(record)) is flagged
+
+
+def test_jpeg_next_to_raw_and_reimported_export():
+    an = ca.Analysis(today="2026-11-03")
+    day = f"{ROOT}/2021/2021-07/2021-07-14"
+    an.add(rec("raw", f"{day}/IMG_1.CR3", fmt="RAW"))
+    an.add(rec("jpg", f"{day}/IMG_1.JPG", fmt="JPG"))
+    an.add(rec("exp", f"{ROOT}/Exporte/IMG_1-2.jpg", fmt="JPG", w=2048, h=1365))
+    an.add(rec("raw2", f"{day}/IMG_2.CR3", fmt="RAW", t="2021-07-14T10:00:01"))
+    an.add(rec("jpg2", f"{day}/IMG_2.JPG", fmt="JPG", t="2021-07-14T10:00:01", r=4))  # work only on the JPEG
+    an.add(rec("other", f"{day}/IMG_3.JPG", fmt="JPG"))  # same second, other name: a different shot
+    an.finish()
+    pairs = {f["id"]: f for f in an.findings["jpeg_with_raw"]}
+    assert set(pairs) == {"jpg", "jpg2"}
+    assert pairs["jpg"]["raw"]["id"] == "raw" and "check" not in pairs["jpg"]
+    assert pairs["jpg2"]["check"] is True
+    assert [f["id"] for f in an.findings["reimported_export"]] == ["exp"]
+    groups, _ = ca.review_groups({"findings": an.findings}, "jpeg_with_raw")
+    assert [(g["name"], g["photo_ids"]) for g in groups] == [
+        ("JPEG neben RAW – entfernen", ["jpg"]), ("JPEG neben RAW – erst prüfen", ["jpg2"])]
+    assert an.summary()["counts"]["jpeg_with_raw_to_check"] == 1
+    assert an.findings["duplicates"] == []  # a RAW+JPEG pair is not a duplicate
+
+
+def test_old_result_files_without_new_kinds_still_work():
+    groups, _ = ca.review_groups({"findings": {"duplicates": []}}, "non_photo")
+    assert groups[0]["photo_ids"] == []

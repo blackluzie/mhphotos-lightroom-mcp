@@ -16,7 +16,7 @@ local BASE_RAW = { 'uuid', 'path', 'fileSize', 'fileFormat', 'dimensions', 'date
   'isVirtualCopy', 'rating', 'pickStatus' }
 -- Keys that may not exist in every Lightroom version: asked one by one, failures are reported.
 local OPTIONAL_RAW = { 'dateTimeOriginalISO8601', 'keywords', 'colorNameForLabel', 'lastEditTime',
-  'countVirtualCopies' }
+  'countVirtualCopies', 'isoSpeedRating', 'aperture' }
 local FORMATTED = { 'cameraModel', 'cameraSerialNumber' }
 
 local function catalog() return LrApplication.activeCatalog() end
@@ -98,6 +98,8 @@ function Audit.page(args)
       label = nonEmpty(opt('colorNameForLabel') ~= 'grey' and opt('colorNameForLabel') or nil),
       edited = type(edited) == 'number' and edited > 0 or nil,
       copies = nonEmpty((tonumber(opt('countVirtualCopies')) or 0) > 0 and opt('countVirtualCopies') or nil),
+      -- exposure data: screenshots and downloaded images have none
+      exif = (opt('isoSpeedRating') ~= nil or opt('aperture') ~= nil) or nil,
       cam = nonEmpty(f.cameraModel),
       serial = nonEmpty(f.cameraSerialNumber),
     }

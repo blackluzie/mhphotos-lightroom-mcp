@@ -28,7 +28,18 @@ FINGERPRINT_BYTES = 1 << 20  # head + tail of each candidate file, never the who
 MIN_YEAR = 1990
 RETRY_SECONDS = 5.0
 KINDS = ("wrong_folder", "no_date", "implausible_date", "unrecognised_folder", "missing_file",
-         "duplicates", "possible_duplicates")
+         "duplicates", "possible_duplicates", "non_photo", "jpeg_with_raw", "reimported_export")
+RAW_FORMATS = {"RAW", "DNG"}
+JPEG_FORMATS = {"JPG", "JPEG", "HEIC", "HEIF"}
+# Portrait and landscape sizes of common phone, tablet and computer screens.
+SCREEN_SIZES = {frozenset(s) for s in (
+    (750, 1334), (828, 1792), (1125, 2436), (1170, 2532), (1179, 2556), (1242, 2688), (1284, 2778),
+    (1290, 2796), (1080, 1920), (1080, 2340), (1080, 2400), (1440, 3200), (1920, 1080), (2560, 1440),
+    (1440, 900), (1366, 768), (1280, 800), (2560, 1600), (2880, 1800), (3024, 1964), (3456, 2234),
+    (1620, 2160), (1640, 2360), (1668, 2388), (2048, 2732), (5120, 2880),
+)}
+_SCREENSHOT_NAME = re.compile(r"screen ?shot|bildschirmfoto|simulator screen|scrnli", re.IGNORECASE)
+_MESSENGER_NAME = re.compile(r"-WA\d{3,}|^IMG-\d{8}-|^signal-\d{4}|^telegram|^photo_\d{4}-\d{2}-\d{2}", re.IGNORECASE)
 
 _DAY = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?!\d)")
 _MONTH = re.compile(r"^(\d{4})-(\d{2})(?![\d-]\d)(?!\d)")
@@ -80,6 +91,40 @@ def classify(rec: dict[str, Any], today: str | None = None) -> dict[str, Any] | 
     if level == "day" and day:
         out["day_diff"] = (date.fromisoformat(expected) - date.fromisoformat(day[:10])).days
     return out
+
+
+def non_photo_reasons(rec: dict[str, Any]) -> list[str]:
+    """Why a picture is probably not a camera photo (screenshot, messenger, download); [] if it is one.
+
+    No single sign decides: a screenshot name alone counts, otherwise a missing camera plus at least
+    two more signs. Videos are left alone.
+    """
+    fmt = (rec.get("fmt") or "").upper()
+    if fmt == "VIDEO":
+        return []
+    name = PurePosixPath(rec.get("path") or "").name
+    reasons = []
+    if _SCREENSHOT_NAME.search(name):
+        reasons.append("Dateiname Screenshot")
+    if _MESSENGER_NAME.search(name):
+        reasons.append("Dateiname Messenger")
+    if fmt in {"PNG", "GIF", "WEBP"}:
+        reasons.append(f"Format {fmt}")
+    w, h = rec.get("w"), rec.get("h")
+    if w and h and frozenset((w, h)) in SCREEN_SIZES:
+        reasons.append(f"Bildschirmgröße {w}×{h}")
+    if w and h and max(w, h) < 1200:
+        reasons.append("kleine Auflösung")
+    no_camera = not rec.get("cam")
+    if no_camera:
+        reasons.append("keine Kamera")
+    if not rec.get("exif"):
+        reasons.append("keine Belichtungsdaten")
+    if "Dateiname Screenshot" in reasons:
+        return reasons
+    if no_camera and len(reasons) >= 3:
+        return reasons
+    return []
 
 
 def keep_score(rec: dict[str, Any], folder_ok: bool) -> int:
@@ -157,6 +202,7 @@ class Analysis:
         self.file_check_denied = 0
         self.unreadable = 0
         self._dupes: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
+        self._moments: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
 
     def in_scope(self, rec: dict[str, Any]) -> bool:
         if not self.year:
@@ -182,11 +228,50 @@ class Analysis:
                 self.file_check_denied += 1
             except OSError:
                 self.findings["missing_file"].append(_entry(rec))
+        if reasons := non_photo_reasons(rec):
+            self.findings["non_photo"].append(_entry(rec, reasons=reasons))
+        fmt = (rec.get("fmt") or "").upper()
+        if rec.get("t") and (fmt in RAW_FORMATS or fmt in JPEG_FORMATS):
+            self._moments[(rec["t"], rec.get("cam") or "", rec.get("serial") or "")].append({
+                "id": rec["id"], "path": rec.get("path") or "", "raw": fmt in RAW_FORMATS,
+                "edge": max(rec.get("w") or 0, rec.get("h") or 0), "work": keep_score(rec, False)})
         if key := duplicate_key(rec):
             self._dupes[key].append({
                 "id": rec["id"], "path": rec.get("path") or "", "size": rec.get("size"), "t": rec.get("t"),
                 "score": keep_score(rec, finding is None),
             })
+
+    def finish(self, progress: Callable[[int, int], None] | None = None) -> None:
+        self.finish_pairs()
+        self.finish_duplicates(progress)
+
+    def finish_pairs(self) -> None:
+        """JPEGs shot together with a RAW (camera RAW+JPEG), and exports imported again.
+
+        A JPEG belongs to a RAW of the same second and camera with the same file name. In the RAW's
+        folder at (nearly) full size it is the camera's JPEG; elsewhere or clearly smaller it is an
+        export that came back into the catalog. A JPEG with work in it (stars, keywords, edits)
+        while its RAW has none is marked check=True instead of being offered for removal.
+        """
+        for (taken, _cam, _serial), items in self._moments.items():
+            raws = [i for i in items if i["raw"]]
+            if not raws:
+                continue
+            for jpg in (i for i in items if not i["raw"]):
+                raw = next((r for r in raws if same_name(jpg["path"], r["path"])), None)
+                if raw is None:
+                    continue
+                same_folder = PurePosixPath(jpg["path"]).parent == PurePosixPath(raw["path"]).parent
+                full_size = not raw["edge"] or jpg["edge"] >= 0.9 * raw["edge"]
+                kind = "jpeg_with_raw" if same_folder and full_size else "reimported_export"
+                entry = {"id": jpg["id"], "file": PurePosixPath(jpg["path"]).name,
+                         "folder": short_folder(jpg["path"]), "captured": taken,
+                         "raw": {"id": raw["id"], "file": PurePosixPath(raw["path"]).name,
+                                 "folder": short_folder(raw["path"])}}
+                if jpg["work"] > 0 and raw["work"] == 0:
+                    entry["check"] = True
+                self.findings[kind].append(entry)
+        self._moments.clear()
 
     def finish_duplicates(self, progress: Callable[[int, int], None] | None = None) -> None:
         groups = [g for g in self._dupes.values() if len(g) > 1]
@@ -232,6 +317,7 @@ class Analysis:
     def summary(self) -> dict[str, Any]:
         counts = {k: len(v) for k, v in self.findings.items()}
         counts["duplicates_to_remove"] = sum(len(g["remove"]) for g in self.findings["duplicates"])
+        counts["jpeg_with_raw_to_check"] = sum(1 for f in self.findings["jpeg_with_raw"] if f.get("check"))
         levels: dict[str, int] = defaultdict(int)
         by_year: dict[str, int] = defaultdict(int)
         for f in self.findings["wrong_folder"]:
@@ -312,7 +398,7 @@ class Job:
             def progress(done: int, total: int) -> None:
                 self.state["fingerprints"] = f"{done}/{total}"
 
-            self.analysis.finish_duplicates(progress)
+            self.analysis.finish(progress)
             finished = time.time()
             result = {
                 "finished_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(finished)),
@@ -359,6 +445,8 @@ def current() -> Job | None:
 ROOT_SET = "Prüfen"
 MAX_GROUPS_PER_DAY_MODE = 300
 SINGLE = {
+    "non_photo": "keine Kamera-Fotos",
+    "reimported_export": "Export wieder importiert",
     "no_date": "ohne Aufnahmedatum",
     "implausible_date": "Datum unplausibel",
     "unrecognised_folder": "kein Datumsordner",
@@ -392,8 +480,15 @@ def review_groups(result: dict[str, Any], kind: str, year: int | None = None) ->
     if kind == "possible_duplicates":
         ids = [i for g in findings["possible_duplicates"] for i in [g["keep"]["id"]] + [r["id"] for r in g["remove"]]]
         return [{"set": "Duplikate", "name": "möglich – bitte ansehen", "photo_ids": ids}], "one collection"
+    if kind == "jpeg_with_raw":
+        items = findings.get(kind, [])
+        return [{"set": "Duplikate", "name": "JPEG neben RAW – entfernen",
+                 "photo_ids": [f["id"] for f in items if not f.get("check")]},
+                {"set": "Duplikate", "name": "JPEG neben RAW – erst prüfen",
+                 "photo_ids": [f["id"] for f in items if f.get("check")]}], "remove + check"
     if kind in SINGLE:
-        return [{"set": "Sonstiges", "name": SINGLE[kind], "photo_ids": [f["id"] for f in findings[kind]]}], "one collection"
+        return [{"set": "Sonstiges", "name": SINGLE[kind],
+                 "photo_ids": [f["id"] for f in findings.get(kind, [])]}], "one collection"
     raise ValueError(f"unknown kind {kind}")
 
 
