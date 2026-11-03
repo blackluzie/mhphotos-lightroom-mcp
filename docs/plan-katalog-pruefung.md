@@ -43,3 +43,44 @@ Verknüpfung.
 
 1. Erst ein Jahr testen (z. B. 2020, 4.880 Fotos) → Laufzeit und Trefferqualität prüfen.
 2. Dann alle Jahre; Duplikat-Hash nur auf Kandidaten.
+
+## Nächste Ausbaustufe (gewünscht 2026-11-03, noch nicht gebaut)
+
+1. **Keine echten Fotos aussortieren** (Screenshots, Messenger-Bilder, Downloads):
+   Anzeichen kombinieren, nicht einzeln werten:
+   - kein Kameramodell
+   - keine Belichtungsdaten (ISO, Blende)
+   - PNG/HEIC-Screenshot
+   - Dateiname wie `Screenshot…`, `IMG-…-WA…`
+   - typische Bildschirmmaße (z. B. 1170×2532, 1920×1080)
+   - kleine Auflösung
+
+   Ergebnis: Sammlung „Prüfen › Sonstiges › keine Kamera-Fotos“. `audit_page` muss dafür zusätzlich ISO/Blende lesen.
+2. **RAW+JPEG gleichzeitig aufgenommen, nur RAW behalten**:
+   - Ein JPEG gilt als Begleiter, wenn ein RAW mit gleicher Aufnahmesekunde, gleicher Kamera und gleichem Dateistamm existiert, meist im selben Ordner.
+   - Ergebnis: „Prüfen › Duplikate › JPEG neben RAW – entfernen“.
+   - Ausnahme, nur melden: Das JPEG hat Sterne, Stichwörter, Entwicklung oder Sammlungen und das RAW nicht.
+3. **Re-importierte Exporte**: JPEG mit gleichem Dateistamm wie ein RAW, kleinere Pixelmaße, später erstellt. Nur melden.
+4. **Excire Search** (läuft im Katalog des Eigentümers). Was Excire genau in den Katalog schreibt, noch prüfen:
+   - Schreibt Excire Stichwörter in Lightroom, können die Werkzeuge danach filtern, z. B. „Text/Dokument“ zur Screenshot-Erkennung.
+   - Excire sucht visuell ähnliche Bilder (anderer Ausschnitt, andere Größe). Das ergänzt unsere exakte Duplikatsuche.
+   - Excire-Suche mit Beispielbild könnte beim Instagram-Abgleich die Originale finden.
+
+## Offene Punkte (Stand 2026-11-03)
+
+- Mac:
+  - `git pull --ff-only`
+  - `./scripts/rebuild-mac.sh --allow-writes --mhphotos-url https://mhphotos.de --apply --start`
+  - In Lightroom: Zusatzmodul-Manager → Plugin neu laden
+  - Connector in claude.ai neu verbinden: Schreib-Werkzeuge auf „fragen“, Lese-Werkzeuge auf „immer erlauben“
+- n8n, Karte „In Inbox hochladen“: Body-Feld `instagramId` (Ausdruck in `docs/examples/n8n-jpegs-to-inbox.json`), dann Publish.
+- Erster Probelauf: „Starte die Katalog-Prüfung für 2020“. macOS-Frage nach Netzwerk-Volumes erlauben.
+- Echte Tests noch offen:
+  - XMP-Presets nach Lightroom-Neustart
+  - Schreib-Werkzeuge über den Connector
+  - Instagram-Abgleich
+- Gemergte Branches auf GitHub löschen.
+- Später:
+  - Karussell/Reels mit n8n (Render-Dienst, Entwürfe in der Social-Queue, Musiklizenzen klären)
+  - Löschen in der iOS-Admin-Ansicht
+- Prüfen: `Commands.lua` `isoTime` gibt die Aufnahmezeit in UTC aus. Datumsfilter von `list_photos` können bei Fotos kurz nach Mitternacht um einen Tag danebenliegen. Die Katalog-Prüfung nutzt bereits die Kamera-Uhrzeit.
