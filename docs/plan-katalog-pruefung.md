@@ -97,4 +97,4 @@ Connector mit `--allow-instagram`.
 - Später:
   - Karussell/Reels mit n8n (Render-Dienst, Entwürfe in der Social-Queue, Musiklizenzen klären)
   - Löschen in der iOS-Admin-Ansicht
-- Prüfen: `Commands.lua` `isoTime` gibt die Aufnahmezeit in UTC aus. Datumsfilter von `list_photos` können bei Fotos kurz nach Mitternacht um einen Tag danebenliegen. Die Katalog-Prüfung nutzt bereits die Kamera-Uhrzeit.
+- Erledigt (Plugin 0.1.5): Aufnahmezeit überall als Kamera-Uhrzeit statt UTC. Am echten Katalog einmal prüfen: ein Foto kurz nach Mitternacht muss bei `get_photo_metadata` den richtigen Tag zeigen.
