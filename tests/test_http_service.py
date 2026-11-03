@@ -2,6 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 from mhphotos_lightroom_mcp import http_service, server
 from mhphotos_lightroom_mcp.adapters import MockAdapter
@@ -64,3 +65,66 @@ def test_verified_export_uses_separate_batches_and_preserves_prior_files(tmp_pat
     marker = json.loads((Path(a['path']).parent / 'ready.json').read_text())
     assert marker['files'][0]['name'] == 'photo.jpg'
     assert marker['files'][0]['sha256'] == a['sha256']
+
+
+def _webhook_setup(tmp_path, monkeypatch, handler):
+    class JPEGExporter(MockAdapter):
+        def export_photos(self, photo_ids, dest_dir):
+            Image.new('RGB', (100, 80)).save(str(dest_dir) + '/photo.jpg')
+            return {'exported': ['photo.jpg']}
+    server.set_adapter(JPEGExporter())
+    monkeypatch.setenv('MHPHOTOS_EXPORT_DIR', str(tmp_path / 'exports'))
+    monkeypatch.setattr('pathlib.Path.home', lambda: tmp_path)
+    token = tmp_path / http_service.WEBHOOK_TOKEN
+    token.parent.mkdir(parents=True, mode=0o700)
+    token.write_text('ab' * 32)
+    token.chmod(0o600)
+    real = httpx.AsyncClient
+    monkeypatch.setattr(http_service.httpx, 'AsyncClient',
+        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+
+
+def test_export_notifies_n8n_without_local_paths(tmp_path, monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200)
+    _webhook_setup(tmp_path, monkeypatch, handler)
+    monkeypatch.setenv('MHPHOTOS_N8N_WEBHOOK_URL', 'https://n8n.example/webhook/mhphotos-export-ready')
+    result = asyncio.run(http_service.export_photos(['p1'], confirm=True))
+    assert result['n8n_notified'] is True
+    request = seen[0]
+    assert request.headers['X-MHPhotos-Token'] == 'ab' * 32
+    body = json.loads(request.content)
+    assert body['event'] == 'mhphotos.export_ready'
+    assert body['assets'] == [{'id': result['files'][0]['sha256'], 'filename': 'photo.jpg',
+        'bytes': result['files'][0]['bytes']}]
+    assert str(tmp_path) not in request.content.decode()
+
+
+def test_failed_notification_keeps_export(tmp_path, monkeypatch):
+    def handler(request):
+        raise httpx.ConnectError('n8n unreachable')
+    _webhook_setup(tmp_path, monkeypatch, handler)
+    monkeypatch.setenv('MHPHOTOS_N8N_WEBHOOK_URL', 'https://n8n.example/webhook/x')
+    result = asyncio.run(http_service.export_photos(['p1'], confirm=True))
+    assert result['applied'] is True and result['n8n_notified'] is False
+    assert (Path(result['files'][0]['path']).parent / 'ready.json').exists()
+
+
+def test_without_webhook_nothing_is_sent(tmp_path, monkeypatch):
+    def handler(request):
+        raise AssertionError('must not be called')
+    _webhook_setup(tmp_path, monkeypatch, handler)
+    monkeypatch.delenv('MHPHOTOS_N8N_WEBHOOK_URL', raising=False)
+    result = asyncio.run(http_service.export_photos(['p1'], confirm=True))
+    assert result['applied'] is True and 'n8n_notified' not in result
+
+
+def test_webhook_url_must_be_plain_https():
+    import pytest
+    assert http_service.webhook_url(None) is None
+    for bad in ('http://n8n.example/w', 'https://u:p@n8n.example/w', 'https://n8n.example/w?x=1'):
+        with pytest.raises(ValueError):
+            http_service.webhook_url(bad)

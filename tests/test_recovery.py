@@ -29,3 +29,18 @@ def test_encrypted_roundtrip_preserves_secrets_and_rejects_overwrite(tmp_path):
     with pytest.raises(InvalidToken):
         restore(tmp_path / 'other', archive, key)
     assert not (tmp_path / 'other').exists()
+
+
+def test_optional_webhook_token_is_backed_up_when_present(tmp_path):
+    from mhphotos_lightroom_mcp.recovery import OPTIONAL
+    home, restored = tmp_path / 'home', tmp_path / 'restored'
+    for name in (*FILES, *OPTIONAL):
+        p = home / name
+        p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        p.write_bytes(b'synthetic')
+        p.chmod(0o600)
+    key, archive = tmp_path / 'key', tmp_path / 'backup.enc'
+    assert backup(home, archive, key) == 5
+    restored.mkdir()
+    assert restore(restored, archive, key) == 5
+    assert (restored / OPTIONAL[0]).read_bytes() == b'synthetic'

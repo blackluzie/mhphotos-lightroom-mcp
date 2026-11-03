@@ -34,6 +34,10 @@ is optional and only pre-fills the GitHub sign-in page. The values are stored in
 `desktop.json`, so later runs can omit them; changing a stored value is refused (a
 different owner or app is a separate migration).
 
+Optional: `--n8n-webhook-url https://…/webhook/mhphotos-export-ready` makes each verified export notify n8n
+(see [private-assets.md](private-assets.md)); its token is created once in `n8n-webhook-token` and is part of the
+encrypted connection backup.
+
 Upgrading an installation from before these options: the HTTP service refuses to start
 until `desktop.json` contains them. Run the command once with the three options and
 `--apply --start`; nothing else in the configuration changes.

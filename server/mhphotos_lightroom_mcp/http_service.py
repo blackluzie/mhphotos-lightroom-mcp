@@ -5,7 +5,9 @@ import os
 import stat
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
+import httpx
 from mcp.server.fastmcp import Context
 from mcp.types import ToolAnnotations
 from PIL import Image
@@ -19,6 +21,50 @@ READ_TOOLS = (
     'get_photo_metadata', 'get_photo_previews', 'get_contact_sheet',
 )
 LOCAL_TOOLS = ('export_photos',)
+WEBHOOK_TOKEN = '.config/mhphotos-lightroom/n8n-webhook-token'
+
+
+def webhook_url(value):
+    """An exact https URL without credentials, query or fragment, or None when unset."""
+    if not value:
+        return None
+    url = urlsplit(value)
+    if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment:
+        raise ValueError('n8n_webhook_url must be an https URL without credentials, query or fragment')
+    return value
+
+
+def read_webhook_token(home: Path) -> str:
+    path = home / WEBHOOK_TOKEN
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd) as f:
+        info = os.fstat(f.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
+            raise ValueError('n8n webhook token must be owner-controlled, mode 600')
+        token = f.read(1024).strip()
+    if len(token) != 64 or any(c not in '0123456789abcdef' for c in token):
+        raise ValueError('Expected a 32-byte hex n8n webhook token')
+    return token
+
+
+async def notify_export_ready(batch: str, files: list[dict]):
+    """Tell n8n that a verified batch is ready. None = not configured; never fails the export.
+
+    Only asset ids (SHA-256), file names and sizes are sent, never local paths.
+    """
+    url = os.environ.get('MHPHOTOS_N8N_WEBHOOK_URL')
+    if not url:
+        return None
+    try:
+        token = read_webhook_token(Path.home())
+        payload = {'event': 'mhphotos.export_ready', 'batch': batch, 'assets': [
+            {'id': item['sha256'], 'filename': Path(item['path']).name, 'bytes': item['bytes']} for item in files]}
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            response = await client.post(webhook_url(url), json=payload, headers={
+                'X-MHPhotos-Token': token, 'User-Agent': 'MHPhotos-Lightroom/1.0'})
+        return response.status_code < 300
+    except (OSError, ValueError, httpx.HTTPError):
+        return False
 
 
 async def export_photos(photo_ids: list[str], confirm: bool = False, ctx: Context | None = None) -> dict:
@@ -76,7 +122,11 @@ async def export_photos(photo_ids: list[str], confirm: bool = False, ctx: Contex
     ]}))
     marker.chmod(0o600)
     marker.replace(batch / 'ready.json')
-    return {'applied': True, 'change_id': change_id, 'files': files, 'format': 'rendered JPEG, not original RAW'}
+    result = {'applied': True, 'change_id': change_id, 'files': files, 'format': 'rendered JPEG, not original RAW'}
+    notified = await notify_export_ready(batch.name, files)
+    if notified is not None:
+        result['n8n_notified'] = notified
+    return result
 
 
 def register_tools(app):
@@ -112,6 +162,11 @@ def main():
     os.environ['MHPHOTOS_GITHUB_CLIENT_ID'] = str(config['github_client_id'])
     os.environ['MHPHOTOS_GITHUB_OWNER_ID'] = str(config['github_owner_id'])
     os.environ['MHPHOTOS_GITHUB_LOGIN'] = config.get('github_login') or ''
+    if webhook_url(config.get('n8n_webhook_url')):
+        read_webhook_token(Path.home())  # Fail at start, not silently on the first export.
+        os.environ['MHPHOTOS_N8N_WEBHOOK_URL'] = config['n8n_webhook_url']
+    else:
+        os.environ.pop('MHPHOTOS_N8N_WEBHOOK_URL', None)
     path = Path.home() / '.mhphotos-lightroom-mcp/bridge.json'
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd) as f:
