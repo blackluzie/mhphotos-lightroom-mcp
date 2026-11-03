@@ -65,8 +65,11 @@ not yet checked, or checked with a note:
 
 The plugin can export the best new photos of one collection by itself, so they reach the MHPhotos
 inbox without you or Claude doing anything (for example while the Mac runs at home during a cruise).
-Together with the hot-folder service (`install-service`) the chain is: Lightroom collection ->
-JPEG in `~/Pictures/MHPhotos-Inbox` -> inbox with status "wartet". Nothing is published.
+Recommended chain (one upload path with checksums and duplicate check): Lightroom collection -> JPEG in
+`~/Pictures/MHPhotos-Inbox` -> the HTTP service turns finished JPEGs into a verified export batch and tells
+n8n -> MHPhotos inbox with status "wartet". Switch it on with
+`./scripts/rebuild-mac.sh --hot-folder --apply --start` (needs `--n8n-webhook-url`). The older direct
+uploader (`install-service`) still works, but run only one of the two. Nothing is published.
 
 Easiest: *Library > Plug-in Extras > MHPhotos MCP: Auto-Export einrichten* opens a small window (collection name, typed in,
 minimum rating, photos per round, interval, dry run, active) and writes the file for you. By hand, create

@@ -177,3 +177,11 @@ published there automatically at the planned time.
 3. `set_location(photo_ids, latitude, longitude, city=…, country=…)` per group, dry run first. The result says
    whether this Lightroom accepted the GPS write (`gps_written`); place names are written either way.
 
+## 18. Lightroom collection straight into the inbox (no chat needed)
+1. In Lightroom: *Library > Plug-in Extras > MHPhotos MCP: Auto-Export einrichten*, collection e.g. "→ MHPhotos",
+   minimum rating, first with dry run, then active.
+2. On the Mac once: `./scripts/rebuild-mac.sh --hot-folder --apply --start`. macOS may ask whether Python may access
+   the Pictures folder: allow it.
+3. Drag photos into the collection. Within about 15 minutes the plugin exports them, the HTTP service checks and
+   batches them (bad files go to `~/Pictures/MHPhotos-Inbox/fehler/`), n8n uploads them, and they wait in the inbox.
+

@@ -14,6 +14,7 @@ from PIL import Image
 
 from . import server
 from .bridge import Bridge, BridgeAdapter
+from .hot_folder import HotFolder, write_ready
 from .oauth_http import SCOPE, create_http_server
 
 READ_TOOLS = (
@@ -156,13 +157,8 @@ async def export_photos(photo_ids: list[str], confirm: bool = False, instagram_p
     except (OSError, ValueError) as error:
         return {'error': str(error), 'code': 'export_incomplete', 'destination': str(batch)}
     change_id = server.audit.record('export_photos', photo_ids, {'destination': str(batch)}, approved_by=how)
-    marker = batch / '.ready.tmp'
     extra = {'instagram_id': instagram_post_id} if instagram_post_id else {}
-    marker.write_text(json.dumps({'files': [
-        {**item, 'name': Path(item['path']).name, **extra} for item in files
-    ]}))
-    marker.chmod(0o600)
-    marker.replace(batch / 'ready.json')
+    write_ready(batch, files, extra)
     result = {'applied': True, 'change_id': change_id, 'files': files, 'format': 'rendered JPEG, not original RAW'}
     notified = await notify_export_ready(batch.name, [{**item, **extra} for item in files])
     if notified is not None:
@@ -245,12 +241,32 @@ def main():
     server.set_adapter(BridgeAdapter(bridge))
     app = create_app()
     bridge.start()
+    stop_hot_folder = start_hot_folder(config.get('hot_folder'))
     import uvicorn
     try:
         uvicorn.run(app, host='127.0.0.1', port=8766, access_log=False, proxy_headers=False,
             timeout_graceful_shutdown=10)
     finally:
+        if stop_hot_folder:
+            stop_hot_folder.set()
         bridge.stop()
+
+
+def start_hot_folder(folder):
+    """Background hot folder (desktop.json "hot_folder"); returns its stop event, or None."""
+    if not folder:
+        return None
+    import threading
+
+    import anyio
+
+    def notify(batch, files):
+        return anyio.run(notify_export_ready, batch, files)
+
+    stop = threading.Event()
+    watcher = HotFolder(Path(folder).expanduser(), Path(server.permissions.export_dir()), notify)
+    threading.Thread(target=watcher.run, args=(stop,), name='hot-folder', daemon=True).start()
+    return stop
 
 
 if __name__ == '__main__':
