@@ -25,7 +25,9 @@ It needs two n8n Header Auth credentials, one per server:
 | MHPhotos Lightroom – private Exporte | Dateiliste, JPEG laden | `Authorization` | `Bearer ` + `automation-token` (Mac) |
 | MHPhotos – Admin-Token | Inbox laden, In Inbox hochladen | `X-Admin-Token` | MHPhotos admin token |
 
-Replace `YOUR-MAC.YOUR-TAILNET.ts.net` and `YOUR-MHPHOTOS-DOMAIN` after import.
+Replace `YOUR-MAC.YOUR-TAILNET.ts.net` and `YOUR-MHPHOTOS-DOMAIN` after import. If an export carried `instagram_post_id`, the asset
+listing shows `instagram_id` and the upload sends it as `instagramId`, so the app links the Instagram post when the
+photo is taken over.
 
 **Automatic start.** The workflow also has a webhook trigger. When `n8n_webhook_url` is configured
 (`rebuild-mac.sh --n8n-webhook-url https://YOUR-N8N-HOST:9443/webhook/mhphotos-export-ready --apply --start`),

@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import stat
 import uuid
 from pathlib import Path
@@ -30,6 +31,10 @@ WRITE_TOOLS = (
 )
 ADDITIVE_TOOLS = {'create_collection', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords'}
 WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
+# Read-only views of the MHPhotos app (Instagram library, inbox), offered when desktop.json
+# names the MHPhotos site ("mhphotos_url"); the admin token stays in the macOS Keychain.
+MHPHOTOS_TOOLS = ('mhphotos_instagram_posts', 'mhphotos_instagram_images', 'mhphotos_inbox')
+INSTAGRAM_ID = re.compile(r'^[0-9A-Za-z_-]{1,64}$')
 LOCAL_TOOLS = ('export_photos',)
 WEBHOOK_TOKEN = '.config/mhphotos-lightroom/n8n-webhook-token'
 
@@ -42,6 +47,13 @@ def webhook_url(value):
     if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment:
         raise ValueError('n8n_webhook_url must be an https URL without credentials, query or fragment')
     return value
+
+
+def mhphotos_url(value):
+    url = urlsplit(value or '')
+    if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ('', '/'):
+        raise ValueError('mhphotos_url must be the https origin of the MHPhotos site')
+    return f'https://{url.netloc}'
 
 
 def read_webhook_token(home: Path) -> str:
@@ -68,7 +80,8 @@ async def notify_export_ready(batch: str, files: list[dict]):
     try:
         token = read_webhook_token(Path.home())
         payload = {'event': 'mhphotos.export_ready', 'batch': batch, 'assets': [
-            {'id': item['sha256'], 'filename': Path(item['path']).name, 'bytes': item['bytes']} for item in files]}
+            {'id': item['sha256'], 'filename': Path(item['path']).name, 'bytes': item['bytes'],
+             **({'instagram_id': item['instagram_id']} if item.get('instagram_id') else {})} for item in files]}
         async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
             response = await client.post(webhook_url(url), json=payload, headers={
                 'X-MHPhotos-Token': token, 'User-Agent': 'MHPhotos-Lightroom/1.0'})
@@ -77,17 +90,22 @@ async def notify_export_ready(batch: str, files: list[dict]):
         return False
 
 
-async def export_photos(photo_ids: list[str], confirm: bool = False) -> dict:
+async def export_photos(photo_ids: list[str], confirm: bool = False, instagram_post_id: str | None = None) -> dict:
     """Export up to 12 photos as local JPEGs, verifying actual files. Dry run by default.
 
     Destination is operator-controlled; no catalog writes, uploads or publication.
     A JPEG export is not the source RAW file. Missing files are reported as failure.
     Call once without confirm to show the plan, then with confirm=true.
+    instagram_post_id (one photo only): the Instagram post this photo is the original of; it
+    travels with the file into the MHPhotos inbox, which links the post when the photo is published.
     """
     if bad := server._check_ids(photo_ids):
         return bad
     if len(photo_ids) > 12:
         return {'error': 'Export at most 12 photos per request', 'code': 'invalid_batch'}
+    if instagram_post_id is not None and (len(photo_ids) != 1 or not INSTAGRAM_ID.match(instagram_post_id)):
+        return {'error': 'instagram_post_id needs exactly one photo and a valid post id',
+                'code': 'invalid_instagram_id'}
     dest = server.permissions.export_dir()
     if dest is None:
         return {'error': 'Local export is not configured', 'code': 'disabled'}
@@ -98,7 +116,8 @@ async def export_photos(photo_ids: list[str], confirm: bool = False) -> dict:
             return meta
         names.append(meta.filename)
     if not confirm:
-        return {'dry_run': True, 'files': names, 'destination': dest}
+        plan = {'dry_run': True, 'files': names, 'destination': dest}
+        return {**plan, 'instagram_post_id': instagram_post_id} if instagram_post_id else plan
     # This stateless JSON service cannot send a server-to-client question (elicitation): such a
     # call never gets an answer and would hang. The human check is the client's own tool
     # permission (claude.ai: set export_photos to "ask"); confirm=true records the intent.
@@ -129,13 +148,14 @@ async def export_photos(photo_ids: list[str], confirm: bool = False) -> dict:
         return {'error': str(error), 'code': 'export_incomplete', 'destination': str(batch)}
     change_id = server.audit.record('export_photos', photo_ids, {'destination': str(batch)}, approved_by=how)
     marker = batch / '.ready.tmp'
+    extra = {'instagram_id': instagram_post_id} if instagram_post_id else {}
     marker.write_text(json.dumps({'files': [
-        {**item, 'name': Path(item['path']).name} for item in files
+        {**item, 'name': Path(item['path']).name, **extra} for item in files
     ]}))
     marker.chmod(0o600)
     marker.replace(batch / 'ready.json')
     result = {'applied': True, 'change_id': change_id, 'files': files, 'format': 'rendered JPEG, not original RAW'}
-    notified = await notify_export_ready(batch.name, files)
+    notified = await notify_export_ready(batch.name, [{**item, **extra} for item in files])
     if notified is not None:
         result['n8n_notified'] = notified
     return result
@@ -143,14 +163,16 @@ async def export_photos(photo_ids: list[str], confirm: bool = False) -> dict:
 
 def register_tools(app, writes=None):
     writes = os.environ.get(WRITES_FLAG) == '1' if writes is None else writes
-    names = READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ())
+    mhphotos = bool(os.environ.get('MHPHOTOS_INBOX_URL'))
+    names = READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ()) + (MHPHOTOS_TOOLS if mhphotos else ())
     for name in names:
         function = export_photos if name == 'export_photos' else getattr(server, name)
         overwrites = name in WRITE_TOOLS and name not in ADDITIVE_TOOLS
         app.add_tool(function,
-            structured_output=False if name in {'get_photo_previews', 'get_contact_sheet'} else None,
-            annotations=ToolAnnotations(readOnlyHint=name in READ_TOOLS,
-                destructiveHint=overwrites, idempotentHint=name in READ_TOOLS, openWorldHint=False),
+            structured_output=False if name in {'get_photo_previews', 'get_contact_sheet', 'mhphotos_instagram_images'} else None,
+            annotations=ToolAnnotations(readOnlyHint=name in READ_TOOLS or name in MHPHOTOS_TOOLS,
+                destructiveHint=overwrites, idempotentHint=name in READ_TOOLS or name in MHPHOTOS_TOOLS,
+                openWorldHint=name in MHPHOTOS_TOOLS),
             meta={'securitySchemes': [{'type': 'oauth2', 'scopes': [SCOPE]}]})
 
 
@@ -162,7 +184,8 @@ def create_app():
 
 def main():
     # Never inherit an accidental write/publish opt-in from another launch context.
-    for key in ('MHPHOTOS_ALLOW_WRITES', 'MHPHOTOS_ALLOW_PUBLISH', 'MHPHOTOS_ALLOW_INSTAGRAM', WRITES_FLAG):
+    for key in ('MHPHOTOS_ALLOW_WRITES', 'MHPHOTOS_ALLOW_PUBLISH', 'MHPHOTOS_ALLOW_INSTAGRAM', WRITES_FLAG,
+            'MHPHOTOS_INBOX_URL'):
         os.environ.pop(key, None)
     if not server.permissions.export_dir():
         raise ValueError('An operator-controlled export directory is required')
@@ -177,6 +200,8 @@ def main():
     os.environ['MHPHOTOS_GITHUB_CLIENT_ID'] = str(config['github_client_id'])
     os.environ['MHPHOTOS_GITHUB_OWNER_ID'] = str(config['github_owner_id'])
     os.environ['MHPHOTOS_GITHUB_LOGIN'] = config.get('github_login') or ''
+    if config.get('mhphotos_url'):
+        os.environ['MHPHOTOS_INBOX_URL'] = mhphotos_url(config['mhphotos_url'])
     if config.get('allow_writes') is True:
         os.environ[WRITES_FLAG] = '1'
         os.environ['MHPHOTOS_ALLOW_WRITES'] = '1'

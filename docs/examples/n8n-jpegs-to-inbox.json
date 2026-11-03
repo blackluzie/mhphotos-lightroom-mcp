@@ -260,6 +260,10 @@
             {
               "name": "sourcePath",
               "value": "=n8n/{{ $binary.data.fileName }}"
+            },
+            {
+              "name": "instagramId",
+              "value": "={{ ($('Dateiliste').all().find(i => i.json.sha256 === $json.sha256) || { json: {} }).json.instagram_id || '' }}"
             }
           ]
         },
