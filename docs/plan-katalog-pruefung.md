@@ -96,5 +96,5 @@ Connector mit `--allow-instagram`.
 - Gemergte Branches auf GitHub löschen.
 - Später:
   - Karussell/Reels mit n8n (Render-Dienst, Entwürfe in der Social-Queue, Musiklizenzen klären)
-  - Löschen in der iOS-Admin-Ansicht
+  - Löschen in der iOS-Admin-Ansicht: gebaut in apps-platform#2582, Swift-Test noch auf dem Mac laufen lassen (`swift test`)
 - Erledigt (Plugin 0.1.5): Aufnahmezeit überall als Kamera-Uhrzeit statt UTC. Am echten Katalog einmal prüfen: ein Foto kurz nach Mitternacht muss bei `get_photo_metadata` den richtigen Tag zeigen.
