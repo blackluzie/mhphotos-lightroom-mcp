@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+from .http_service import webhook_url
 from .oauth_http import github_settings, validate_redirect
 
 
@@ -47,7 +48,8 @@ def make_agent(label, module, python, repo, home, exports):
             'MHPHOTOS_EXPORT_DIR': str(exports)}}
 
 
-def configure(home, repo, python, public_url=None, callbacks=(), secret_source=None, apply=False, github=None):
+def configure(home, repo, python, public_url=None, callbacks=(), secret_source=None, apply=False, github=None,
+        n8n_webhook_url=None):
     from urllib.parse import urlsplit
     config_dir = home / '.config/mhphotos-lightroom'
     config_path = config_dir / 'desktop.json'
@@ -76,6 +78,8 @@ def configure(home, repo, python, public_url=None, callbacks=(), secret_source=N
         'github_client_id': owner['client_id'], 'github_owner_id': owner['owner_id']}
     if owner['login']:
         config['github_login'] = owner['login']
+    if n8n_webhook_url:
+        config['n8n_webhook_url'] = webhook_url(n8n_webhook_url)
     secret_path = config_dir / 'github-client-secret'
     if secret_path.exists():
         if not private_file(secret_path).strip():
@@ -96,6 +100,7 @@ def configure(home, repo, python, public_url=None, callbacks=(), secret_source=N
     agents = {f'de.mhphotos.lightroom.{suffix}': make_agent(f'de.mhphotos.lightroom.{suffix}', module,
         python, repo, home, exports) for suffix, module in [('http', 'http_service'), ('assets', 'asset_delivery')]}
     plan = {'public_mcp_url': issuer + '/mcp', 'callbacks': redirects,
+        'n8n_webhook_url': config.get('n8n_webhook_url'),
         'export_directory': str(exports), 'agents': list(agents), 'apply': apply,
         'routing': 'Preserve existing Tailscale routes; configure explicitly using docs/rebuild.md'}
     if not apply:
@@ -118,6 +123,8 @@ def configure(home, repo, python, public_url=None, callbacks=(), secret_source=N
         else:
             write_private(config_path, payload)
     write_private(config_dir / 'automation-token', secrets.token_hex(32).encode())
+    if config.get('n8n_webhook_url'):
+        write_private(config_dir / 'n8n-webhook-token', secrets.token_hex(32).encode())
     write_private(home / '.mhphotos-lightroom-mcp/bridge.json', json.dumps({
         'url': 'http://127.0.0.1:47831', 'token': secrets.token_hex(32)}).encode())
     for label, agent in agents.items():
@@ -170,6 +177,7 @@ def main():
     parser.add_argument('--github-client-id', help='Client id of your GitHub OAuth app')
     parser.add_argument('--github-owner-id', help='Numeric GitHub account id allowed to sign in')
     parser.add_argument('--github-login', help='Optional GitHub login, only pre-filled on the sign-in page')
+    parser.add_argument('--n8n-webhook-url', help='Optional n8n webhook (https) told about each verified export')
     parser.add_argument('--configure-routing', action='store_true', help='Validate/create only MCP 443 and private assets 9443 Tailscale routes')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--start', action='store_true', help='Restart only the two managed services; requires --apply')
@@ -182,7 +190,7 @@ def main():
     repo = Path(__file__).resolve().parents[2]
     github = {'client_id': args.github_client_id, 'owner_id': args.github_owner_id, 'login': args.github_login}
     result = configure(home, repo, Path(sys.executable), args.public_url, args.callback,
-        args.github_secret_file, False, github)
+        args.github_secret_file, False, github, args.n8n_webhook_url)
     commands = []
     if args.configure_routing:
         from urllib.parse import urlsplit
@@ -191,7 +199,8 @@ def main():
         commands = routing_commands(status, urlsplit(result['public_mcp_url']).hostname, binary)
         result['routing_commands'] = commands
     if args.apply:
-        configure(home, repo, Path(sys.executable), args.public_url, args.callback, args.github_secret_file, True, github)
+        configure(home, repo, Path(sys.executable), args.public_url, args.callback, args.github_secret_file, True, github,
+            args.n8n_webhook_url)
         result["apply"] = True
     print(json.dumps(result, indent=2))
     if args.start:

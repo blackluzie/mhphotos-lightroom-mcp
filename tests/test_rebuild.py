@@ -97,3 +97,23 @@ def test_github_owner_is_required_and_not_silently_changed(tmp_path):
     with pytest.raises(ValueError, match='github_owner_id'):
         configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True,
             {**GITHUB, 'owner_id': '43'})
+
+
+def test_n8n_webhook_creates_its_own_token(tmp_path):
+    home, secret = setup(tmp_path)
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example',
+        ['https://client.example/callback'], secret, True, GITHUB)
+    token = home / '.config/mhphotos-lightroom/n8n-webhook-token'
+    assert not token.exists()
+    plan = configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True,
+        None, 'https://n8n.example/webhook/mhphotos-export-ready')
+    assert plan['n8n_webhook_url'] == 'https://n8n.example/webhook/mhphotos-export-ready'
+    assert token.stat().st_mode & 0o777 == 0o600 and len(token.read_text()) == 64
+    before = token.read_bytes()
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True)
+    assert token.read_bytes() == before
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['n8n_webhook_url'] == 'https://n8n.example/webhook/mhphotos-export-ready'
+    with pytest.raises(ValueError, match='https'):
+        configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, False,
+            None, 'http://n8n.example/hook')

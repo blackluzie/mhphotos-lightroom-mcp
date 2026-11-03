@@ -18,12 +18,14 @@ FILES = (
     '.mhphotos-lightroom-mcp/bridge.json',
 )
 DATABASE = '.config/mhphotos-lightroom/oauth-clients.sqlite3'
+OPTIONAL = ('.config/mhphotos-lightroom/n8n-webhook-token',)
 
 
 def backup(home, output, key_path):
     if output.exists() or output.is_symlink():
         raise ValueError('Backup destination already exists')
     payloads = {name: private_file(home / name) for name in FILES}
+    payloads.update({name: private_file(home / name) for name in OPTIONAL if (home / name).exists()})
     if (home / DATABASE).exists():
         private_file(home / DATABASE)
         with tempfile.TemporaryDirectory() as temp:
@@ -51,7 +53,7 @@ def restore(home, source, key_path):
     payloads = {}
     with tarfile.open(fileobj=io.BytesIO(plaintext), mode='r:gz') as archive:
         for member in archive.getmembers():
-            if (member.name not in (*FILES, DATABASE) or not member.isfile()
+            if (member.name not in (*FILES, *OPTIONAL, DATABASE) or not member.isfile()
                     or member.name in payloads or member.size > 10_000_000):
                 raise ValueError('Unexpected or unsafe recovery archive member')
             payloads[member.name] = archive.extractfile(member).read()
