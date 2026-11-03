@@ -208,6 +208,15 @@ class CatalogAdapter(Protocol):
     def create_review_collections(self, root: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
         """{"collections": [{"set", "name", "added"}], "missing"}"""
 
+    def photos_by_date(
+        self, captured_from: str, captured_to: str, offset: int, limit: int, refresh: bool = False
+    ) -> dict[str, Any]:
+        """{"total", "offset", "next_offset", "photos": [{id, file, t, cam, r, pick, gps, place, kw, insta, ...}]}"""
+
+    def set_location(self, photo_ids: list[str], latitude: float | None, longitude: float | None,
+                     place: dict[str, str]) -> dict[str, Any]:
+        """{"updated", "gps_written", "gps_error"}; place keys: location, city, stateProvince, country"""
+
 
 def _mock_preview(photo_id: str, size: int) -> bytes:
     """A real JPEG (flat colour derived from the id) so image handling can be tested."""
@@ -415,6 +424,31 @@ class MockAdapter:
             made.append({"set": g["set"], "name": g["name"], "added": len(found)})
             self.review_collections.append({"root": root, **g, "photo_ids": found})
         return {"collections": made, "missing": missing}
+
+    def photos_by_date(self, captured_from, captured_to, offset, limit, refresh=False):
+        hits = sorted((p for p in self._photos.values() if captured_from <= p.capture_time[:10] <= captured_to),
+                      key=lambda p: p.capture_time)
+        recs = []
+        for p in hits[offset : offset + limit]:
+            gps = p.extra.get("gps")
+            recs.append({k: v for k, v in {
+                "id": p.id, "file": p.filename, "t": p.capture_time, "cam": p.camera, "r": p.rating or None,
+                "pick": {"picked": 1, "rejected": -1}.get(p.flag), "gps": gps, "place": p.extra.get("location"),
+                "kw": len(p.keywords) or None, "insta": "instagram" in {k.lower() for k in p.keywords} or None,
+                "title": bool(p.extra.get("title")) or None, "caption": bool(p.extra.get("caption")) or None,
+            }.items() if v is not None})
+        return {"total": len(hits), "offset": offset, "next_offset": offset + len(recs), "photos": recs}
+
+    def set_location(self, photo_ids, latitude, longitude, place):
+        photos = self._all(photo_ids)
+        for p in photos:
+            extra = dict(p.extra)
+            if latitude is not None:
+                extra["gps"] = {"latitude": latitude, "longitude": longitude}
+            if place:
+                extra["location"] = ", ".join(v for v in place.values() if v)
+            self._photos[p.id] = dataclasses.replace(p, extra=extra)
+        return {"updated": len(photos), "gps_written": latitude is not None}
 
     def _all(self, photo_ids: list[str]) -> list[Photo]:
         return [self.get_photo(i) for i in photo_ids]  # raises before any change

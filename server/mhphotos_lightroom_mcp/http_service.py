@@ -21,6 +21,7 @@ READ_TOOLS = (
     'get_photo_metadata', 'get_photo_previews', 'get_contact_sheet',
     'get_develop_settings', 'list_presets', 'list_changes',
     'catalog_audit_start', 'catalog_audit_status', 'catalog_audit_results',
+    'photos_by_date', 'suggest_locations',
 )
 # Catalog edits, offered only when the operator enabled them (desktop.json "allow_writes").
 # Nothing here deletes photos or publishes; ratings, flags, labels, titles and keywords are undoable,
@@ -29,14 +30,19 @@ WRITE_TOOLS = (
     'set_rating', 'set_flag', 'set_color_label', 'set_title_caption', 'add_keywords',
     'create_collection', 'add_to_collection', 'create_virtual_copies', 'undo_last_change',
     'apply_preset', 'apply_develop_settings', 'sync_develop_settings', 'create_preset',
-    'catalog_audit_collections',
+    'catalog_audit_collections', 'set_location',
 )
 ADDITIVE_TOOLS = {'create_collection', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords',
     'catalog_audit_collections'}
 WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
 # Read-only views of the MHPhotos app (Instagram library, inbox), offered when desktop.json
 # names the MHPhotos site ("mhphotos_url"); the admin token stays in the macOS Keychain.
-MHPHOTOS_TOOLS = ('mhphotos_instagram_posts', 'mhphotos_instagram_images', 'mhphotos_inbox')
+MHPHOTOS_TOOLS = ('mhphotos_instagram_posts', 'mhphotos_instagram_images', 'mhphotos_inbox',
+    'mhphotos_instagram_queue', 'mhphotos_best_times', 'instagram_candidates')
+# Planning posts that the MHPhotos social queue later publishes on Instagram by itself. Offered only
+# when desktop.json has "allow_instagram": true (and an MHPhotos site); each post is a dry run first.
+INSTAGRAM_TOOLS = ('mhphotos_schedule_instagram', 'mhphotos_cancel_instagram')
+INSTAGRAM_FLAG = 'MHPHOTOS_HTTP_INSTAGRAM'
 INSTAGRAM_ID = re.compile(r'^[0-9A-Za-z_-]{1,64}$')
 LOCAL_TOOLS = ('export_photos',)
 WEBHOOK_TOKEN = '.config/mhphotos-lightroom/n8n-webhook-token'
@@ -167,15 +173,18 @@ async def export_photos(photo_ids: list[str], confirm: bool = False, instagram_p
 def register_tools(app, writes=None):
     writes = os.environ.get(WRITES_FLAG) == '1' if writes is None else writes
     mhphotos = bool(os.environ.get('MHPHOTOS_INBOX_URL'))
-    names = READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ()) + (MHPHOTOS_TOOLS if mhphotos else ())
+    instagram = mhphotos and os.environ.get(INSTAGRAM_FLAG) == '1'
+    names = (READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ()) + (MHPHOTOS_TOOLS if mhphotos else ())
+        + (INSTAGRAM_TOOLS if instagram else ()))
     for name in names:
         function = export_photos if name == 'export_photos' else getattr(server, name)
-        overwrites = name in WRITE_TOOLS and name not in ADDITIVE_TOOLS
+        overwrites = (name in WRITE_TOOLS and name not in ADDITIVE_TOOLS) or name == 'mhphotos_cancel_instagram'
+        reads = name in READ_TOOLS or name in MHPHOTOS_TOOLS
         app.add_tool(function,
             structured_output=False if name in {'get_photo_previews', 'get_contact_sheet', 'mhphotos_instagram_images'} else None,
-            annotations=ToolAnnotations(readOnlyHint=name in READ_TOOLS or name in MHPHOTOS_TOOLS,
-                destructiveHint=overwrites, idempotentHint=name in READ_TOOLS or name in MHPHOTOS_TOOLS,
-                openWorldHint=name in MHPHOTOS_TOOLS),
+            annotations=ToolAnnotations(readOnlyHint=reads,
+                destructiveHint=overwrites, idempotentHint=reads,
+                openWorldHint=name in MHPHOTOS_TOOLS or name in INSTAGRAM_TOOLS),
             meta={'securitySchemes': [{'type': 'oauth2', 'scopes': [SCOPE]}]})
 
 
@@ -188,7 +197,7 @@ def create_app():
 def main():
     # Never inherit an accidental write/publish opt-in from another launch context.
     for key in ('MHPHOTOS_ALLOW_WRITES', 'MHPHOTOS_ALLOW_PUBLISH', 'MHPHOTOS_ALLOW_INSTAGRAM', WRITES_FLAG,
-            'MHPHOTOS_INBOX_URL'):
+            'MHPHOTOS_INBOX_URL', INSTAGRAM_FLAG):
         os.environ.pop(key, None)
     if not server.permissions.export_dir():
         raise ValueError('An operator-controlled export directory is required')
@@ -205,6 +214,10 @@ def main():
     os.environ['MHPHOTOS_GITHUB_LOGIN'] = config.get('github_login') or ''
     if config.get('mhphotos_url'):
         os.environ['MHPHOTOS_INBOX_URL'] = mhphotos_url(config['mhphotos_url'])
+    if config.get('allow_instagram') is True and config.get('mhphotos_url'):
+        os.environ[INSTAGRAM_FLAG] = '1'
+        os.environ['MHPHOTOS_ALLOW_INSTAGRAM'] = '1'
+        os.environ['MHPHOTOS_CONFIRMATION'] = 'flag'
     if config.get('allow_writes') is True:
         os.environ[WRITES_FLAG] = '1'
         os.environ['MHPHOTOS_ALLOW_WRITES'] = '1'

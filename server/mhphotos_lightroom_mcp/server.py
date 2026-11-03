@@ -3,9 +3,11 @@
 Adapter is chosen with MHPHOTOS_ADAPTER=mock (default) | bridge.
 """
 
+import bisect
 import dataclasses
 import json
 import os
+import random
 import re
 import sys
 import uuid
@@ -522,6 +524,197 @@ async def backlog_report(year: int, min_rating: int = 5, sample: int = 30) -> di
         "truncated": total > len(candidates),
         "note": 'Handled means: keyword "MHPhotos-Inbox" or "Instagram" present.',
     }
+
+
+# ---------------------------------------------------------------- photos by capture date
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+RANGE_PAGE = 2000
+RANGE_CAP = 60000
+MISSING = ("caption", "title", "keywords", "gps", "place")
+
+
+def _check_range(captured_from: str, captured_to: str) -> dict[str, Any] | None:
+    if not DATE_RE.match(captured_from or "") or not DATE_RE.match(captured_to or ""):
+        return {"error": "captured_from and captured_to must be YYYY-MM-DD"}
+    if captured_from > captured_to:
+        return {"error": "captured_from must not be after captured_to"}
+    return None
+
+
+async def _range(captured_from: str, captured_to: str, refresh: bool = False) -> list[dict[str, Any]] | dict[str, Any]:
+    """Every photo captured in the range (virtual copies excluded), oldest first."""
+    out: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        res = await _run(_adapter.photos_by_date, captured_from, captured_to, offset, RANGE_PAGE, refresh and offset == 0)
+        if _is_error(res):
+            return res
+        out += [r for r in res.get("photos") or [] if r.get("id") and not r.get("vc")]
+        nxt, total = int(res["next_offset"]), int(res["total"])
+        if nxt <= offset or nxt >= total or len(out) >= RANGE_CAP:
+            return out
+        offset = nxt
+
+
+def _brief(r: dict[str, Any]) -> dict[str, Any]:
+    out = {"id": r["id"], "file": r.get("file"), "captured": r.get("t"), "rating": r.get("r") or 0,
+           "flag": {1: "picked", -1: "rejected"}.get(r.get("pick"), "none")}
+    for key in ("place", "cam"):
+        if r.get(key):
+            out[key] = r[key]
+    out.update({k: True for k in ("title", "caption", "insta") if r.get(k)})
+    if r.get("gps"):
+        out["gps"] = True
+    return out
+
+
+@mcp.tool()
+async def photos_by_date(
+    captured_from: str, captured_to: str, unreviewed: bool = False, min_rating: int | None = None,
+    max_rating: int | None = None, flag: str | None = None, missing: str | None = None,
+    exclude_instagram: bool = False, refresh: bool = False, limit: int = 100, offset: int = 0,
+) -> dict[str, Any]:
+    """Photos captured between two days (YYYY-MM-DD, inclusive), fast even on a 250k catalog.
+
+    For sorting a new shoot (unreviewed=true: no stars and no flag), best-of picks (min_rating=4),
+    photos lacking text (missing=caption|title|keywords) or a place (missing=gps|place), and
+    Instagram ideas (exclude_instagram=true skips photos with the keyword "Instagram").
+    The first call builds a capture-date index (can take a minute); after a new import pass
+    refresh=true. counts summarises the whole range. Read-only.
+    """
+    if bad := _check_range(captured_from, captured_to):
+        return bad
+    if missing is not None and missing not in MISSING:
+        return {"error": f"missing must be one of: {', '.join(MISSING)}"}
+    if flag is not None and flag not in FLAGS:
+        return {"error": f"flag must be one of: {', '.join(FLAGS)}"}
+    recs = await _range(captured_from, captured_to, refresh)
+    if isinstance(recs, dict):
+        return recs
+
+    def keep(r: dict[str, Any]) -> bool:
+        rating = r.get("r") or 0
+        if unreviewed and (rating or r.get("pick")):
+            return False
+        if min_rating is not None and rating < min_rating:
+            return False
+        if max_rating is not None and rating > max_rating:
+            return False
+        if flag is not None and {1: "picked", -1: "rejected"}.get(r.get("pick"), "none") != flag:
+            return False
+        if exclude_instagram and r.get("insta"):
+            return False
+        key = {"keywords": "kw"}.get(missing or "", missing)
+        return not (missing and r.get(key))
+
+    hits = [r for r in recs if keep(r)]
+    limit, offset = max(1, min(limit, 500)), max(0, offset)
+    page = hits[offset : offset + limit]
+    counts = {
+        "in_range": len(recs), "matching": len(hits),
+        "unreviewed": sum(1 for r in recs if not r.get("r") and not r.get("pick")),
+        "rated_4_plus": sum(1 for r in recs if (r.get("r") or 0) >= 4),
+        "rejected": sum(1 for r in recs if r.get("pick") == -1),
+        "without_caption": sum(1 for r in recs if not r.get("caption")),
+        "without_gps": sum(1 for r in recs if not r.get("gps")),
+    }
+    out = {"counts": counts, "photos": [_brief(r) for r in page]}
+    if offset + len(page) < len(hits):
+        out["next_offset"] = offset + len(page)
+    if len(recs) >= RANGE_CAP:
+        out["truncated"] = f"only the first {RANGE_CAP} photos of the range were read; narrow the dates"
+    return out
+
+
+@mcp.tool()
+async def suggest_locations(
+    captured_from: str, captured_to: str, max_minutes: int = 30, clock_offset_minutes: int = 0,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Suggest places for photos without GPS from photos with GPS taken around the same time.
+
+    Typical case: camera photos without GPS, iPhone photos with GPS on the same walk. For each photo
+    without GPS the nearest photo with GPS within max_minutes is used. clock_offset_minutes corrects
+    a camera clock that differs from the phone (e.g. +60 when the camera still shows home time while
+    abroad; check one known pair first). Suggestions are grouped by position, so each group can be
+    written with one set_location call. Read-only.
+    """
+    if bad := _check_range(captured_from, captured_to):
+        return bad
+    if not 1 <= max_minutes <= 240 or abs(clock_offset_minutes) > 24 * 60:
+        return {"error": "max_minutes 1-240, clock_offset_minutes within one day"}
+    recs = await _range(captured_from, captured_to)
+    if isinstance(recs, dict):
+        return recs
+
+    def when(r: dict[str, Any]) -> datetime | None:
+        try:
+            return datetime.fromisoformat(str(r.get("t"))[:19])
+        except ValueError:
+            return None
+
+    anchors = sorted(((when(r), r) for r in recs if r.get("gps") and when(r)), key=lambda a: a[0])
+    times = [a[0] for a in anchors]
+    groups: dict[tuple, dict[str, Any]] = {}
+    without = 0
+    for r in recs:
+        if r.get("gps"):
+            continue
+        without += 1
+        t = when(r)
+        if t is None or not anchors:
+            continue
+        t = t + timedelta(minutes=clock_offset_minutes)
+        i = bisect.bisect_left(times, t)
+        near = [anchors[j] for j in (i - 1, i) if 0 <= j < len(anchors)]
+        best_t, best = min(near, key=lambda a: abs((a[0] - t).total_seconds()))
+        minutes = abs((best_t - t).total_seconds()) / 60
+        if minutes > max_minutes:
+            continue
+        gps = best["gps"]
+        key = (round(gps["latitude"], 4), round(gps["longitude"], 4), best.get("place") or "")
+        g = groups.setdefault(key, {"latitude": gps["latitude"], "longitude": gps["longitude"],
+                                    "place": best.get("place"), "from_photo": best.get("file"),
+                                    "photo_ids": [], "files": [], "max_minutes_apart": 0})
+        g["photo_ids"].append(r["id"])
+        g["files"].append(r.get("file"))
+        g["max_minutes_apart"] = max(g["max_minutes_apart"], round(minutes))
+    ranked = sorted(groups.values(), key=lambda g: -len(g["photo_ids"]))
+    for g in ranked:
+        g["files"] = g["files"][:8]
+    return {"photos_without_gps": without, "photos_with_suggestion": sum(len(g["photo_ids"]) for g in ranked),
+            "groups": ranked[: max(1, min(limit, 200))],
+            "hint": "Check one group with get_photo_previews, then set_location(photo_ids, latitude, longitude, ...)."}
+
+
+@mcp.tool()
+async def set_location(
+    photo_ids: list[str], latitude: float | None = None, longitude: float | None = None,
+    location: str | None = None, city: str | None = None, state: str | None = None,
+    country: str | None = None, confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Set GPS position and/or place names (Ort, Stadt, Bundesland, Land) on up to 100 photos.
+
+    GPS is written where this Lightroom version allows it (the result says gps_written); the
+    place names are written either way. Overwrites existing values; not undoable here (Lightroom's
+    metadata history keeps the old values). Dry run unless confirm=true; needs operator opt-in.
+    """
+    if (latitude is None) != (longitude is None):
+        return {"error": "latitude and longitude go together"}
+    if latitude is not None and not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return {"error": "latitude/longitude out of range"}
+    place = {k: v.strip() for k, v in (("location", location), ("city", city), ("stateProvince", state),
+                                        ("country", country)) if v and v.strip()}
+    if latitude is None and not place:
+        return {"error": "give latitude/longitude and/or a place name"}
+    if any(len(v) > 200 for v in place.values()):
+        return {"error": "place names max 200 characters"}
+    change = {"set_location": {**({"latitude": latitude, "longitude": longitude} if latitude is not None else {}), **place}}
+    return await _edit(
+        photo_ids, change, lambda: _adapter.set_location(photo_ids, latitude, longitude, place),
+        confirm, ctx=ctx, tool="set_location", fields=("gps", "location"),
+        summary=f"Ort setzen: {', '.join(place.values()) or ''} {f'({latitude:.5f}, {longitude:.5f})' if latitude is not None else ''}",
+    )
 
 
 # ---------------------------------------------------------------- catalog audit
@@ -1756,6 +1949,81 @@ async def mhphotos_instagram_queue(status: str | None = None, limit: int = 30) -
 
 
 @mcp.tool()
+async def mhphotos_best_times(account: str = "mhphotos") -> dict[str, Any]:
+    """Best posting times of an Instagram account, from the MHPhotos social statistics. Read-only."""
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    if account not in publishing.SOCIAL_ACCOUNTS:
+        return {"error": f"account must be one of: {', '.join(publishing.SOCIAL_ACCOUNTS)}"}
+    code, data = await anyio.to_thread.run_sync(
+        publishing.api, cfg, "GET", f"/api/admin/social-hub-best-time?accountId={account}")
+    if code != 200:
+        return _app_error(code, data)
+    return {"account": account, **data}
+
+
+@mcp.tool()
+async def instagram_candidates(
+    account: str = "mhphotos", captured_from: str | None = None, captured_to: str | None = None,
+    min_rating: int = 4, count: int = 9, max_checks: int = 30,
+) -> dict[str, Any]:
+    """Good Lightroom photos that were never planned or posted on Instagram, for a weekly plan.
+
+    Takes photos rated min_rating or more (default: the last three years), skips rejected ones and
+    those with the keyword "Instagram", mixes them (a different mix every week) and asks the MHPhotos
+    duplicate check for each until count photos are found that are neither planned nor posted on
+    that account. Then: look at them (get_photo_previews), write captions in the style of earlier
+    posts (mhphotos_instagram_posts), pick times (mhphotos_best_times, mhphotos_instagram_queue) and
+    plan each with mhphotos_schedule_instagram (dry run first). Read-only.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    if account not in publishing.SOCIAL_ACCOUNTS:
+        return {"error": f"account must be one of: {', '.join(publishing.SOCIAL_ACCOUNTS)}"}
+    today = datetime.now().date()
+    captured_to = captured_to or today.isoformat()
+    captured_from = captured_from or today.replace(year=today.year - 3).isoformat()
+    if bad := _check_range(captured_from, captured_to):
+        return bad
+    count, max_checks = max(1, min(count, 21)), max(1, min(max_checks, 60))
+    recs = await _range(captured_from, captured_to)
+    if isinstance(recs, dict):
+        return recs
+    pool = [r for r in recs if (r.get("r") or 0) >= min_rating and r.get("pick") != -1 and not r.get("insta")]
+    week = today.isocalendar()
+    random.Random(f"{account}-{week[0]}-{week[1]}").shuffle(pool)
+    pool.sort(key=lambda r: -(r.get("r") or 0))  # stable: best first, shuffled within a rating
+    found: list[dict[str, Any]] = []
+    already, checked, unchecked = 0, 0, 0
+    for r in pool:
+        if len(found) >= count or checked >= max_checks:
+            break
+        checked += 1
+        look = await _run(_adapter.get_preview, r["id"], 512)
+        if _is_error(look):
+            unchecked += 1
+            continue
+        try:
+            thumb = await anyio.to_thread.run_sync(imaging.thumb_png_b64, look)
+            code, resp = await anyio.to_thread.run_sync(publishing.social_duplicate, cfg, thumb, account)
+        except (OSError, ValueError):
+            code, resp = 0, {}
+        if code == 200 and resp.get("duplicate"):
+            already += 1
+            continue
+        item = _brief(r)
+        if code != 200:
+            item["duplicate_check"] = "not possible"
+            unchecked += 1
+        found.append(item)
+    return {"account": account, "range": [captured_from, captured_to], "pool": len(pool),
+            "checked": checked, "already_planned_or_posted": already, "candidates": found,
+            **({"unchecked": unchecked} if unchecked else {})}
+
+
+@mcp.tool()
 async def mhphotos_cancel_instagram(
     queue_id: str, confirm: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
@@ -1799,11 +2067,12 @@ TOOLSETS: dict[str, set[str]] = {
         "get_photo_metadata", "get_photo_previews", "get_contact_sheet", "get_develop_settings",
         "list_presets", "backlog_report", "list_changes",
         "catalog_audit_start", "catalog_audit_status", "catalog_audit_results",
+        "photos_by_date", "suggest_locations",
     },
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
         "create_collection", "add_to_collection", "export_photos", "undo_last_change",
-        "catalog_audit_collections",
+        "catalog_audit_collections", "set_location",
     },
     "develop": {
         "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",
@@ -1814,6 +2083,7 @@ TOOLSETS: dict[str, set[str]] = {
         "mhphotos_publish", "mhphotos_instagram_posts", "mhphotos_instagram_images",
         "mhphotos_schedule_instagram", "mhphotos_instagram_queue", "mhphotos_cancel_instagram",
         "mhphotos_inbox_images", "mhphotos_inbox_contact_sheet", "mhphotos_edit_preview",
+        "mhphotos_best_times", "instagram_candidates",
     },
 }
 

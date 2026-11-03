@@ -173,7 +173,8 @@ def fingerprint(path: str) -> str | None:
 
 def _entry(rec: dict[str, Any], **extra: Any) -> dict[str, Any]:
     out = {"id": rec["id"], "file": PurePosixPath(rec.get("path") or "").name,
-           "folder": short_folder(rec.get("path") or ""), "captured": rec.get("t") or None}
+           "folder": short_folder(rec.get("path") or ""), "captured": rec.get("t") or None,
+           "bytes": rec.get("size")}
     return {**out, **{k: v for k, v in extra.items() if v is not None}}
 
 
@@ -196,6 +197,8 @@ class Analysis:
         self.check_files = check_files
         self.today = today
         self.scanned = 0
+        self.bytes_total = 0
+        self.bytes_by_year: dict[str, int] = defaultdict(int)
         self.considered = 0
         self.virtual_copies = 0
         self.findings: dict[str, list[dict[str, Any]]] = {k: [] for k in KINDS}
@@ -217,6 +220,9 @@ class Analysis:
             self.virtual_copies += 1  # moves with its master; not a file of its own
             return
         self.considered += 1
+        size = int(rec.get("size") or 0)
+        self.bytes_total += size
+        self.bytes_by_year[(rec.get("t") or "")[:4] or folder_dates(rec.get("path") or "")[0] or "ohne Datum"] += size
         finding = classify(rec, self.today)
         if finding:
             kind = finding.pop("kind")
@@ -234,7 +240,8 @@ class Analysis:
         if rec.get("t") and (fmt in RAW_FORMATS or fmt in JPEG_FORMATS):
             self._moments[(rec["t"], rec.get("cam") or "", rec.get("serial") or "")].append({
                 "id": rec["id"], "path": rec.get("path") or "", "raw": fmt in RAW_FORMATS,
-                "edge": max(rec.get("w") or 0, rec.get("h") or 0), "work": keep_score(rec, False)})
+                "edge": max(rec.get("w") or 0, rec.get("h") or 0), "work": keep_score(rec, False),
+                "size": rec.get("size")})
         if key := duplicate_key(rec):
             self._dupes[key].append({
                 "id": rec["id"], "path": rec.get("path") or "", "size": rec.get("size"), "t": rec.get("t"),
@@ -264,7 +271,7 @@ class Analysis:
                 same_folder = PurePosixPath(jpg["path"]).parent == PurePosixPath(raw["path"]).parent
                 full_size = not raw["edge"] or jpg["edge"] >= 0.9 * raw["edge"]
                 kind = "jpeg_with_raw" if same_folder and full_size else "reimported_export"
-                entry = {"id": jpg["id"], "file": PurePosixPath(jpg["path"]).name,
+                entry = {"id": jpg["id"], "file": PurePosixPath(jpg["path"]).name, "bytes": jpg["size"],
                          "folder": short_folder(jpg["path"]), "captured": taken,
                          "raw": {"id": raw["id"], "file": PurePosixPath(raw["path"]).name,
                                  "folder": short_folder(raw["path"])}}
@@ -323,7 +330,23 @@ class Analysis:
         for f in self.findings["wrong_folder"]:
             levels[f["level"]] += 1
             by_year[f["expected"][:4]] += 1
-        return {"photos_scanned": self.scanned, "photos_considered": self.considered,
+        gb = 1024 ** 3
+
+        def total(items: list[dict[str, Any]]) -> float:
+            return round(sum(int(i.get("bytes") or 0) for i in items) / gb, 2)
+
+        storage = {
+            "total_gb": round(self.bytes_total / gb, 1),
+            "by_year_gb": {y: round(b / gb, 1) for y, b in sorted(self.bytes_by_year.items())},
+            "freeable_gb": {
+                "duplicates": total([r for g in self.findings["duplicates"] for r in g["remove"]]),
+                "jpeg_with_raw": total([f for f in self.findings["jpeg_with_raw"] if not f.get("check")]),
+                "reimported_export": total(self.findings["reimported_export"]),
+                "non_photo": total(self.findings["non_photo"]),
+            },
+        }
+        storage["freeable_gb"]["sum"] = round(sum(storage["freeable_gb"].values()), 2)
+        return {"photos_scanned": self.scanned, "photos_considered": self.considered, "storage": storage,
                 "virtual_copies_skipped": self.virtual_copies, "counts": counts,
                 "wrong_folder_by_level": dict(levels), "wrong_folder_by_target_year": dict(sorted(by_year.items())),
                 **({"file_check_denied": self.file_check_denied} if self.file_check_denied else {}),

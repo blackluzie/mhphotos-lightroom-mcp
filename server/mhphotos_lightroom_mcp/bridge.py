@@ -343,6 +343,17 @@ class BridgeAdapter:
     def create_review_collections(self, root, groups):
         return self._call("create_review_collections", {"root": root, "groups": groups}, timeout=600.0)
 
+    def photos_by_date(self, captured_from, captured_to, offset, limit, refresh=False):
+        # the first query builds a capture-date index of the whole catalog (can take a while)
+        return self._call("photos_by_date", {"captured_from": captured_from, "captured_to": captured_to,
+                                             "offset": offset, "limit": limit, "refresh": refresh}, timeout=300.0)
+
+    def set_location(self, photo_ids, latitude, longitude, place):
+        args: dict[str, Any] = {"photo_ids": photo_ids, **place}
+        if latitude is not None:
+            args.update(latitude=latitude, longitude=longitude)
+        return self._call("set_location", args)
+
     def export_photos(self, photo_ids, dest_dir):
         return self._call(
             "export_photos",

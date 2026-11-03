@@ -49,7 +49,7 @@ def make_agent(label, module, python, repo, home, exports):
 
 
 def configure(home, repo, python, public_url=None, callbacks=(), secret_source=None, apply=False, github=None,
-        n8n_webhook_url=None, allow_writes=None, mhphotos_site=None):
+        n8n_webhook_url=None, allow_writes=None, mhphotos_site=None, allow_instagram=None):
     from urllib.parse import urlsplit
     config_dir = home / '.config/mhphotos-lightroom'
     config_path = config_dir / 'desktop.json'
@@ -84,6 +84,10 @@ def configure(home, repo, python, public_url=None, callbacks=(), secret_source=N
         config['allow_writes'] = bool(allow_writes)
     if mhphotos_site:
         config['mhphotos_url'] = mhphotos_url(mhphotos_site)
+    if allow_instagram is not None:
+        if allow_instagram and not config.get('mhphotos_url'):
+            raise ValueError('--allow-instagram needs --mhphotos-url')
+        config['allow_instagram'] = bool(allow_instagram)
     secret_path = config_dir / 'github-client-secret'
     if secret_path.exists():
         if not private_file(secret_path).strip():
@@ -105,7 +109,7 @@ def configure(home, repo, python, public_url=None, callbacks=(), secret_source=N
         python, repo, home, exports) for suffix, module in [('http', 'http_service'), ('assets', 'asset_delivery')]}
     plan = {'public_mcp_url': issuer + '/mcp', 'callbacks': redirects,
         'n8n_webhook_url': config.get('n8n_webhook_url'), 'allow_writes': config.get('allow_writes', False),
-        'mhphotos_url': config.get('mhphotos_url'),
+        'mhphotos_url': config.get('mhphotos_url'), 'allow_instagram': config.get('allow_instagram', False),
         'export_directory': str(exports), 'agents': list(agents), 'apply': apply,
         'routing': 'Preserve existing Tailscale routes; configure explicitly using docs/rebuild.md'}
     if not apply:
@@ -189,6 +193,10 @@ def main():
         '(admin token from the Keychain entry mhphotos-admin-token)')
     parser.add_argument('--no-allow-writes', dest='allow_writes', action='store_false',
         help='Remote clients may only read and export again')
+    parser.add_argument('--allow-instagram', dest='allow_instagram', action='store_true', default=None,
+        help='Offer planning Instagram posts in the MHPhotos social queue (published automatically at the planned time)')
+    parser.add_argument('--no-allow-instagram', dest='allow_instagram', action='store_false',
+        help='Remove Instagram planning again')
     parser.add_argument('--configure-routing', action='store_true', help='Validate/create only MCP 443 and private assets 9443 Tailscale routes')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--start', action='store_true', help='Restart only the two managed services; requires --apply')
@@ -201,7 +209,8 @@ def main():
     repo = Path(__file__).resolve().parents[2]
     github = {'client_id': args.github_client_id, 'owner_id': args.github_owner_id, 'login': args.github_login}
     result = configure(home, repo, Path(sys.executable), args.public_url, args.callback,
-        args.github_secret_file, False, github, args.n8n_webhook_url, args.allow_writes, args.mhphotos_url)
+        args.github_secret_file, False, github, args.n8n_webhook_url, args.allow_writes, args.mhphotos_url,
+        args.allow_instagram)
     commands = []
     if args.configure_routing:
         from urllib.parse import urlsplit
@@ -211,7 +220,7 @@ def main():
         result['routing_commands'] = commands
     if args.apply:
         configure(home, repo, Path(sys.executable), args.public_url, args.callback, args.github_secret_file, True, github,
-            args.n8n_webhook_url, args.allow_writes, args.mhphotos_url)
+            args.n8n_webhook_url, args.allow_writes, args.mhphotos_url, args.allow_instagram)
         result["apply"] = True
     print(json.dumps(result, indent=2))
     if args.start:

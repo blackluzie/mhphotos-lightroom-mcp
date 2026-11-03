@@ -153,3 +153,20 @@ def test_plugin_is_copied_updated_and_otherwise_left_alone(tmp_path):
     link = tmp_path / 'link.lrdevplugin'
     link.symlink_to(source)
     assert 'symlink' in install_plugin(source, link)
+
+
+def test_allow_instagram_needs_the_site_and_is_kept(tmp_path):
+    import pytest
+    home, secret = setup(tmp_path)
+    plan = configure(home, tmp_path, tmp_path / 'python', 'https://photos.example',
+        ['https://client.example/callback'], secret, True, GITHUB)
+    assert plan['allow_instagram'] is False
+    with pytest.raises(ValueError, match='mhphotos-url'):
+        configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_instagram=True)
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True,
+        mhphotos_site='https://mhphotos.example', allow_instagram=True)
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['allow_instagram'] is True
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_instagram=False)
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['allow_instagram'] is False

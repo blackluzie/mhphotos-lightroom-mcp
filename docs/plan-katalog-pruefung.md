@@ -68,17 +68,28 @@ Verknüpfung.
    - Excire sucht visuell ähnliche Bilder (anderer Ausschnitt, andere Größe). Das ergänzt unsere exakte Duplikatsuche.
    - Excire-Suche mit Beispielbild könnte beim Instagram-Abgleich die Originale finden.
 
+## Weitere Abläufe (gebaut 2026-11-03, Plugin 0.1.4)
+
+Speicherplatz-Bilanz in der Katalog-Prüfung, Sichten nach dem Import, Stichwörter/Titel/Bildunterschriften,
+Best-of, Instagram-Wochenplan, Orte nachtragen: `docs/workflows.md` Nr. 11–16. Werkzeuge: `photos_by_date`,
+`suggest_locations`, `set_location`, `instagram_candidates`, `mhphotos_best_times`; Instagram-Planung über den
+Connector mit `--allow-instagram`.
+
 ## Offene Punkte (Stand 2026-11-03)
 
 - Mac:
   - `git pull --ff-only`
-  - `./scripts/rebuild-mac.sh --allow-writes --mhphotos-url https://mhphotos.de --apply --start`
+  - `./scripts/rebuild-mac.sh --allow-writes --mhphotos-url https://mhphotos.de --allow-instagram --apply --start`
   - In Lightroom: Zusatzmodul-Manager → Plugin neu laden
-  - Connector in claude.ai neu verbinden: Schreib-Werkzeuge auf „fragen“, Lese-Werkzeuge auf „immer erlauben“
+  - Connector in claude.ai neu verbinden: Schreib-Werkzeuge auf „fragen“, Lese-Werkzeuge auf „immer erlauben“;
+    `mhphotos_schedule_instagram` und `mhphotos_cancel_instagram` unbedingt auf „fragen“
 - n8n, Karte „In Inbox hochladen“: Body-Feld `instagramId` (Ausdruck in `docs/examples/n8n-jpegs-to-inbox.json`), dann Publish.
 - Erster Probelauf: „Starte die Katalog-Prüfung für 2020“. macOS-Frage nach Netzwerk-Volumes erlauben.
   Danach Stichproben ansehen: `non_photo` (Fehlalarme?), `jpeg_with_raw`, `wrong_folder` mit `day_diff`.
 - Echte Tests noch offen:
+  - Ob Lightroom GPS über das SDK schreiben lässt (`set_location` meldet `gps_written`)
+  - Erste Datumsabfrage (`photos_by_date`) baut einen Index über 268.000 Fotos: Dauer messen
+  - Instagram-Wochenplan: Kandidaten, Duplikat-Prüfung, ein Probe-Post als Probelauf
   - XMP-Presets nach Lightroom-Neustart
   - Schreib-Werkzeuge über den Connector
   - Instagram-Abgleich
