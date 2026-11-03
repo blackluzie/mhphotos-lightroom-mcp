@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "https://macbook-air-von-martin.tailae2331.ts.net:9443"
+      "url": "https://YOUR-MAC.YOUR-TAILNET.ts.net:9443"
     }
   ],
   "security": [

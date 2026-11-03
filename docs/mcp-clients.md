@@ -1,6 +1,6 @@
 # Other MCP clients
 
-The deployed endpoint is `https://macbook-air-von-martin.tailae2331.ts.net/mcp`
+The endpoint is `https://YOUR-MAC.YOUR-TAILNET.ts.net/mcp` (your `--public-url`)
 (Streamable HTTP). The Mac, Tailscale and Lightroom Classic must run; new exports
 also require the originals/NAS. This is Lightroom Classic, not the Adobe Cloud API.
 
@@ -11,7 +11,7 @@ Authorization Code with PKCE S256, and scope `lightroom:read`. Discovery is avai
 at `/.well-known/oauth-authorization-server` and
 `/.well-known/oauth-protected-resource/mcp`. The resource/audience is the exact
 HTTPS `/mcp` URL. Registration alone grants no access: GitHub login is limited to
-Martin's configured owner identity, followed by explicit consent. Tokens are bound
+the configured owner (`--github-owner-id`), followed by explicit consent. Tokens are bound
 to their client and audience. Refresh tokens rotate and replay revokes their family.
 
 Add each client's **exact** callback to `desktop.json` through the rebuild command:

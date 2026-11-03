@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from .oauth_http import validate_redirect
+from .oauth_http import github_settings, validate_redirect
 
 
 def private_file(path):
@@ -47,7 +47,7 @@ def make_agent(label, module, python, repo, home, exports):
             'MHPHOTOS_EXPORT_DIR': str(exports)}}
 
 
-def configure(home, repo, python, public_url=None, callbacks=(), secret_source=None, apply=False):
+def configure(home, repo, python, public_url=None, callbacks=(), secret_source=None, apply=False, github=None):
     from urllib.parse import urlsplit
     config_dir = home / '.config/mhphotos-lightroom'
     config_path = config_dir / 'desktop.json'
@@ -64,7 +64,18 @@ def configure(home, repo, python, public_url=None, callbacks=(), secret_source=N
         validate_redirect(uri)
     if existing.get('public_url') and existing['public_url'] != issuer:
         raise ValueError('Refusing to change an existing issuer; migrate explicitly')
-    config = {**existing, 'public_url': issuer, 'redirect_uris': redirects}
+    github = {key: value for key, value in (github or {}).items() if value}
+    for key in ('client_id', 'owner_id', 'login'):
+        name = 'github_' + key
+        if existing.get(name) and github.get(key) and str(github[key]) != str(existing[name]):
+            raise ValueError(f'Refusing to change the existing {name}; migrate explicitly')
+    owner = github_settings(github.get('client_id') or existing.get('github_client_id'),
+        github.get('owner_id') or existing.get('github_owner_id'),
+        github.get('login') or existing.get('github_login'))
+    config = {**existing, 'public_url': issuer, 'redirect_uris': redirects,
+        'github_client_id': owner['client_id'], 'github_owner_id': owner['owner_id']}
+    if owner['login']:
+        config['github_login'] = owner['login']
     secret_path = config_dir / 'github-client-secret'
     if secret_path.exists():
         if not private_file(secret_path).strip():
@@ -156,6 +167,9 @@ def main():
     parser.add_argument('--public-url')
     parser.add_argument('--callback', action='append', default=[])
     parser.add_argument('--github-secret-file', type=Path)
+    parser.add_argument('--github-client-id', help='Client id of your GitHub OAuth app')
+    parser.add_argument('--github-owner-id', help='Numeric GitHub account id allowed to sign in')
+    parser.add_argument('--github-login', help='Optional GitHub login, only pre-filled on the sign-in page')
     parser.add_argument('--configure-routing', action='store_true', help='Validate/create only MCP 443 and private assets 9443 Tailscale routes')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--start', action='store_true', help='Restart only the two managed services; requires --apply')
@@ -166,8 +180,9 @@ def main():
         parser.error('--start requires --apply')
     home = Path.home()
     repo = Path(__file__).resolve().parents[2]
+    github = {'client_id': args.github_client_id, 'owner_id': args.github_owner_id, 'login': args.github_login}
     result = configure(home, repo, Path(sys.executable), args.public_url, args.callback,
-        args.github_secret_file, False)
+        args.github_secret_file, False, github)
     commands = []
     if args.configure_routing:
         from urllib.parse import urlsplit
@@ -176,7 +191,7 @@ def main():
         commands = routing_commands(status, urlsplit(result['public_mcp_url']).hostname, binary)
         result['routing_commands'] = commands
     if args.apply:
-        configure(home, repo, Path(sys.executable), args.public_url, args.callback, args.github_secret_file, True)
+        configure(home, repo, Path(sys.executable), args.public_url, args.callback, args.github_secret_file, True, github)
         result["apply"] = True
     print(json.dumps(result, indent=2))
     if args.start:

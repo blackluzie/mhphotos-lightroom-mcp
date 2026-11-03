@@ -4,6 +4,8 @@ import plistlib
 import pytest
 from mhphotos_lightroom_mcp.rebuild import configure
 
+GITHUB = {'client_id': 'app-id', 'owner_id': '42', 'login': 'owner'}
+
 
 def setup(tmp_path):
     home = tmp_path / 'home with spaces'
@@ -18,7 +20,7 @@ def test_plan_no_effects_and_apply_is_repeatable(tmp_path):
     home, secret = setup(tmp_path)
     def run(apply=False, callbacks=('https://client.example/callback',)):
         return configure(home, tmp_path, tmp_path / 'env with spaces/bin/python',
-            'https://photos.example', callbacks, secret, apply)
+            'https://photos.example', callbacks, secret, apply, GITHUB)
     run()
     assert list(home.iterdir()) == []
     run(True)
@@ -35,6 +37,7 @@ def test_plan_no_effects_and_apply_is_repeatable(tmp_path):
     run(True, ('https://claude.ai/api/mcp/auth_callback',))
     conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
     assert conf['redirect_uris'] == ['https://client.example/callback', 'https://claude.ai/api/mcp/auth_callback']
+    assert (conf['github_client_id'], conf['github_owner_id'], conf['github_login']) == ('app-id', '42', 'owner')
     assert len(list((home / '.config/mhphotos-lightroom').glob('desktop.before-rebuild.*.json'))) == 1
     assert before == (bridge.read_bytes(), token.read_bytes())
 
@@ -44,10 +47,10 @@ def test_refuses_issuer_change_and_unsafe_secret(tmp_path):
     secret.chmod(0o644)
     with pytest.raises(ValueError, match='mode 600'):
         configure(home, tmp_path, tmp_path / 'python', 'https://photos.example',
-            ['https://client.example/callback'], secret, True)
+            ['https://client.example/callback'], secret, True, GITHUB)
     secret.chmod(0o600)
     configure(home, tmp_path, tmp_path / 'python', 'https://photos.example',
-        ['https://client.example/callback'], secret, True)
+        ['https://client.example/callback'], secret, True, GITHUB)
     with pytest.raises(ValueError, match='issuer'):
         configure(home, tmp_path, tmp_path / 'python', 'https://different.example', [], secret, True)
 
@@ -59,7 +62,7 @@ def test_does_not_replace_symlink_secret(tmp_path):
     (config / 'github-client-secret').symlink_to(secret)
     with pytest.raises(ValueError, match='Symlink'):
         configure(home, tmp_path, tmp_path / 'python', 'https://photos.example',
-            ['https://client.example/callback'], secret, True)
+            ['https://client.example/callback'], secret, True, GITHUB)
 
 
 def test_routes_are_repeatable_and_preserve_other_apps():
@@ -80,3 +83,17 @@ def test_routes_are_repeatable_and_preserve_other_apps():
     status['Web']['photos.example:443']['Handlers']['/']['Proxy'] = 'http://127.0.0.1:9999'
     with pytest.raises(ValueError, match='another route'):
         routing_commands(status, 'photos.example', 'tailscale')
+
+
+def test_github_owner_is_required_and_not_silently_changed(tmp_path):
+    home, secret = setup(tmp_path)
+    with pytest.raises(ValueError, match='client id'):
+        configure(home, tmp_path, tmp_path / 'python', 'https://photos.example',
+            ['https://client.example/callback'], secret, True)
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example',
+        ['https://client.example/callback'], secret, True, GITHUB)
+    # Later runs may omit the values; they are kept from desktop.json.
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True)
+    with pytest.raises(ValueError, match='github_owner_id'):
+        configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True,
+            {**GITHUB, 'owner_id': '43'})

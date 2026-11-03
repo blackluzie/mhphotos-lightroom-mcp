@@ -105,6 +105,13 @@ def main():
     config = json.loads(config_path.read_text())
     os.environ['MHPHOTOS_PUBLIC_URL'] = config['public_url']
     os.environ['MHPHOTOS_REDIRECT_URIS'] = ' '.join(config['redirect_uris'])
+    missing = [key for key in ('github_client_id', 'github_owner_id') if not config.get(key)]
+    if missing:
+        raise ValueError(f'{config_path} lacks {", ".join(missing)}; rerun scripts/rebuild-mac.sh '
+            '--github-client-id ID --github-owner-id NUMBER [--github-login LOGIN] --apply')
+    os.environ['MHPHOTOS_GITHUB_CLIENT_ID'] = str(config['github_client_id'])
+    os.environ['MHPHOTOS_GITHUB_OWNER_ID'] = str(config['github_owner_id'])
+    os.environ['MHPHOTOS_GITHUB_LOGIN'] = config.get('github_login') or ''
     path = Path.home() / '.mhphotos-lightroom-mcp/bridge.json'
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd) as f:
