@@ -95,6 +95,9 @@ Connector mit `--allow-instagram`.
   - Instagram-Abgleich
 - Gemergte Branches auf GitHub löschen.
 - Später:
-  - Karussell/Reels mit n8n (Render-Dienst, Entwürfe in der Social-Queue, Musiklizenzen klären)
+  - Karussell: gebaut (`photo_ids` in `mhphotos_schedule_instagram`).
+  - Reels: Foto-Diashow ohne Musik, Renderer in apps-platform#2584 (`infra/mhphotos-reel-renderer`). Auf Hetzner
+    einrichten: Admin-Token als Secret-Datei, `docker compose up -d --build`, Probelauf mit `--once`.
+    Musik: Reel im Content Studio herunterladen und in der Instagram-App posten.
   - Löschen in der iOS-Admin-Ansicht
 - Prüfen: `Commands.lua` `isoTime` gibt die Aufnahmezeit in UTC aus. Datumsfilter von `list_photos` können bei Fotos kurz nach Mitternacht um einen Tag danebenliegen. Die Katalog-Prüfung nutzt bereits die Kamera-Uhrzeit.

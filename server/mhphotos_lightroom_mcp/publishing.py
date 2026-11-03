@@ -121,18 +121,23 @@ def disabled_message() -> str:
     )
 
 
-def _multipart(fields: dict[str, str], filename: str, data: bytes) -> tuple[bytes, str]:
+def _multipart(
+    fields: dict[str, str], filename: str, data: bytes, extras: list[tuple[str, bytes]] | None = None
+) -> tuple[bytes, str]:
+    """Fields, the main JPEG as "file" and optional further JPEGs as repeated "extra" (carousel)."""
     boundary = uuid.uuid4().hex
     out = bytearray()
     for name, value in fields.items():
         out += f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
         out += value.encode() + b"\r\n"
-    safe = filename.replace('"', "").replace("\r", "").replace("\n", "")
-    out += (
-        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{safe}"\r\n'
-        "Content-Type: image/jpeg\r\n\r\n"
-    ).encode()
-    out += data + b"\r\n" + f"--{boundary}--\r\n".encode()
+    for field, (name, payload) in [("file", (filename, data))] + [("extra", e) for e in extras or []]:
+        safe = name.replace('"', "").replace("\r", "").replace("\n", "")
+        out += (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; filename="{safe}"\r\n'
+            "Content-Type: image/jpeg\r\n\r\n"
+        ).encode()
+        out += payload + b"\r\n"
+    out += f"--{boundary}--\r\n".encode()
     return bytes(out), f"multipart/form-data; boundary={boundary}"
 
 
@@ -322,6 +327,19 @@ def social_queue(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
     return api(cfg, "GET", SOCIAL_QUEUE)
 
 
+def site_photos(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    """The homepage photo manifest (published photos)."""
+    return api(cfg, "GET", "/api/admin/photos")
+
+
+def reel_jobs(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", "/api/admin/reel-jobs")
+
+
+def create_reel_job(cfg: InboxConfig, photo_ids: list[str], title: str, caption: str) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "POST", "/api/admin/reel-jobs", {"photoIds": photo_ids, "title": title, "caption": caption})
+
+
 def social_cancel(cfg: InboxConfig, queue_id: str) -> tuple[int, dict[str, Any]]:
     if not valid_queue_id(queue_id):
         return 400, {"error": "invalid queue id"}
@@ -333,12 +351,18 @@ def social_duplicate(cfg: InboxConfig, thumb_png_b64: str, account: str) -> tupl
 
 
 def social_schedule(
-    cfg: InboxConfig, filename: str, data: bytes, fields: dict[str, str], timeout: float = 120.0
+    cfg: InboxConfig, filename: str, data: bytes, fields: dict[str, str], timeout: float = 120.0,
+    extras: list[tuple[str, bytes]] | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """Multipart upload into the social queue (status 'geplant' until the hub publishes it)."""
-    if len(data) > SOCIAL_MAX_BYTES:
+    """Multipart upload into the social queue (status 'geplant' until the hub publishes it).
+
+    extras: up to 9 further images; the hub publishes the post as a carousel.
+    """
+    if any(len(d) > SOCIAL_MAX_BYTES for d in [data] + [e[1] for e in extras or []]):
         return 413, {"error": "image larger than 8 MB"}
-    body, ctype = _multipart(fields, filename, data)
+    if len(extras or []) > 9:
+        return 400, {"error": "a carousel has at most 10 images"}
+    body, ctype = _multipart(fields, filename, data, extras)
     req = urllib.request.Request(
         cfg.base_url.rstrip("/") + SOCIAL_QUEUE,
         data=body, method="POST",
