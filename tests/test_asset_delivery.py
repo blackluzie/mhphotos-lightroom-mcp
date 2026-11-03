@@ -64,3 +64,19 @@ def test_manifest_cannot_escape_export_folder(tmp_path):
     data['files'][0]['name'] = '../../private.jpg'
     marker.write_text(json.dumps(data))
     assert request(tmp_path, '/v1/assets').json() == []
+
+
+def test_unchanged_files_are_hashed_once(tmp_path, monkeypatch):
+    from mhphotos_lightroom_mcp import asset_delivery
+    photo, digest = sample(tmp_path)
+    calls = []
+    original = asset_delivery.hashlib.sha256
+    monkeypatch.setattr(asset_delivery.hashlib, 'sha256', lambda *a: calls.append(1) or original(*a))
+    cache = {}
+    assert digest in asset_delivery.completed_assets(tmp_path, cache)
+    assert digest in asset_delivery.completed_assets(tmp_path, cache)
+    assert len(calls) == 1
+    # Same size, different content: the cached hash must not be reused.
+    photo.write_bytes(photo.read_bytes()[::-1])
+    assert asset_delivery.completed_assets(tmp_path, cache) == {}
+    assert len(calls) == 2

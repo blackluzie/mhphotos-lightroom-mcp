@@ -25,10 +25,32 @@ def private_token(path: Path) -> str:
     return token
 
 
-def completed_assets(root: Path):
-    """Only explicit ready markers are eligible; in-progress JPEGs are invisible."""
+def _sha256(path: Path, cache: dict | None, seen: set) -> str:
+    """Hash a file, reusing an earlier result while size, inode, mtime and ctime are unchanged."""
+    info = path.stat()
+    key = (str(path), info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    seen.add(key)
+    if cache is not None and key in cache:
+        return cache[key]
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    value = h.hexdigest()
+    if cache is not None:
+        cache[key] = value
+    return value
+
+
+def completed_assets(root: Path, cache: dict | None = None):
+    """Only explicit ready markers are eligible; in-progress JPEGs are invisible.
+
+    With a cache, unchanged files are not read again on every request; any change to a
+    file (size, inode, mtime or ctime) forces a fresh hash.
+    """
     root = root.resolve()
     result = {}
+    seen = set()
     for marker in sorted(root.glob('export-*/ready.json')):
         if marker.is_symlink() or marker.parent.is_symlink() or marker.stat().st_size > 65536:
             continue
@@ -45,17 +67,22 @@ def completed_assets(root: Path):
                     continue
                 if path.stat().st_size != entry['bytes']:
                     continue
-                if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                if _sha256(path, cache, seen) != expected:
                     continue
                 result[expected] = (path, {'id': expected, 'filename': name,
                     'sha256': expected, 'bytes': entry['bytes'],
                     'width': entry['width'], 'height': entry['height']})
         except (OSError, ValueError, KeyError, TypeError):
             continue
+    if cache is not None:
+        for key in set(cache) - seen:
+            del cache[key]
     return result
 
 
 def create_app(root: Path, token: str):
+    hashes = {}
+
     def authorized(request: Request):
         return hmac.compare_digest(request.headers.get('authorization', '').encode(), ('Bearer ' + token).encode())
 
@@ -67,7 +94,7 @@ def create_app(root: Path, token: str):
     async def listing(request):
         if not authorized(request):
             return JSONResponse({'error': 'unauthorized'}, status_code=401)
-        assets = completed_assets(root)
+        assets = completed_assets(root, hashes)
         return JSONResponse([item[1] for item in assets.values()], headers={'Cache-Control': 'no-store'})
 
     async def download(request):
@@ -76,7 +103,7 @@ def create_app(root: Path, token: str):
         asset_id = request.path_params['asset_id']
         if not re.fullmatch(r'[a-f0-9]{64}', asset_id):
             return JSONResponse({'error': 'not_found'}, status_code=404)
-        item = completed_assets(root).get(asset_id)
+        item = completed_assets(root, hashes).get(asset_id)
         if item is None:
             return JSONResponse({'error': 'not_found'}, status_code=404)
         path, metadata = item
