@@ -17,15 +17,26 @@ cd mhphotos-lightroom-mcp
 git checkout <reviewed-commit>
 ./scripts/rebuild-mac.sh --public-url https://YOUR-MAC.YOUR-TAILNET.ts.net \
   --callback https://claude.ai/api/mcp/auth_callback \
-  --github-secret-file /absolute/path/to/restored-github-client-secret
+  --github-secret-file /absolute/path/to/restored-github-client-secret \
+  --github-client-id YOUR_GITHUB_OAUTH_APP_CLIENT_ID \
+  --github-owner-id YOUR_NUMERIC_GITHUB_ACCOUNT_ID \
+  --github-login YOUR_GITHUB_LOGIN
 ```
 
 Without `--apply`, only the Python environment is installed/refreshed; no config,
 plugin, service or routing changes are made. The GitHub secret source must be an
 owner-controlled regular file with mode 600. Restore the existing GitHub OAuth app
 secret; its registered app callback must match the issuer's `/auth/github/callback`.
-The current private deployment is tied to Martin's GitHub owner identity and app.
-Changing owner/app is a separate migration, not an installer parameter.
+Only the one GitHub account given by `--github-owner-id` can sign in. Use the numeric
+id (it survives a login rename): `curl -s https://api.github.com/users/YOUR_LOGIN` shows
+it as `id`. `--github-client-id` is the client id of your GitHub OAuth app; `--github-login`
+is optional and only pre-fills the GitHub sign-in page. The values are stored in
+`desktop.json`, so later runs can omit them; changing a stored value is refused (a
+different owner or app is a separate migration).
+
+Upgrading an installation from before these options: the HTTP service refuses to start
+until `desktop.json` contains them. Run the command once with the three options and
+`--apply --start`; nothing else in the configuration changes.
 
 Repeat with `--apply` to write configuration and two LaunchAgents. Existing tokens,
 GitHub secret, bridge token and registry remain intact. Existing callbacks are

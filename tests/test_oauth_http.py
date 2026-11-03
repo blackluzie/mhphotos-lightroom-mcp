@@ -10,7 +10,6 @@ from mcp.server.auth.settings import (
 )
 from mcp.server.transport_security import TransportSecuritySettings
 from mhphotos_lightroom_mcp.oauth_http import (
-    OWNER_ID,
     SCOPE,
     Provider,
     SecureHTTP,
@@ -21,6 +20,8 @@ from mhphotos_lightroom_mcp.oauth_http import (
 
 ORIGIN = "https://photos.example"
 REDIRECT = "https://chatgpt.com/connector/oauth/test"
+OWNER_ID = "1234567"
+GITHUB = {"client_id": "test-client", "owner_id": OWNER_ID, "login": "photo-owner"}
 
 
 def test_full_http_oauth():
@@ -29,7 +30,7 @@ def test_full_http_oauth():
 
 async def flow(redirect=REDIRECT):
     REDIRECT = redirect
-    provider = Provider(ORIGIN, "test-only", [REDIRECT])
+    provider = Provider(ORIGIN, "test-only", [REDIRECT], github=GITHUB)
     server = SecureHTTP(
         "test",
         stateless_http=True,
@@ -109,6 +110,8 @@ async def flow(redirect=REDIRECT):
         start = await http.get(auth.headers["location"])
         state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
         assert "code_challenge_method=S256" in start.headers["location"]
+        assert "client_id=test-client" in start.headers["location"]
+        assert "login=photo-owner" in start.headers["location"]
         assert (
             "Secure" in start.headers["set-cookie"]
             and "HttpOnly" in start.headers["set-cookie"]
@@ -280,6 +283,17 @@ def test_fail_closed_configuration(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="callback"):
         create_http_server()
     monkeypatch.setenv("MHPHOTOS_CHATGPT_REDIRECT_URIS", REDIRECT)
+    monkeypatch.delenv("MHPHOTOS_GITHUB_CLIENT_ID", raising=False)
+    monkeypatch.delenv("MHPHOTOS_GITHUB_OWNER_ID", raising=False)
+    with pytest.raises(ValueError, match="client id"):
+        create_http_server()
+    monkeypatch.setenv("MHPHOTOS_GITHUB_CLIENT_ID", "test-client")
+    with pytest.raises(ValueError, match="numeric GitHub account id"):
+        create_http_server()
+    monkeypatch.setenv("MHPHOTOS_GITHUB_OWNER_ID", "not-a-number")
+    with pytest.raises(ValueError, match="numeric GitHub account id"):
+        create_http_server()
+    monkeypatch.setenv("MHPHOTOS_GITHUB_OWNER_ID", OWNER_ID)
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     path = tmp_path / ".config/mhphotos-lightroom/github-client-secret"
     path.parent.mkdir(parents=True, mode=0o700)
@@ -304,7 +318,7 @@ def test_revocation_and_client_binding():
 async def revocation():
     from mcp.shared.auth import OAuthClientInformationFull
 
-    provider = Provider(ORIGIN, "synthetic", [REDIRECT])
+    provider = Provider(ORIGIN, "synthetic", [REDIRECT], github=GITHUB)
     client = OAuthClientInformationFull(
         client_id="client",
         redirect_uris=[REDIRECT],
@@ -333,7 +347,7 @@ async def persist_clients(tmp_path):
     from mcp.shared.auth import OAuthClientInformationFull
 
     path = tmp_path / "clients.sqlite3"
-    first = Provider(ORIGIN, "synthetic", [REDIRECT], path)
+    first = Provider(ORIGIN, "synthetic", [REDIRECT], path, github=GITHUB)
     client = OAuthClientInformationFull(
         client_id="saved-client",
         redirect_uris=[REDIRECT],
@@ -343,11 +357,11 @@ async def persist_clients(tmp_path):
     )
     await first.register_client(client)
     tokens = first.issue(client.client_id, [SCOPE], first.resource, OWNER_ID)
-    second = Provider(ORIGIN, "synthetic", [REDIRECT], path)
+    second = Provider(ORIGIN, "synthetic", [REDIRECT], path, github=GITHUB)
     assert (await second.get_client("saved-client")).client_secret is None
     assert await second.load_access_token(tokens.access_token) is None
     assert await second.load_refresh_token(client, tokens.refresh_token) is None
-    removed = Provider(ORIGIN, "synthetic", [], path)
+    removed = Provider(ORIGIN, "synthetic", [], path, github=GITHUB)
     assert await removed.get_client("saved-client") is None
     assert path.stat().st_mode & 0o777 == 0o600
 

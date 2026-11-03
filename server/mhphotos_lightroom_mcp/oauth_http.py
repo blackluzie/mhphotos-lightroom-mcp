@@ -41,7 +41,6 @@ from starlette.responses import (
 )
 
 SCOPE = "lightroom:read"
-OWNER_ID = "56870555"  # Verified via https://api.github.com/users/blackluzie
 COOKIE = "__Host-mhphotos-oauth"
 HEADERS = {
     "Cache-Control": "no-store",
@@ -78,6 +77,22 @@ def callback_origin(uri):
     return url.scheme + '://' + url.netloc
 
 
+def github_settings(client_id, owner_id, login=None):
+    """Validate the GitHub OAuth app and the single permitted owner of this deployment.
+
+    owner_id is the numeric GitHub account id (stable across renames); login is only a
+    sign-in hint for the GitHub page and grants nothing.
+    """
+    client_id, owner_id, login = str(client_id or ''), str(owner_id or ''), login or None
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", client_id):
+        raise ValueError("Set the GitHub OAuth app client id (github_client_id)")
+    if not re.fullmatch(r"[1-9][0-9]{0,19}", owner_id):
+        raise ValueError("Set the numeric GitHub account id of the owner (github_owner_id)")
+    if login is not None and not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", login):
+        raise ValueError("Invalid GitHub login (github_login)")
+    return {"client_id": client_id, "owner_id": owner_id, "login": login}
+
+
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -91,7 +106,9 @@ def challenge(value):
 
 
 class Provider:
-    def __init__(self, issuer, secret, redirects, client_db=None):
+    def __init__(self, issuer, secret, redirects, client_db=None, *, github):
+        self.github = github_settings(**github)
+        self.owner_id = self.github["owner_id"]
         self.issuer = issuer
         self.resource = issuer + "/mcp"
         self.secret = secret
@@ -246,7 +263,7 @@ class Provider:
             response = await client.post(
                 "https://github.com/login/oauth/access_token",
                 data={
-                    "client_id": "Ov23li6Iq0E92O5aK11b",
+                    "client_id": self.github["client_id"],
                     "client_secret": self.secret,
                     "code": code,
                     "code_verifier": verifier,
@@ -327,7 +344,7 @@ class Provider:
         value = self.access.get(digest(token))
         return (
             value
-            if value and value.subject == OWNER_ID and value.resource == self.resource
+            if value and value.subject == self.owner_id and value.resource == self.resource
             else None
         )
 
@@ -361,7 +378,7 @@ class Provider:
         if (
             not set(scopes) <= set(value.scopes)
             or value.resource != self.resource
-            or value.subject != OWNER_ID
+            or value.subject != self.owner_id
         ):
             raise TokenError("invalid_scope", "Invalid authorization")
         self.used_refresh[key] = (value.token, value.expires_at)
@@ -395,20 +412,19 @@ def attach_routes(mcp, provider):
             return PlainTextResponse("Invalid authorization", 400, headers=HEADERS)
         cookie, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         item.update(stage="github", browser=digest(cookie), verifier=verifier)
+        query = {
+            "client_id": provider.github["client_id"],
+            "redirect_uri": provider.issuer + "/auth/github/callback",
+            "state": state,
+            "code_challenge": challenge(verifier),
+            "code_challenge_method": "S256",
+            "scope": "",
+            "allow_signup": "false",
+        }
+        if provider.github["login"]:
+            query["login"] = provider.github["login"]
         response = RedirectResponse(
-            "https://github.com/login/oauth/authorize?"
-            + urlencode(
-                {
-                    "client_id": "Ov23li6Iq0E92O5aK11b",
-                    "redirect_uri": provider.issuer + "/auth/github/callback",
-                    "state": state,
-                    "code_challenge": challenge(verifier),
-                    "code_challenge_method": "S256",
-                    "scope": "",
-                    "allow_signup": "false",
-                    "login": "blackluzie",
-                }
-            ),
+            "https://github.com/login/oauth/authorize?" + urlencode(query),
             headers=HEADERS,
         )
         response.set_cookie(
@@ -436,7 +452,7 @@ def attach_routes(mcp, provider):
             if (
                 not code
                 or await provider.github_identity(code, item.pop("verifier"))
-                != OWNER_ID
+                != provider.owner_id
             ):
                 raise ValueError("Owner required")
         except (httpx.HTTPError, ValueError, KeyError):
@@ -518,7 +534,7 @@ def attach_routes(mcp, provider):
                 redirect_uri=params.redirect_uri,
                 redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
                 resource=params.resource,
-                subject=OWNER_ID,
+                subject=provider.owner_id,
             )
             query["code"] = code
         else:
@@ -642,6 +658,11 @@ def create_http_server():
         raise ValueError("Set exact callback URLs in MHPHOTOS_REDIRECT_URIS")
     for uri in redirects:
         validate_redirect(uri)
+    github = github_settings(
+        os.environ.get("MHPHOTOS_GITHUB_CLIENT_ID"),
+        os.environ.get("MHPHOTOS_GITHUB_OWNER_ID"),
+        os.environ.get("MHPHOTOS_GITHUB_LOGIN") or None,
+    )
     path = Path.home() / ".config/mhphotos-lightroom/github-client-secret"
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd) as handle:
@@ -665,7 +686,7 @@ def create_http_server():
     ):
         raise ValueError("OAuth config directory requires owner-only mode 700")
     provider = Provider(
-        issuer, secret, redirects, path.parent / "oauth-clients.sqlite3"
+        issuer, secret, redirects, path.parent / "oauth-clients.sqlite3", github=github
     )
     mcp = SecureHTTP(
         "MHPhotos Lightroom MCP",

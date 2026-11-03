@@ -20,7 +20,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "parameters": {
-        "url": "https://macbook-air-von-martin.tailae2331.ts.net:9443/v1/assets",
+        "url": "https://YOUR-MAC.YOUR-TAILNET.ts.net:9443/v1/assets",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {
@@ -44,7 +44,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "parameters": {
-        "url": "=https://macbook-air-von-martin.tailae2331.ts.net:9443/v1/assets/{{ $json.id }}",
+        "url": "=https://YOUR-MAC.YOUR-TAILNET.ts.net:9443/v1/assets/{{ $json.id }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {
