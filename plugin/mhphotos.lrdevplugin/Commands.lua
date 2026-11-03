@@ -504,6 +504,40 @@ end
 -- Read only: one page of the whole catalog with path, size, capture time and camera (Audit.lua).
 function Commands.audit_page(args) return Audit.page(args) end
 
+-- Read only: photos captured in a date range, with rating, flag, place, GPS, title/caption presence.
+function Commands.photos_by_date(args) return Audit.range(args) end
+
+-- Write: GPS position and place names. GPS is written where this Lightroom allows it; the text
+-- fields are written either way, and the result says whether GPS was accepted.
+local PLACE_KEYS = { 'location', 'city', 'stateProvince', 'country' }
+
+function Commands.set_location(args)
+  local lat, lon = tonumber(args.latitude), tonumber(args.longitude)
+  if (lat == nil) ~= (lon == nil) then error('latitude and longitude go together', 0) end
+  if lat and (lat < -90 or lat > 90 or lon < -180 or lon > 180) then error('latitude/longitude out of range', 0) end
+  local any = lat ~= nil
+  for _, k in ipairs(PLACE_KEYS) do
+    local v = args[k]
+    if v ~= nil and (type(v) ~= 'string' or #v > 200) then error(k .. ' must be text (max 200 bytes)', 0) end
+    if v ~= nil then any = true end
+  end
+  if not any then error('nothing to set', 0) end
+  local photos = findAll(args.photo_ids)
+  local gpsWritten, gpsError = lat ~= nil, nil
+  writeAccess('MHPhotos: Ort', function()
+    for _, p in ipairs(photos) do
+      if lat then
+        local ok, err = LrTasks.pcall(function() p:setRawMetadata('gps', { latitude = lat, longitude = lon }) end)
+        if not ok then gpsWritten, gpsError = false, tostring(err) end
+      end
+      for _, k in ipairs(PLACE_KEYS) do
+        if args[k] ~= nil then p:setRawMetadata(k, args[k]) end
+      end
+    end
+  end)
+  return { updated = #photos, gps_written = gpsWritten, gps_error = gpsError }
+end
+
 -- Write (additive): review collections below one collection set, e.g.
 -- Prüfen / Ordner / "→ 2021-07-14". Photos deleted since the audit are skipped and counted.
 local MAX_REVIEW_PHOTOS, MAX_REVIEW_GROUPS = 5000, 300

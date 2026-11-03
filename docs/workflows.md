@@ -133,3 +133,47 @@ Folders are `JJJJ/JJJJ-MM/JJJJ-MM-TT`; the capture time decides where a photo be
    remove duplicates from the *entfernen* collection yourself. Never move files in Finder or on the NAS directly.
 5. Reading the files for fingerprints needs macOS access to network volumes for the service; if
    `duplicate_files_unreadable` shows up in the summary, allow it in System Settings → Privacy & Security.
+6. The summary of a finished check has `storage`: GB per capture year on the NAS and `freeable_gb` (duplicates,
+   JPEGs next to their RAW, re-imported exports, non-photos), e.g. "removing these frees 380 GB".
+
+## 12. Sort a new shoot (after an import)
+1. `photos_by_date(captured_from, captured_to, unreviewed=true, refresh=true)`: everything without stars or flag
+   (`refresh` once after an import, so the new photos are in the date index).
+2. `get_contact_sheet` in batches of 20–30: reject clear misses (blurred, closed eyes, test shots, near-identical
+   frames of a burst except the best) with `set_flag(…, "rejected")`, rate keepers with `set_rating` (3 = good,
+   4 = very good, 5 = portfolio). Always dry run first and show the user the list; the user decides, nothing is
+   deleted.
+
+## 13. Keywords, titles and captions for the best photos
+1. `photos_by_date(…, min_rating=4, missing="caption")` (or `missing="keywords"`).
+2. `get_photo_previews` (up to 6 at a time), then per photo: 5–12 German keywords (subject, place, season, mood;
+   no hashtags), a short title and one or two sentences of caption, factual and in the user's voice (look at a few
+   captions from `mhphotos_instagram_posts` first).
+3. `add_keywords` and `set_title_caption`, dry run first. Both are undoable with `undo_last_change`.
+
+## 14. Best of a year or a trip
+1. `photos_by_date(captured_from, captured_to, min_rating=4)`; `get_contact_sheet` over the candidates.
+2. Pick 20–40 with variety (subjects, places, light), avoid near-duplicates; suggest the order.
+3. `create_collection("Best of 2025")` and `add_to_collection`, then `export_photos` in batches of 12: n8n puts them
+   into the MHPhotos inbox, where they become a gallery.
+
+## 15. Instagram week plan
+Needs `rebuild-mac.sh --mhphotos-url … --allow-instagram`; posts go into the MHPhotos social queue and are
+published there automatically at the planned time.
+1. `instagram_candidates(account, count=9)`: good Lightroom photos (4+ stars, not rejected, no keyword
+   "Instagram") that the MHPhotos duplicate check finds neither planned nor posted.
+2. `get_photo_previews` / `get_contact_sheet`: pick three for the week with variety; `mhphotos_instagram_queue`
+   shows what is already planned, `mhphotos_best_times(account)` the best hours.
+3. Captions in the style of earlier posts (`mhphotos_instagram_posts`): German, short, place, a few hashtags.
+4. Per post `mhphotos_schedule_instagram(caption, scheduled_at, photo_id=…)` **without** confirm: the user sees the
+   plan (photo, time, text, duplicate check). Only after the user's OK the same call with `confirm=true`.
+   Cancel later with `mhphotos_cancel_instagram`. After posting, `add_keywords([photo_id], ["Instagram"])`.
+
+## 16. Places for photos without GPS
+1. `suggest_locations(captured_from, captured_to)`: for camera photos without GPS, the position of the nearest
+   phone photo with GPS (within 30 minutes), grouped by position.
+2. Check one pair first (`get_photo_metadata`): if the camera clock differs from the phone (home time abroad),
+   repeat with `clock_offset_minutes`.
+3. `set_location(photo_ids, latitude, longitude, city=…, country=…)` per group, dry run first. The result says
+   whether this Lightroom accepted the GPS write (`gps_written`); place names are written either way.
+

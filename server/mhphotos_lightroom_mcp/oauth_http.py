@@ -95,6 +95,15 @@ def github_settings(client_id, owner_id, login=None):
 
 def consent_text():
     """What the consent page grants; it names catalog edits only when the operator enabled them."""
+    text = _consent_base()
+    if os.environ.get("MHPHOTOS_HTTP_INSTAGRAM") == "1":
+        text += ("<p><strong>Instagram:</strong> Der Client darf au&szlig;erdem nach Best&auml;tigung Beitr&auml;ge in die "
+                 "MHPhotos-Warteschlange einplanen, die dort zur geplanten Zeit automatisch auf Instagram erscheinen, "
+                 "und geplante Beitr&auml;ge wieder entfernen.</p>")
+    return text
+
+
+def _consent_base():
     if os.environ.get("MHPHOTOS_HTTP_WRITES") == "1":
         return ("<h1>Lightroom-Zugriff mit Bearbeitung freigeben</h1><p>Der Client darf Sammlungen, Foto-Metadaten (auch Dateipfade f&uuml;r die Katalog-Pr&uuml;fung), "
                 "Vorschauen und Entwicklungseinstellungen lesen, JPEG-Dateien in den festgelegten lokalen Exportordner "

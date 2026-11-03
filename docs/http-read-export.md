@@ -9,20 +9,29 @@ Access and refresh tokens remain ephemeral; restart requires reconnection.
 The public tool allowlist is: `connection_status`, `list_collections`, `list_photos`,
 `get_photo_metadata`, `get_photo_previews`, `get_contact_sheet`, `get_develop_settings`,
 `list_presets`, `list_changes`, `catalog_audit_start`, `catalog_audit_status`,
-`catalog_audit_results` (reads; the audit runs on the Mac and changes nothing) and `export_photos`. No MHPhotos-site, publishing or
+`catalog_audit_results`, `photos_by_date`, `suggest_locations` (reads; the audit runs on the Mac and changes
+nothing) and `export_photos`. No MHPhotos-site, publishing or
 Instagram tools are registered, and nothing deletes photos.
 
 **MHPhotos reads (opt-in).** `rebuild-mac.sh --mhphotos-url https://<site>` stores `mhphotos_url`; the service
 then also offers `mhphotos_instagram_posts`, `mhphotos_instagram_images` and `mhphotos_inbox` (read-only; the admin
 token is read from the Keychain entry `mhphotos-admin-token`, never from the client). `export_photos` accepts
 `instagram_post_id` for a single photo; it travels into the inbox and lets the app link the post when published.
+With the site configured the service also offers `mhphotos_instagram_queue`, `mhphotos_best_times` and
+`instagram_candidates` (reads).
+
+**Instagram planning (opt-in).** `rebuild-mac.sh --mhphotos-url https://<site> --allow-instagram` stores
+`"allow_instagram": true`; the service then offers `mhphotos_schedule_instagram` and `mhphotos_cancel_instagram`.
+Planned posts are published by the MHPhotos social queue at the planned time without further questions, so every
+plan is a dry run until `confirm=true`, and in claude.ai these two tools should stay on "ask". The consent page
+names this right. `--no-allow-instagram` removes it again.
 
 **Catalog edits (opt-in).** `rebuild-mac.sh --allow-writes --apply --start` stores
 `"allow_writes": true` in `desktop.json`; the service then also offers `set_rating`, `set_flag`
 (`"rejected"` = Lightroom's *Abgelehnt*), `set_color_label`, `set_title_caption`, `add_keywords`,
 `create_collection`, `add_to_collection`, `create_virtual_copies`, `undo_last_change`,
 `apply_preset`, `apply_develop_settings`, `sync_develop_settings`, `create_preset` and
-`catalog_audit_collections` (review collections only; nothing is moved or removed), and the
+`catalog_audit_collections` (review collections only; nothing is moved or removed) and `set_location`, and the
 consent page names these rights. Every edit is a dry run until `confirm=true`. Because this
 stateless service cannot ask the user itself, the human check is the client's per-tool
 permission: in claude.ai set the write tools to "ask". Ratings, flags, labels, titles and

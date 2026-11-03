@@ -367,4 +367,27 @@ for i = 1, 5001 do many[i] = 'u1' end
 local okMany, errMany = pcall(Commands.run, 'create_review_collections', { root = 'R', groups = { { set = 'S', name = 'N', photo_ids = many } } })
 eq(okMany, false); assert(tostring(errMany):find('5000'), tostring(errMany))
 
+-- photos by capture date (read only, uses the cached date index)
+p2.raw.gps = nil; p2.fmt.city = 'Münster'; p2.fmt.caption = 'Hallo'
+p2.raw.keywords = { { getName = function() return 'Instagram' end } }
+local rg = Commands.run('photos_by_date', { captured_from = '2026-10-01', captured_to = '2026-10-31', refresh = true })
+eq(rg.total, 1); eq(rg.photos[1].id, 'u2'); eq(rg.photos[1].t, '2026-10-14T00:30:00'); eq(rg.photos[1].place, 'Münster')
+eq(rg.photos[1].insta, true); eq(rg.photos[1].caption, true); eq(rg.photos[1].title, nil); eq(rg.photos[1].gps, nil)
+local r1 = Commands.run('photos_by_date', { captured_from = '2001-01-01', captured_to = '2001-01-01' })
+eq(r1.photos[1].id, 'u1'); eq(r1.photos[1].gps.latitude, 46.6); eq(r1.photos[1].insta, nil)
+eq(Commands.run('photos_by_date', { captured_from = '1999-01-01', captured_to = '1999-12-31' }).total, 0)
+eq(select(2, pcall(Commands.run, 'photos_by_date', { captured_from = '2026' })):find('YYYY') ~= nil, true)
+
+-- set_location: GPS plus place names in one write; a refused GPS write is reported, not fatal
+writes = 0
+local sl = Commands.run('set_location', { photo_ids = { 'u2' }, latitude = 51.96, longitude = 7.63, city = 'Münster', country = 'Deutschland' })
+eq(writes, 1); eq(sl.updated, 1); eq(sl.gps_written, true); eq(p2.raw.gps.latitude, 51.96); eq(p2.raw.city, 'Münster')
+local origSet = p2.setRawMetadata
+p2.setRawMetadata = function(self, k, v) if k == 'gps' then error('gps is read only') end return origSet(self, k, v) end
+local sl2 = Commands.run('set_location', { photo_ids = { 'u2' }, latitude = 1, longitude = 2, country = 'X' })
+eq(sl2.gps_written, false); assert(sl2.gps_error:find('read only')); eq(p2.raw.country, 'X')
+p2.setRawMetadata = origSet
+eq(pcall(Commands.run, 'set_location', { photo_ids = { 'u2' }, latitude = 91, longitude = 0 }), false)
+eq(pcall(Commands.run, 'set_location', { photo_ids = { 'u2' } }), false)
+
 print('commands ok')

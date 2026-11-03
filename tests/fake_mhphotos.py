@@ -28,6 +28,7 @@ class FakeMHPhotos:
         ]
         self.social_uploads: list[dict] = []
         self.duplicate: dict | None = None  # set to simulate "already planned"
+        self.duplicate_after: int | None = None  # the first n checks are new, the rest "already posted"
         self.images = {k: _jpeg(c) for k, c in (("lr-1", (200, 80, 40)), ("lr-2", (40, 120, 200)),
                                                   ("lr-3", (60, 160, 60)), ("lr-4", (180, 180, 40)))}
         self.galleries = [
@@ -105,7 +106,13 @@ class FakeMHPhotos:
                                 "scheduled_at": body["scheduledAt"].decode(), "status": "geplant",
                             })
                         return self._reply(200, {"ok": True, "id": ids[0], **({"ids": ids} if len(ids) > 1 else {})})
+                if method == "GET" and path.startswith("/api/admin/social-hub-best-time?accountId="):
+                    return self._reply(200, {"slots": [{"weekday": 3, "hour": 19}], "account": path.rsplit("=", 1)[1]})
                 if method == "POST" and path == "/api/admin/social-hub-duplicate":
+                    if outer.duplicate_after is not None:
+                        outer.duplicate_after -= 1
+                        if outer.duplicate_after < 0:
+                            return self._reply(200, {"duplicate": True, "hash": "0123456789abcdef"})
                     if outer.duplicate:
                         return self._reply(200, {"duplicate": True, "hash": "0123456789abcdef", **outer.duplicate})
                     return self._reply(200, {"duplicate": False, "hash": "0123456789abcdef"})
