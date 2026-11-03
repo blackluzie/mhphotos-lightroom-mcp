@@ -119,6 +119,13 @@ async def test_instagram_posts(app):
     both = await server.mhphotos_instagram_posts(year=2026, only_not_on_homepage=False)
     assert [p["id"] for p in both["posts"]] == ["ig2", "ig1"]
     assert (await server.mhphotos_instagram_posts())["total"] == 2
+    assert res["posts"][0]["in_inbox"] is None
+
+
+async def test_instagram_posts_flag_pending_inbox_items(app):
+    app.items["lr-2"]["instagramId"] = "ig1"
+    res = await server.mhphotos_instagram_posts(year=2026)
+    assert res["posts"][0]["in_inbox"] == "wartet"
 
 
 # ---- Instagram images -------------------------------------------------------

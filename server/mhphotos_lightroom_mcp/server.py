@@ -1238,6 +1238,12 @@ async def mhphotos_instagram_posts(
     if only_not_on_homepage:
         items = [i for i in items if not i.get("homepagePhotoId")]
     items = sorted(items, key=lambda i: i.get("timestamp") or "", reverse=True)
+    # Posts whose Lightroom original already waits in the MHPhotos inbox (exported with
+    # instagram_post_id): matching them again is not needed. Best-effort.
+    pending: dict[str, str] = {}
+    icode, idata = await anyio.to_thread.run_sync(publishing.inbox_items, cfg)
+    if icode == 200:
+        pending = {str(x["instagramId"]): x.get("status", "") for x in idata.get("items", []) if x.get("instagramId")}
     limit, offset = _clamp(limit, offset)
     return {
         "total": len(items),
@@ -1251,6 +1257,7 @@ async def mhphotos_instagram_posts(
                 "caption": (i.get("caption") or "")[:300],
                 "thumbnail_url": i.get("thumbnailUrl") or i.get("mediaUrl"),
                 "homepage_photo_id": i.get("homepagePhotoId"),
+                "in_inbox": pending.get(str(i.get("id"))),
             }
             for i in items[offset : offset + limit]
         ],

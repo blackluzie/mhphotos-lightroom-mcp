@@ -97,3 +97,17 @@ without Lightroom: `mhphotos_inbox` lists them, `mhphotos_inbox_contact_sheet` a
 `mhphotos_analyze_inbox` adds AI titles and categories, `mhphotos_edit_preview` shows a basic edit before/after,
 `mhphotos_publish` puts chosen items on the site and `mhphotos_schedule_instagram(inbox_item_id=...)` queues them for
 Instagram. Full guide for the cruise, including what works and what does not: [kreuzfahrt.md](kreuzfahrt.md).
+
+## 10. Instagram posts without a homepage photo, from a claude.ai chat
+Needs the connector with `rebuild-mac.sh --mhphotos-url https://<your MHPhotos domain>` (admin token in the Keychain
+entry `mhphotos-admin-token`) and the n8n inbox workflow.
+1. `mhphotos_instagram_posts(year=…)` lists posts that are not on the site yet; `in_inbox` shows posts whose
+   original already waits in the inbox (skip those).
+2. `mhphotos_instagram_images(post_ids)` shows up to 6 posts; `list_photos(captured_from/captured_to in the weeks
+   before the post)` and `get_contact_sheet` / `get_photo_previews` find the Lightroom original.
+3. Compare: same subject and framing = match. If the current Lightroom version looks clearly different from the post
+   (other crop, colours, re-edit), say so; the post shows the version that was published then.
+4. `export_photos([photo_id], confirm=true, instagram_post_id=post_id)` exports it. n8n uploads it with
+   `instagramId`; when you take it over in the MHPhotos inbox, the app links the Instagram post to the new homepage
+   photo, so it disappears from step 1.
+5. Optional (with `--allow-writes`): `add_keywords([photo_id], ["Instagram"], confirm=true)` marks the original.

@@ -11,6 +11,11 @@ The public tool allowlist is: `connection_status`, `list_collections`, `list_pho
 `list_presets`, `list_changes` (reads) and `export_photos`. No MHPhotos-site, publishing or
 Instagram tools are registered, and nothing deletes photos.
 
+**MHPhotos reads (opt-in).** `rebuild-mac.sh --mhphotos-url https://<site>` stores `mhphotos_url`; the service
+then also offers `mhphotos_instagram_posts`, `mhphotos_instagram_images` and `mhphotos_inbox` (read-only; the admin
+token is read from the Keychain entry `mhphotos-admin-token`, never from the client). `export_photos` accepts
+`instagram_post_id` for a single photo; it travels into the inbox and lets the app link the post when published.
+
 **Catalog edits (opt-in).** `rebuild-mac.sh --allow-writes --apply --start` stores
 `"allow_writes": true` in `desktop.json`; the service then also offers `set_rating`, `set_flag`
 (`"rejected"` = Lightroom's *Abgelehnt*), `set_color_label`, `set_title_caption`, `add_keywords`,

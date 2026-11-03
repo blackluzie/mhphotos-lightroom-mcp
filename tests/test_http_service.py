@@ -167,3 +167,44 @@ def test_consent_page_names_edits_only_when_enabled(monkeypatch):
     assert 'Keine Katalog' in consent_text()
     monkeypatch.setenv('MHPHOTOS_HTTP_WRITES', '1')
     assert 'Abgelehnt' in consent_text() and 'Keine L&ouml;schungen' in consent_text()
+
+
+def test_instagram_post_id_travels_with_a_single_export(tmp_path, monkeypatch):
+    class JPEGExporter(MockAdapter):
+        def export_photos(self, photo_ids, dest_dir):
+            Image.new('RGB', (10, 10)).save(str(dest_dir) + '/photo.jpg')
+            return {'exported': ['photo.jpg']}
+    server.set_adapter(JPEGExporter())
+    monkeypatch.setenv('MHPHOTOS_EXPORT_DIR', str(tmp_path / 'exports'))
+    monkeypatch.delenv('MHPHOTOS_N8N_WEBHOOK_URL', raising=False)
+    bad = asyncio.run(http_service.export_photos(['p1', 'p2'], confirm=True, instagram_post_id='179'))
+    assert bad['code'] == 'invalid_instagram_id'
+    assert asyncio.run(http_service.export_photos(['p1'], instagram_post_id='../x'))['code'] == 'invalid_instagram_id'
+    done = asyncio.run(http_service.export_photos(['p1'], confirm=True, instagram_post_id='17912345678901234'))
+    marker = json.loads((Path(done['files'][0]['path']).parent / 'ready.json').read_text())
+    assert marker['files'][0]['instagram_id'] == '17912345678901234'
+    from mhphotos_lightroom_mcp.asset_delivery import completed_assets
+    listed = next(iter(completed_assets(tmp_path / 'exports').values()))[1]
+    assert listed['instagram_id'] == '17912345678901234'
+
+
+def test_mhphotos_reads_only_with_site_configured(monkeypatch):
+    monkeypatch.delenv('MHPHOTOS_INBOX_URL', raising=False)
+    app = FastMCP('a')
+    http_service.register_tools(app, writes=False)
+    assert not set(http_service.MHPHOTOS_TOOLS) & {t.name for t in asyncio.run(app.list_tools())}
+    monkeypatch.setenv('MHPHOTOS_INBOX_URL', 'https://mhphotos.example')
+    app = FastMCP('b')
+    http_service.register_tools(app, writes=False)
+    tools = {t.name: t for t in asyncio.run(app.list_tools())}
+    assert set(http_service.MHPHOTOS_TOOLS) <= set(tools)
+    assert all(tools[n].annotations.readOnlyHint for n in http_service.MHPHOTOS_TOOLS)
+    assert 'mhphotos_publish' not in tools
+
+
+def test_mhphotos_url_is_a_plain_https_origin():
+    import pytest
+    assert http_service.mhphotos_url('https://mhphotos.de/') == 'https://mhphotos.de'
+    for bad in ('http://mhphotos.de', 'https://mhphotos.de/admin', 'https://u:p@mhphotos.de'):
+        with pytest.raises(ValueError):
+            http_service.mhphotos_url(bad)

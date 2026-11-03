@@ -69,9 +69,12 @@ def completed_assets(root: Path, cache: dict | None = None):
                     continue
                 if _sha256(path, cache, seen) != expected:
                     continue
-                result[expected] = (path, {'id': expected, 'filename': name,
-                    'sha256': expected, 'bytes': entry['bytes'],
-                    'width': entry['width'], 'height': entry['height']})
+                meta = {'id': expected, 'filename': name, 'sha256': expected, 'bytes': entry['bytes'],
+                        'width': entry['width'], 'height': entry['height']}
+                instagram = entry.get('instagram_id')
+                if isinstance(instagram, str) and re.fullmatch(r'[0-9A-Za-z_-]{1,64}', instagram):
+                    meta['instagram_id'] = instagram
+                result[expected] = (path, meta)
         except (OSError, ValueError, KeyError, TypeError):
             continue
     if cache is not None:
