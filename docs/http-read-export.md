@@ -6,10 +6,21 @@ client registration database. Application secrets remain outside the repository.
 The consent page explicitly names catalog reads and confirmed local JPEG exports.
 Access and refresh tokens remain ephemeral; restart requires reconnection.
 
-The public tool allowlist is exactly: `connection_status`, `list_collections`,
-`list_photos`, `get_photo_metadata`, `get_photo_previews`, `get_contact_sheet`,
-`export_photos`. No edit, MHPhotos-site or Instagram tools are registered.
-The service also clears all write/publish/Instagram environment opt-ins.
+The public tool allowlist is: `connection_status`, `list_collections`, `list_photos`,
+`get_photo_metadata`, `get_photo_previews`, `get_contact_sheet`, `get_develop_settings`,
+`list_presets`, `list_changes` (reads) and `export_photos`. No MHPhotos-site, publishing or
+Instagram tools are registered, and nothing deletes photos.
+
+**Catalog edits (opt-in).** `rebuild-mac.sh --allow-writes --apply --start` stores
+`"allow_writes": true` in `desktop.json`; the service then also offers `set_rating`, `set_flag`
+(`"rejected"` = Lightroom's *Abgelehnt*), `set_color_label`, `set_title_caption`, `add_keywords`,
+`create_collection`, `add_to_collection`, `create_virtual_copies`, `undo_last_change`,
+`apply_preset`, `apply_develop_settings`, `sync_develop_settings` and `create_preset`, and the
+consent page names these rights. Every edit is a dry run until `confirm=true`. Because this
+stateless service cannot ask the user itself, the human check is the client's per-tool
+permission: in claude.ai set the write tools to "ask". Ratings, flags, labels, titles and
+keywords can be undone with `undo_last_change`; develop changes are Lightroom history steps.
+`--no-allow-writes` returns to read/export only (reconnect clients after the restart).
 
 Export is disabled without an operator-configured absolute `MHPHOTOS_EXPORT_DIR`.
 Clients cannot supply a destination; `confirm=false` returns a dry run. Confirmed

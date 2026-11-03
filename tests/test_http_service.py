@@ -17,6 +17,7 @@ def test_public_tools_only_read_and_local_export():
     assert names == {
         'connection_status', 'list_collections', 'list_photos',
         'get_photo_metadata', 'get_photo_previews', 'get_contact_sheet', 'export_photos',
+        'get_develop_settings', 'list_presets', 'list_changes',
     }
     for tool in tools:
         assert tool.annotations.destructiveHint is False
@@ -145,3 +146,24 @@ def test_confirmed_export_never_waits_for_a_client_question(tmp_path, monkeypatc
     monkeypatch.delenv('MHPHOTOS_N8N_WEBHOOK_URL', raising=False)
     result = asyncio.run(http_service.export_photos(['p1'], confirm=True))
     assert result['applied'] is True
+
+
+def test_catalog_edits_only_when_enabled_and_never_delete_or_publish():
+    app = FastMCP('test')
+    http_service.register_tools(app, writes=True)
+    tools = {tool.name: tool for tool in asyncio.run(app.list_tools())}
+    assert set(http_service.WRITE_TOOLS) <= set(tools)
+    assert tools['set_flag'].annotations.readOnlyHint is False
+    assert tools['set_rating'].annotations.destructiveHint is True
+    assert tools['create_preset'].annotations.destructiveHint is False
+    forbidden = {'mhphotos_publish', 'send_to_mhphotos_inbox', 'mhphotos_schedule_instagram',
+                 'mhphotos_cancel_instagram', 'lightroom_selftest'}
+    assert not forbidden & set(tools)
+
+
+def test_consent_page_names_edits_only_when_enabled(monkeypatch):
+    from mhphotos_lightroom_mcp.oauth_http import consent_text
+    monkeypatch.delenv('MHPHOTOS_HTTP_WRITES', raising=False)
+    assert 'Keine Katalog' in consent_text()
+    monkeypatch.setenv('MHPHOTOS_HTTP_WRITES', '1')
+    assert 'Abgelehnt' in consent_text() and 'Keine L&ouml;schungen' in consent_text()

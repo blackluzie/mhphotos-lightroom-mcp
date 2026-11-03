@@ -20,4 +20,6 @@ def _clean_env(monkeypatch, tmp_path):
     publishing._keychain_cache.clear()
     publishing._keychain_cache["v"] = None  # never read a developer's real Keychain in tests
     monkeypatch.setenv("MHPHOTOS_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("MHPHOTOS_PRESET_DIR", str(tmp_path / "presets"))  # never a real Camera Raw folder
+    monkeypatch.delenv("MHPHOTOS_HTTP_WRITES", raising=False)
     server.set_adapter(MockAdapter())

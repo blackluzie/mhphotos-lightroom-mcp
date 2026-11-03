@@ -117,3 +117,19 @@ def test_n8n_webhook_creates_its_own_token(tmp_path):
     with pytest.raises(ValueError, match='https'):
         configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, False,
             None, 'http://n8n.example/hook')
+
+
+def test_allow_writes_is_explicit_and_kept(tmp_path):
+    home, secret = setup(tmp_path)
+    plan = configure(home, tmp_path, tmp_path / 'python', 'https://photos.example',
+        ['https://client.example/callback'], secret, True, GITHUB)
+    assert plan['allow_writes'] is False
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_writes=True)
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['allow_writes'] is True
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True)
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['allow_writes'] is True
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_writes=False)
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['allow_writes'] is False

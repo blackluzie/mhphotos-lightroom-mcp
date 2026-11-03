@@ -93,6 +93,19 @@ def github_settings(client_id, owner_id, login=None):
     return {"client_id": client_id, "owner_id": owner_id, "login": login}
 
 
+def consent_text():
+    """What the consent page grants; it names catalog edits only when the operator enabled them."""
+    if os.environ.get("MHPHOTOS_HTTP_WRITES") == "1":
+        return ("<h1>Lightroom-Zugriff mit Bearbeitung freigeben</h1><p>Der Client darf Sammlungen, Foto-Metadaten, "
+                "Vorschauen und Entwicklungseinstellungen lesen, JPEG-Dateien in den festgelegten lokalen Exportordner "
+                "schreiben und im Katalog Sterne, Markierungen (auch &bdquo;Abgelehnt&ldquo;), Farben, Titel, Stichw&ouml;rter, "
+                "Sammlungen, virtuelle Kopien, Entwicklungseinstellungen und Presets &auml;ndern bzw. anlegen. "
+                "Keine L&ouml;schungen und keine Ver&ouml;ffentlichungen.</p>")
+    return ("<h1>Lightroom-Lesezugriff und lokalen Export freigeben</h1><p>Der Client darf Sammlungen, Foto-Metadaten und "
+            "Vorschauen lesen sowie nach Best&auml;tigung JPEG-Dateien in den festgelegten lokalen Exportordner schreiben. "
+            "Keine Katalog&auml;nderungen oder Ver&ouml;ffentlichungen.</p>")
+
+
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -468,8 +481,8 @@ def attach_routes(mcp, provider):
         target = html.escape(str(item["params"].redirect_uri), quote=True)
         return HTMLResponse(
             '<!doctype html><html lang="de"><meta charset="utf-8"><title>MHPhotos Freigabe</title>'
-            "<h1>Lightroom-Lesezugriff und lokalen Export freigeben</h1><p>Der Client darf Sammlungen, Foto-Metadaten und Vorschauen lesen "
-            "sowie nach Bestätigung JPEG-Dateien in den festgelegten lokalen Exportordner schreiben. Keine Katalogänderungen oder Veröffentlichungen.</p><p>Rückleitung: "
+            + consent_text()
+            + "<p>Rückleitung: "
             + target
             + "</p>"
             '<form method="post" action="/auth/consent"><input type="hidden" name="state" value="'
