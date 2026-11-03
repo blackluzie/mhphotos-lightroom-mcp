@@ -1,0 +1,225 @@
+{
+  "id": "mhphotosPrivateExportImportV1",
+  "name": "MHPhotos – private JPEGs laden und pruefen",
+  "active": false,
+  "nodes": [
+    {
+      "id": "Manuell starten",
+      "name": "Manuell starten",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "Dateiliste",
+      "name": "Dateiliste",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "url": "https://macbook-air-von-martin.tailae2331.ts.net:9443/v1/assets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "position": [
+        240,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MHPhotosLightroomAssetsV1",
+          "name": "MHPhotos Lightroom – private Exporte"
+        }
+      }
+    },
+    {
+      "id": "JPEG laden",
+      "name": "JPEG laden",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "url": "=https://macbook-air-von-martin.tailae2331.ts.net:9443/v1/assets/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "position": [
+        480,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MHPhotosLightroomAssetsV1",
+          "name": "MHPhotos Lightroom – private Exporte"
+        }
+      }
+    },
+    {
+      "id": "SHA256 berechnen",
+      "name": "SHA256 berechnen",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "parameters": {
+        "action": "hash",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "type": "SHA256",
+        "dataPropertyName": "sha256",
+        "encoding": "hex"
+      },
+      "position": [
+        700,
+        160
+      ]
+    },
+    {
+      "id": "Pruefsumme stimmt",
+      "name": "Pruefsumme stimmt",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "hashcheck",
+              "leftValue": "={{ $json.sha256 }}",
+              "rightValue": "={{ $('Dateiliste').item.json.sha256 }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [
+        920,
+        160
+      ]
+    },
+    {
+      "id": "Geprueftes JPEG",
+      "name": "Geprueftes JPEG",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "position": [
+        1160,
+        0
+      ]
+    },
+    {
+      "id": "Uebertragung abbrechen",
+      "name": "Uebertragung abbrechen",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "parameters": {
+        "errorMessage": "JPEG-Pruefsumme stimmt nicht. Keine Weiterverarbeitung."
+      },
+      "position": [
+        1160,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Manuell starten": {
+      "main": [
+        [
+          {
+            "node": "Dateiliste",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dateiliste": {
+      "main": [
+        [
+          {
+            "node": "JPEG laden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JPEG laden": {
+      "main": [
+        [
+          {
+            "node": "SHA256 berechnen",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Geprueftes JPEG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SHA256 berechnen": {
+      "main": [
+        [
+          {
+            "node": "Pruefsumme stimmt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pruefsumme stimmt": {
+      "main": [
+        [
+          {
+            "node": "Geprueftes JPEG",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Uebertragung abbrechen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  }
+}

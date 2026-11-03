@@ -23,11 +23,12 @@ jobs:
         run: sudo apt-get update -q && sudo apt-get install -y -q lua5.1
       - name: Install
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install uv==0.13.1
+          uv sync --frozen --extra dev
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
       - name: Verify MCP dependency
         run: |
-          python -m pip show mcp
+          uv pip show mcp
           python -c "from mcp.server.fastmcp import FastMCP; print('MCP import OK')"
       - name: Tests
         run: python -m pytest -q
@@ -35,7 +36,7 @@ jobs:
         run: python -m ruff check server tests
       - name: Package smoke test (wheel installs, ships the plugin, CLI works)
         run: |
-          python -m pip install build
+          uv pip install build
           python -m build --wheel --outdir "$RUNNER_TEMP/dist"
           python -m venv "$RUNNER_TEMP/clean"
           "$RUNNER_TEMP/clean/bin/pip" install "$RUNNER_TEMP"/dist/*.whl

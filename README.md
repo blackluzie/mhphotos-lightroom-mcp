@@ -22,6 +22,13 @@ claude mcp add mhphotos-lightroom --env MHPHOTOS_ADAPTER=bridge -- \
 From a clone instead: `pip install -e '.[dev]'` (then `mhphotos-lightroom-mcp ...`); the committed `.mcp.json` starts the server
 in bridge mode with reads only.
 
+## Remote clients and rebuilding
+
+The private HTTP deployment supports explicitly allowlisted OAuth MCP clients.
+See [other clients](docs/mcp-clients.md), [automated Mac rebuild and encrypted recovery](docs/rebuild.md),
+[HTTP read/export boundary](docs/http-read-export.md) and [private n8n JPEG delivery](docs/private-assets.md).
+The broad tool list below describes the local server; the public HTTP service exposes only its restricted read/export subset.
+
 ## Tools
 Everything is read-only unless noted. Changes are a **dry run** unless `confirm=true`, need an operator
 opt-in (environment variable) and, when your client supports it, **you are asked directly** (yes/no).
