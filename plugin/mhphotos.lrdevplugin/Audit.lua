@@ -56,16 +56,60 @@ local function batch(cat, slice, keys, formatted)
   return cat:batchGetRawMetadata(slice, keys)
 end
 
+-- A year folder is a path part like "2020" or "2020 Urlaub" (not "2020-03" and not "2020-03-05"),
+-- the same rule as folder_dates in the server. The file name is not a folder.
+local function folderYear(path)
+  if type(path) ~= 'string' then return nil end
+  local parts = {}
+  for part in path:gmatch('[^/]+') do parts[#parts + 1] = part end
+  local found
+  for i = 1, #parts - 1 do
+    local y, rest = parts[i]:match('^(%d%d%d%d)(.?)')
+    local n = tonumber(y)
+    if y and n >= 1900 and n <= 2100 and not rest:match('[%d%-]') then found = y end
+  end
+  return found
+end
+
 local function nonEmpty(v)
   if v == nil or v == '' or v == false then return nil end
   return v
 end
 
--- args: offset (default 0), limit (default 1000, max 2000), refresh (re-read the photo list)
+-- Only the photos of one year (capture year or year folder): the capture time and the path are read in
+-- big batches for the whole catalog, the detailed metadata later only for the matching photos.
+local SCOPE_CHUNK = 5000
+
+local function yearPhotos(year, refresh)
+  local list = cachedList(refresh)
+  list.years = list.years or {}
+  if list.years[year] then return list.years[year] end
+  local cat, hits = catalog(), {}
+  for start = 1, #list.photos, SCOPE_CHUNK do
+    local slice = {}
+    for i = start, math.min(start + SCOPE_CHUNK - 1, #list.photos) do slice[#slice + 1] = list.photos[i] end
+    local raw = batch(cat, slice, { 'dateTimeOriginal', 'path' }, false) or {}
+    local okI, iso = LrTasks.pcall(batch, cat, slice, { 'dateTimeOriginalISO8601' }, false)
+    if not okI or type(iso) ~= 'table' then iso = {} end
+    for _, p in ipairs(slice) do
+      local r = raw[p] or {}
+      local t = localTime(iso[p] and iso[p].dateTimeOriginalISO8601, r.dateTimeOriginal)
+      if (t and t:sub(1, 4) == year) or folderYear(r.path) == year then hits[#hits + 1] = p end
+    end
+  end
+  list.years[year] = hits
+  return hits
+end
+
+-- args: offset (default 0), limit (default 1000, max 2000), refresh (re-read the photo list),
+-- year (four digits: only photos of that capture year or year folder)
 function Audit.page(args)
   local offset = math.max(0, math.floor(tonumber(args.offset) or 0))
   local limit = math.max(1, math.min(math.floor(tonumber(args.limit) or 1000), MAX_LIMIT))
-  local photos = allPhotos(args.refresh == true or offset == 0)
+  local refresh = args.refresh == true or offset == 0
+  local year = args.year ~= nil and tostring(math.floor(tonumber(args.year) or 0)) or nil
+  if year and not year:match('^%d%d%d%d$') then error('year must be four digits', 0) end
+  local photos = year and yearPhotos(year, refresh) or allPhotos(refresh)
   local slice = {}
   for i = offset + 1, math.min(offset + limit, #photos) do slice[#slice + 1] = photos[i] end
   local out = { total = #photos, offset = offset, next_offset = offset + #slice, photos = {}, unsupported = {} }

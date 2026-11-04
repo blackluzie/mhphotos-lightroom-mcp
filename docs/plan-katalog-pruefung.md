@@ -42,6 +42,8 @@ Verknüpfung.
 ## Reihenfolge
 
 1. Erst ein Jahr testen (z. B. 2020, 4.880 Fotos) → Laufzeit und Trefferqualität prüfen.
+   Mit `year` liest das Plugin (ab 0.1.6) erst nur Aufnahmezeit und Pfad des ganzen Katalogs (schnelle Blöcke)
+   und die Details nur für das Jahr; Duplikate werden dann nur innerhalb des Jahres gesucht.
 2. Dann alle Jahre; Duplikat-Hash nur auf Kandidaten.
 
 ## Zweite Ausbaustufe (gebaut 2026-11-03, Plugin 0.1.3; Punkt 4 noch offen)

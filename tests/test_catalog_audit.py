@@ -166,9 +166,9 @@ async def test_only_one_run_at_a_time(monkeypatch):
     adapter = server._adapter
     original = adapter.audit_page
 
-    def slow(offset, limit, refresh=False):
+    def slow(offset, limit, refresh=False, year=None):
         gate_open.wait(5)
-        return original(offset, limit, refresh)
+        return original(offset, limit, refresh, year)
 
     monkeypatch.setattr(adapter, "audit_page", slow)
     assert (await server.catalog_audit_start())["started"] is True
@@ -182,7 +182,7 @@ async def test_failed_page_is_retried_then_reported(monkeypatch):
     monkeypatch.setattr(ca, "RETRY_SECONDS", 0)
     calls = []
 
-    def broken(offset, limit, refresh=False):
+    def broken(offset, limit, refresh=False, year=None):
         calls.append(offset)
         raise RuntimeError("Lightroom did not answer")
 
@@ -236,3 +236,19 @@ def test_jpeg_next_to_raw_and_reimported_export():
 def test_old_result_files_without_new_kinds_still_work():
     groups, _ = ca.review_groups({"findings": {"duplicates": []}}, "non_photo")
     assert groups[0]["photo_ids"] == []
+
+
+async def test_year_run_reads_only_that_year(monkeypatch):
+    seen = []
+    original = server._adapter.audit_page
+
+    def spy(offset, limit, refresh=False, year=None):
+        seen.append(year)
+        return original(offset, limit, refresh, year)
+
+    monkeypatch.setattr(server._adapter, "audit_page", spy)
+    await server.catalog_audit_start(year=2026)
+    st = await _finish()
+    assert st["status"] == "done" and seen and set(seen) == {2026}
+    assert 0 < st["read"] < len(server._adapter._photos) or st["read"] == st["total"]
+    assert all(str(r["t"])[:4] == "2026" for r in server._adapter.audit_page(0, 100, False, 2026)["photos"])

@@ -728,7 +728,8 @@ async def catalog_audit_start(year: int | None = None, check_files: bool = False
     Folders are JJJJ/JJJJ-MM/JJJJ-MM-TT; the capture time decides where a photo belongs. Runs in the
     background (about 1000 photos per page; 250k+ photos take several minutes), follow it with
     catalog_audit_status, then read catalog_audit_results. year limits the run to one year (by
-    capture date or year folder), useful for a first test. check_files also looks whether each file
+    capture date or year folder): much faster, because details are read only for that year; duplicates
+    are then only searched within the year. check_files also looks whether each file
     still exists on disk (slow over a NAS). Duplicate candidates (same second, camera, pixel size,
     file type and byte size) are confirmed by a fingerprint of the first and last MiB of each file.
     Changes nothing; only one run at a time.
@@ -737,7 +738,7 @@ async def catalog_audit_start(year: int | None = None, check_files: bool = False
         return {"error": "year must be four digits"}
     adapter = _adapter
     started, job = catalog_audit.start(
-        lambda offset, limit, refresh: adapter.audit_page(offset, limit, refresh), year, check_files)
+        lambda offset, limit, refresh: adapter.audit_page(offset, limit, refresh, year), year, check_files)
     return {"started": started, **job.status(),
             **({} if started else {"hint": "A run is already in progress; see catalog_audit_status."})}
 
