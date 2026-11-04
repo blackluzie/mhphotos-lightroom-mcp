@@ -6,7 +6,7 @@ Stand: 2026-11-03 · Status: **gebaut** (Plugin 0.1.2, Werkzeuge `catalog_audit_
 
 | Frage | Antwort |
 |---|---|
-| Ordnerstruktur | `JJJJ/JJJJ-MM/JJJJ-MM-TT/` (z. B. `2026/2026-10/2026-10-14/`), auf dem NAS genauso wie im Katalog |
+| Ordnerstruktur | `Lightroom/JJJJ-JJJJ/JJJJ/JJJJ-MM/JJJJ-MM-TT/` mit Jahrzehnt-Ordner (z. B. `2020-2029/2026/2026-10/2026-10-01/`; vor 2000: `1900-1999`), auf dem NAS genauso wie im Katalog |
 | Maßgebliches Datum | **Aufnahmedatum** (`dateTimeOriginal`), nicht Importdatum |
 | Katalog-Größe | ca. **268.270 Fotos** (Jahre ≤ 2020 bis 2026; 2023/2024 je ~30.000) |
 
@@ -110,3 +110,17 @@ Connector mit `--allow-instagram`.
     Musik: Reel im Content Studio herunterladen und in der Instagram-App posten.
   - Löschen in der iOS-Admin-Ansicht: gebaut in apps-platform#2582, Swift-Test noch auf dem Mac laufen lassen (`swift test`)
 - Erledigt (Plugin 0.1.5): Aufnahmezeit überall als Kamera-Uhrzeit statt UTC. Am echten Katalog einmal prüfen: ein Foto kurz nach Mitternacht muss bei `get_photo_metadata` den richtigen Tag zeigen.
+
+## Struktur v2 und weitere Prüfungen (Stand 2026-11-04)
+
+Nach dem Jahreslauf für 2020 (4.901 Fotos) angepasst. Der Katalog hat Jahrzehnt-Ordner (`2020-2029`), darunter aber
+Jahre aus anderen Jahrzehnten, dazu Jahres-Ordner auf oberster Ebene, `ohne Datum` und `vor 2000`.
+- **Soll-Pfad:** `<Jahrzehnt>/<Jahr>/<Jahr-Monat>/<Tag>`. `wrong_folder` hat zusätzlich die Stufen `decade`
+  (Jahr stimmt, Jahrzehnt-Ordner falsch oder fehlt) und `no_day` (Monat stimmt, aber kein Tagesordner).
+  Jeder Eintrag nennt `expected_path`. `catalog_audit_collections(kind="wrong_folder", level=…)` legt Sammlungen
+  je Stufe an.
+- **Videos** ohne Aufnahmedatum (`video_no_date`): Lightroom kennt dort kein Aufnahmedatum; eigene Gruppe statt `no_date`.
+- **Datum im Dateinamen** (`date_in_name`, z. B. `2019-12-08_19-35-23_000.jpeg`): `name_date` und `folder_fits`.
+  Das Datum selbst setzt man in Lightroom (*Metadaten > Aufnahmezeit bearbeiten*), danach prüft ein neuer Lauf den Ordner.
+- **Nahezu gleich** (`near_duplicates`): gleiche Aufnahme und Namensstamm (`IMG_5.jpg`, `IMG_5-2.jpg`), Dateigröße
+  auf 1 % gleich, nur Metadaten anders. Sammlungen „nahezu gleich – entfernen / behalten“.

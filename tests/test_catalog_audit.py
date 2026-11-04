@@ -13,7 +13,7 @@ def rec(pid, path, t="2021-07-14T10:00:00", **kw):
             "cam": "Canon", **kw}
 
 
-ROOT = "/Volumes/NAS/Fotos"
+ROOT = "/Volumes/NAS/Fotos/2020-2029"  # decade folder; the photos below are from 2020-2029
 
 
 @pytest.mark.parametrize(("path", "dates"), [
@@ -34,7 +34,12 @@ def test_folder_dates(path, dates):
     (f"{ROOT}/2021/2021-06/2021-06-14/a.dng", "2021-07-14T10:00:00", {"level": "month"}),
     (f"{ROOT}/2020/2020-07/2020-07-14/a.dng", "2021-07-14T10:00:00", {"level": "year"}),
     (f"{ROOT}/2021/2020-07/a.dng", "2021-07-14T10:00:00", {"level": "year"}),
-    (f"{ROOT}/2021/Urlaub/a.dng", "2021-07-14T10:00:00", None),  # only the year is known and right
+    (f"{ROOT}/2021/Urlaub/a.dng", "2021-07-14T10:00:00", {"level": "no_day"}),  # year right, no day folder
+    (f"{ROOT}/2021/2021-07/a.dng", "2021-07-14T10:00:00", {"level": "no_day"}),
+    ("/Volumes/NAS/Fotos/2021/2021-07/2021-07-14/a.dng", "2021-07-14T10:00:00", {"level": "decade"}),  # no decade
+    ("/Volumes/NAS/Fotos/2000-2009/2021/2021-07/2021-07-14/a.dng", "2021-07-14T10:00:00", {"level": "decade"}),
+    ("/Volumes/NAS/Fotos/1900-1999/1999/1999-05/1999-05-01/a.dng", "1999-05-01T10:00:00", None),
+    ("/Volumes/NAS/Fotos/2010-2019/2019/2019-12/2019-12-31/a.dng", "2019-12-31T23:59:00", None),
 ])
 def test_classify_wrong_folder(path, taken, expected):
     got = ca.classify(rec("x", path, taken), today="2026-11-03")
@@ -313,3 +318,68 @@ async def test_cancel_during_year_scan(monkeypatch):
     await server.catalog_audit_cancel()
     gate.set()
     assert (await _finish())["status"] == "cancelled"
+
+
+def test_classify_reports_the_full_target_path():
+    got = ca.classify(rec("x", "/Volumes/NAS/Fotos/2021/2021-07/2021-07-14/a.dng", "2026-10-01T08:00:00"), "2026-11-03")
+    assert got["level"] == "year" and got["expected_path"] == "2020-2029/2026/2026-10/2026-10-01"
+
+
+@pytest.mark.parametrize(("year", "folder"), [(1985, "1900-1999"), (1999, "1900-1999"), (2000, "2000-2009"),
+                                              (2019, "2010-2019"), (2026, "2020-2029")])
+def test_decade_folder(year, folder):
+    assert ca.decade_folder(year) == folder
+
+
+@pytest.mark.parametrize(("name", "expected"), [
+    ("2019-12-08_19-35-23_000.jpeg", "2019-12-08T19:35:23"),
+    ("IMG_20191208_193523.jpg", "2019-12-08T19:35:23"),
+    ("20191208.png", "2019-12-08"),
+    ("2019-11-17_16-32-47_000 (2020-01-20T05_55_48.164).jpeg", "2019-11-17T16:32:47"),
+    ("IMG_3259.MP4", None),
+    ("2019-13-45_x.jpg", None),  # not a date
+    ("DSC_4711.jpg", None),
+    ("2031-01-01_x.jpg", None),  # in the future
+])
+def test_name_date(name, expected):
+    assert ca.name_date("/x/" + name, today="2026-11-03") == expected
+
+
+def test_videos_and_dates_in_names_are_not_plain_no_date():
+    good = f"{ROOT}/2020/2020-01/2020-01-04/"
+    assert ca.classify(rec("v", good + "IMG_3259.MP4", "", fmt="VIDEO"), "2026-11-03")["kind"] == "video_no_date"
+    got = ca.classify(rec("n", good + "2020-01-04_23-25-28_000.jpeg", "", fmt="JPG"), "2026-11-03")
+    assert got == {"kind": "date_in_name", "name_date": "2020-01-04T23:25:28", "folder_fits": True}
+    other = ca.classify(rec("n", f"{ROOT}/2020/2020-01/2020-01-05/2020-01-04_23-25-28.jpeg", "", fmt="JPG"), "2026-11-03")
+    assert other["folder_fits"] is False
+    assert ca.classify(rec("p", good + "IMG_1.png", "", fmt="PNG"), "2026-11-03")["kind"] == "no_date"
+
+
+def test_near_duplicates_are_split_from_possible_ones(tmp_path):
+    an = ca.Analysis(today="2026-11-03")
+    an.add(rec("a", f"{tmp_path}/IMG_7.jpg", size=4_648_733, fmt="JPG"))
+    an.add(rec("b", f"{tmp_path}/IMG_7-2.jpg", size=4_649_752, fmt="JPG"))  # 0.02 % apart: same image
+    an.add(rec("c", f"{tmp_path}/IMG_8.jpg", "2021-07-14T10:00:01", size=4_000, fmt="JPG"))
+    an.add(rec("d", f"{tmp_path}/IMG_8-2.jpg", "2021-07-14T10:00:01", size=4_300, fmt="JPG"))  # 7 % apart
+    an.finish_duplicates()
+    [near] = an.findings["near_duplicates"]
+    assert {near["keep"]["id"], near["remove"][0]["id"]} == {"a", "b"}
+    [possible] = an.findings["possible_duplicates"]
+    assert {possible["keep"]["id"], possible["remove"][0]["id"]} == {"c", "d"}
+    summary = an.summary()
+    assert summary["counts"]["near_duplicates_to_remove"] == 1 and "near_duplicates" in summary["storage"]["freeable_gb"]
+
+
+def test_review_groups_filter_by_level_and_cover_near_duplicates():
+    findings = {k: [] for k in ca.KINDS}
+    findings["wrong_folder"] = [
+        {"id": "p1", "expected": "2021-07-14", "level": "decade"},
+        {"id": "p2", "expected": "2021-07-14", "level": "no_day"},
+        {"id": "p3", "expected": "2021-07-15", "level": "day"}]
+    groups, _ = ca.review_groups({"findings": findings}, "wrong_folder", level="decade")
+    assert [(g["name"], g["photo_ids"]) for g in groups] == [("→ 2021-07-14", ["p1"])]
+    findings["near_duplicates"] = [{"keep": {"id": "k"}, "remove": [{"id": "r"}]}]
+    groups, _ = ca.review_groups({"findings": findings}, "near_duplicates")
+    assert [(g["name"], g["photo_ids"]) for g in groups] == [
+        ("nahezu gleich – entfernen", ["r"]), ("nahezu gleich – behalten", ["k"])]
+    assert ca.review_groups({"findings": findings}, "video_no_date")[0][0]["set"] == "Sonstiges"
