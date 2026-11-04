@@ -738,14 +738,32 @@ async def catalog_audit_start(year: int | None = None, check_files: bool = False
         return {"error": "year must be four digits"}
     adapter = _adapter
     started, job = catalog_audit.start(
-        lambda offset, limit, refresh: adapter.audit_page(offset, limit, refresh, year), year, check_files)
+        lambda offset, limit, refresh: adapter.audit_page(offset, limit, refresh, year), year, check_files,
+        lambda y, start: adapter.audit_scan(y, start))
     return {"started": started, **job.status(),
             **({} if started else {"hint": "A run is already in progress; see catalog_audit_status."})}
 
 
 @mcp.tool()
+async def catalog_audit_cancel() -> dict[str, Any]:
+    """Stop the running catalog check at its next step (seconds). Changes nothing in the catalog.
+
+    A Lightroom call that is already running finishes first. Afterwards a new run can be started;
+    catalog_audit_status then shows status "cancelled".
+    """
+    job = catalog_audit.cancel()
+    if job is None:
+        return {"cancelled": False, "hint": "No catalog check is running."}
+    return {"cancelled": True, "note": "Stops at the next step; check catalog_audit_status.", **job.status()}
+
+
+@mcp.tool()
 async def catalog_audit_status() -> dict[str, Any]:
-    """Progress of the running catalog check, or the summary of the last finished one."""
+    """Progress of the running catalog check, or the summary of the last finished one.
+
+    A run with year first scans the whole catalog by capture year (phase "scanning catalog by capture
+    year", scanned / total_photos / matches, percent), then reads the details of the matching photos.
+    """
     job = catalog_audit.current()
     out: dict[str, Any] = job.status() if job else {"status": "none"}
     if out["status"] in ("none", "done", "failed"):
@@ -2170,7 +2188,7 @@ TOOLSETS: dict[str, set[str]] = {
         "connection_status", "lightroom_selftest", "list_collections", "list_photos",
         "get_photo_metadata", "get_photo_previews", "get_contact_sheet", "get_develop_settings",
         "list_presets", "backlog_report", "list_changes",
-        "catalog_audit_start", "catalog_audit_status", "catalog_audit_results",
+        "catalog_audit_start", "catalog_audit_status", "catalog_audit_results", "catalog_audit_cancel",
         "photos_by_date", "suggest_locations",
     },
     "edit": {

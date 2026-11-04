@@ -252,3 +252,64 @@ async def test_year_run_reads_only_that_year(monkeypatch):
     assert st["status"] == "done" and seen and set(seen) == {2026}
     assert 0 < st["read"] < len(server._adapter._photos) or st["read"] == st["total"]
     assert all(str(r["t"])[:4] == "2026" for r in server._adapter.audit_page(0, 100, False, 2026)["photos"])
+
+
+async def test_year_run_scans_in_steps_and_reports_progress(monkeypatch):
+    adapter = server._adapter
+    original = adapter.audit_scan
+    steps, release = [], __import__("threading").Event()
+
+    def scan(year, start):
+        steps.append(start)
+        if len(steps) == 2:
+            release.wait(5)
+        return original(year, start)
+
+    monkeypatch.setattr(adapter, "audit_scan", scan)
+    await server.catalog_audit_start(year=2026)
+    for _ in range(200):
+        st = await server.catalog_audit_status()
+        if len(steps) >= 2:
+            break
+        await anyio.sleep(0.01)
+    assert st["phase"] == "scanning catalog by capture year"
+    assert st["scanned"] == 2 and st["total_photos"] == 5 and st["percent"] == 40.0
+    release.set()
+    done = await _finish()
+    assert done["status"] == "done" and steps == [0, 2, 4]
+
+
+async def test_cancel_stops_a_run_and_allows_a_new_one(monkeypatch):
+    assert (await server.catalog_audit_cancel())["cancelled"] is False
+    gate = __import__("threading").Event()
+    original = server._adapter.audit_page
+
+    def slow(offset, limit, refresh=False, year=None):
+        gate.wait(5)
+        return original(offset, limit, refresh, year)
+
+    monkeypatch.setattr(server._adapter, "audit_page", slow)
+    assert (await server.catalog_audit_start())["started"] is True
+    cancelled = await server.catalog_audit_cancel()
+    assert cancelled["cancelled"] is True and cancelled["cancel_requested"] is True
+    gate.set()
+    st = await _finish()
+    assert st["status"] == "cancelled", st
+    monkeypatch.setattr(server._adapter, "audit_page", original)
+    assert (await server.catalog_audit_start())["started"] is True
+    assert (await _finish())["status"] == "done"
+
+
+async def test_cancel_during_year_scan(monkeypatch):
+    gate = __import__("threading").Event()
+    original = server._adapter.audit_scan
+
+    def scan(year, start):
+        gate.wait(5)
+        return original(year, start)
+
+    monkeypatch.setattr(server._adapter, "audit_scan", scan)
+    await server.catalog_audit_start(year=2026)
+    await server.catalog_audit_cancel()
+    gate.set()
+    assert (await _finish())["status"] == "cancelled"

@@ -8,7 +8,7 @@ Access and refresh tokens remain ephemeral; restart requires reconnection.
 
 The public tool allowlist is: `connection_status`, `list_collections`, `list_photos`,
 `get_photo_metadata`, `get_photo_previews`, `get_contact_sheet`, `get_develop_settings`,
-`list_presets`, `list_changes`, `catalog_audit_start`, `catalog_audit_status`,
+`list_presets`, `list_changes`, `catalog_audit_start`, `catalog_audit_status`, `catalog_audit_cancel`,
 `catalog_audit_results`, `photos_by_date`, `suggest_locations` (reads; the audit runs on the Mac and changes
 nothing) and `export_photos`. No MHPhotos-site, publishing or
 Instagram tools are registered, and nothing deletes photos.

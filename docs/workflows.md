@@ -115,7 +115,9 @@ entry `mhphotos-admin-token`) and the n8n inbox workflow.
 ## 11. Catalog check: photos in the wrong date folder, duplicates
 Folders are `JJJJ/JJJJ-MM/JJJJ-MM-TT`; the capture time decides where a photo belongs. Plan: `docs/plan-katalog-pruefung.md`.
 1. `catalog_audit_start(year=2020)` for a first test, later without `year` for the whole catalog. It runs in the
-   background on the Mac and changes nothing; `catalog_audit_status()` shows progress and, at the end, the counts.
+   background on the Mac and changes nothing; `catalog_audit_status()` shows progress and, at the end, the counts. With `year` the run first scans the
+   whole catalog by capture year (percent shown), then reads details only for that year. `catalog_audit_cancel()`
+   stops a run at its next step.
 2. `catalog_audit_results(kind="wrong_folder", year=…, level="year"|"month"|"day")`: `found` is the folder it is in,
    `expected` the day folder it belongs in. `day_diff` ±1 is often a time-zone or midnight effect (camera clock on
    travel), so check those before moving. Other kinds: `no_date`, `implausible_date`, `unrecognised_folder`,
