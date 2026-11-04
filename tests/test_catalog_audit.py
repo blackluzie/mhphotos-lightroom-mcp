@@ -340,6 +340,9 @@ def test_decade_folder(year, folder):
     ("2019-13-45_x.jpg", None),  # not a date
     ("DSC_4711.jpg", None),
     ("2031-01-01_x.jpg", None),  # in the future
+    ("1899-01-01_17-54-10_000 (2020-06-24T20_07_34.106).jpeg", None),  # placeholder first, export time in brackets
+    ("1970-01-01_00-00-00_000.jpeg", None),
+    ("2020-04-07_08-02-48_000 (2020-06-24T11_34_14.910).jpeg", "2020-04-07T08:02:48"),
 ])
 def test_name_date(name, expected):
     assert ca.name_date("/x/" + name, today="2026-11-03") == expected

@@ -226,6 +226,9 @@ async def test_write_name_dates_to_files_end_to_end(monkeypatch, tmp_path):
          "folder_fits": False}
         for (pid, name), n_date in zip(files.items(), ["2019-12-08T19:35:23", "2019-12-09T10:00:00",
                                                        "2019-12-10T11:00:00", "2019-12-11T12:00:00"], strict=True)]
+    findings["date_in_name"].append(  # an older check took the date from the brackets: refused by the rule now
+        {"id": "p4", "file": "1899-01-01_17-54-10_000 (2020-06-24T20_07_34.106).jpeg", "folder": "x",
+         "name_date": "2020-06-24T20:07:34", "folder_fits": False})
     ca.save_result({"finished_at": "x", "findings": findings, "summary": {}})
     monkeypatch.setattr(server._adapter, "photo_paths", lambda ids: {"paths": {
         i: str(pics / files[i]) for i in ids if i in files}})
