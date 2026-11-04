@@ -208,6 +208,11 @@ async def test_write_name_dates_to_files_end_to_end(monkeypatch, tmp_path):
     fake.write_text(FAKE_EXIFTOOL.format(python=sys.executable))
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setattr(file_dates, "exiftool_path", lambda: str(fake))
+
+    def refuse(*_args, **_kwargs):  # macOS refuses flags/xattrs of SMB files: the backup must not use copy2
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(file_dates.shutil, "copy2", refuse)
     pics = tmp_path / "Photos" / "2020-2029" / "2020" / "2020-01"
     pics.mkdir(parents=True)
     files = {"p2": "2019-12-08_19-35-23_000.jpeg", "p3": "2019-12-09_10-00-00_000.jpeg",
