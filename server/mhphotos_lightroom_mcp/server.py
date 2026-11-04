@@ -738,6 +738,8 @@ def _name_date_items(saved: dict[str, Any], year: int | None, only_wrong_folder:
         found = [f for f in found if str(f.get("name_date") or "")[:4] == str(year)]
     if only_wrong_folder:
         found = [f for f in found if not f.get("folder_fits")]
+    # the saved name_date must agree with today's rule (older checks also took dates from brackets)
+    found = [f for f in found if catalog_audit.name_date(str(f.get("file") or "")) == f.get("name_date")]
     timed = [f for f in found if _valid_time(str(f.get("name_date") or ""))]
     return timed, len(found) - len(timed)
 

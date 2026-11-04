@@ -84,12 +84,23 @@ def folder_decade(path: str) -> str | None:
     return found
 
 
+_LOOSE_DATE = re.compile(r"(?<!\d)(\d{4})[-_.]?(\d{2})[-_.]?(\d{2})(?!\d)")
+
+
 def name_date(path: str, today: str | None = None) -> str | None:
-    """A plausible capture date in the file name (``YYYY-MM-DDTHH:MM:SS`` or ``YYYY-MM-DD``), else None."""
+    """The capture date in the file name (``YYYY-MM-DDTHH:MM:SS`` or ``YYYY-MM-DD``), else None.
+
+    Only the first date in the name counts: in ``1899-01-01_17-54-10_000 (2020-06-24T20_07_34).jpeg`` the
+    first date is a placeholder and the one in brackets an export time, so the name gives no capture date.
+    """
     today = today or date.today().isoformat()
-    m = _NAME_DATE.search(PurePosixPath(path).name)
-    if not m:
+    name = PurePosixPath(path).name
+    loose = _LOOSE_DATE.search(name)
+    if not loose:
         return None
+    m = _NAME_DATE.match(name, loose.start())
+    if not m:
+        return None  # looks like a date but is not a plausible one
     y, mo, d, hh, mi, ss = m.groups()
     try:
         day = date(int(y), int(mo), int(d)).isoformat()
