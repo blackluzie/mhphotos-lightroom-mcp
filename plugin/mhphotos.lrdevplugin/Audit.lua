@@ -45,6 +45,12 @@ local function localTime(iso, raw)
   return nil
 end
 
+-- Capture time of one photo as the camera's wall clock (YYYY-MM-DDTHH:MM:SS), '' when unknown.
+function Audit.captureTime(photo)
+  local ok, iso = LrTasks.pcall(function() return photo:getRawMetadata('dateTimeOriginalISO8601') end)
+  return localTime(ok and iso or nil, photo:getRawMetadata('dateTimeOriginal')) or ''
+end
+
 local function batch(cat, slice, keys, formatted)
   if formatted then return cat:batchGetFormattedMetadata(slice, keys) end
   return cat:batchGetRawMetadata(slice, keys)

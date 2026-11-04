@@ -99,5 +99,5 @@ Connector mit `--allow-instagram`.
   - Reels: Foto-Diashow ohne Musik, Renderer in apps-platform#2584 (`infra/mhphotos-reel-renderer`). Auf Hetzner
     einrichten: Admin-Token als Secret-Datei, `docker compose up -d --build`, Probelauf mit `--once`.
     Musik: Reel im Content Studio herunterladen und in der Instagram-App posten.
-  - Löschen in der iOS-Admin-Ansicht
-- Prüfen: `Commands.lua` `isoTime` gibt die Aufnahmezeit in UTC aus. Datumsfilter von `list_photos` können bei Fotos kurz nach Mitternacht um einen Tag danebenliegen. Die Katalog-Prüfung nutzt bereits die Kamera-Uhrzeit.
+  - Löschen in der iOS-Admin-Ansicht: gebaut in apps-platform#2582, Swift-Test noch auf dem Mac laufen lassen (`swift test`)
+- Erledigt (Plugin 0.1.5): Aufnahmezeit überall als Kamera-Uhrzeit statt UTC. Am echten Katalog einmal prüfen: ein Foto kurz nach Mitternacht muss bei `get_photo_metadata` den richtigen Tag zeigen.
