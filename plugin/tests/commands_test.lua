@@ -351,6 +351,20 @@ local past = Commands.run('audit_page', { offset = 50, limit = 10 })
 eq(#past.photos, 0); eq(past.next_offset, 50)
 eq(#Commands.run('audit_page', { limit = 99999 }).photos, #photos, 'limit is capped, not rejected')
 
+-- audit_page with a year: only photos of that capture year or year folder, details only for those
+local yp = Commands.run('audit_page', { year = 2026 })
+eq(yp.total, 1, 'only the 2026 photo'); eq(yp.photos[1].id, 'u2'); eq(yp.next_offset, 1)
+eq(Commands.run('audit_page', { year = 2001 }).photos[1].id, 'u1', 'capture year 2001')
+eq(Commands.run('audit_page', { year = 1999 }).total, 0, 'no photo of 1999')
+local oldPath = p1.raw.path
+p1.raw.path = '/Volumes/NAS/Fotos/2020 Urlaub/IMG_1.dng' -- taken 2001 but in a 2020 folder: still in scope
+eq(Commands.run('audit_page', { year = 2020 }).photos[1].id, 'u1', 'year folder counts')
+p1.raw.path = '/Volumes/NAS/Fotos/2020-03/2020-03-05/IMG_1.dng' -- day/month folders are not year folders
+eq(Commands.run('audit_page', { year = 2020 }).total, 0, 'only a pure year folder counts')
+p1.raw.path = oldPath
+local okY = pcall(Commands.run, 'audit_page', { year = 'abc' })
+eq(okY, false, 'a bad year is rejected')
+
 -- review collections (write, additive): one set per kind below the root set
 writes = 0
 local rc = Commands.run('create_review_collections', { root = 'Prüfen', groups = {

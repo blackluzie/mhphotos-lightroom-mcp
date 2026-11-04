@@ -202,8 +202,8 @@ class CatalogAdapter(Protocol):
 
     def create_preset(self, name: str, settings: dict[str, Any]) -> dict[str, Any]: ...
 
-    def audit_page(self, offset: int, limit: int, refresh: bool = False) -> dict[str, Any]:
-        """{"total", "offset", "next_offset", "photos": [compact records], "unsupported"}"""
+    def audit_page(self, offset: int, limit: int, refresh: bool = False, year: int | None = None) -> dict[str, Any]:
+        """year: only photos of that capture year or year folder. {"total", "offset", "next_offset", "photos": [compact records], "unsupported"}"""
 
     def create_review_collections(self, root: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
         """{"collections": [{"set", "name", "added"}], "missing"}"""
@@ -410,8 +410,10 @@ class MockAdapter:
                         **({"r": p.rating} if p.rating else {})})
         return out
 
-    def audit_page(self, offset, limit, refresh=False):
+    def audit_page(self, offset, limit, refresh=False, year=None):
         recs = self._audit_records()
+        if year:
+            recs = [r for r in recs if r["t"][:4] == str(year) or f"/{year}/" in r["path"]]
         part = recs[offset : offset + limit]
         return {"total": len(recs), "offset": offset, "next_offset": offset + len(part), "photos": part,
                 "unsupported": []}
