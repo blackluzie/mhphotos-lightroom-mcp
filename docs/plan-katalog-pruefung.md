@@ -93,6 +93,11 @@ Connector mit `--allow-instagram`.
   - XMP-Presets nach Lightroom-Neustart
   - Schreib-Werkzeuge über den Connector
   - Instagram-Abgleich
+- n8n (apps-platform#2586): drei Workflows importieren (Status-Push, Montagsbericht, Fehler-Push), Credential
+  „MHPhotos – Admin-Token“ wählen, Publish, bei allen Workflows *Error Workflow* = „MHPhotos – Fehler-Push“.
+  Reel-Renderer als Dienst `reel-renderer` im n8n-Stack starten.
+- Auto-Export über n8n: `./scripts/rebuild-mac.sh --hot-folder --apply --start`, im Plugin Auto-Export für die
+  Sammlung „→ MHPhotos“ einrichten; alten Inbox-Watcher stoppen, falls er läuft.
 - Gemergte Branches auf GitHub löschen.
 - Später:
   - Karussell: gebaut (`photo_ids` in `mhphotos_schedule_instagram`).

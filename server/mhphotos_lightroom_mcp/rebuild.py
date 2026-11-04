@@ -49,7 +49,7 @@ def make_agent(label, module, python, repo, home, exports):
 
 
 def configure(home, repo, python, public_url=None, callbacks=(), secret_source=None, apply=False, github=None,
-        n8n_webhook_url=None, allow_writes=None, mhphotos_site=None, allow_instagram=None):
+        n8n_webhook_url=None, allow_writes=None, mhphotos_site=None, allow_instagram=None, hot_folder=None):
     from urllib.parse import urlsplit
     config_dir = home / '.config/mhphotos-lightroom'
     config_path = config_dir / 'desktop.json'
@@ -84,6 +84,16 @@ def configure(home, repo, python, public_url=None, callbacks=(), secret_source=N
         config['allow_writes'] = bool(allow_writes)
     if mhphotos_site:
         config['mhphotos_url'] = mhphotos_url(mhphotos_site)
+    if hot_folder is not None:
+        if hot_folder is False:
+            config.pop('hot_folder', None)
+        else:
+            folder = Path(os.path.expanduser(str(hot_folder)))
+            if not folder.is_absolute():
+                raise ValueError('--hot-folder needs an absolute path')
+            if not (n8n_webhook_url or config.get('n8n_webhook_url')):
+                raise ValueError('--hot-folder needs --n8n-webhook-url (n8n uploads the files)')
+            config['hot_folder'] = str(folder)
     if allow_instagram is not None:
         if allow_instagram and not config.get('mhphotos_url'):
             raise ValueError('--allow-instagram needs --mhphotos-url')
@@ -110,6 +120,11 @@ def configure(home, repo, python, public_url=None, callbacks=(), secret_source=N
     plan = {'public_mcp_url': issuer + '/mcp', 'callbacks': redirects,
         'n8n_webhook_url': config.get('n8n_webhook_url'), 'allow_writes': config.get('allow_writes', False),
         'mhphotos_url': config.get('mhphotos_url'), 'allow_instagram': config.get('allow_instagram', False),
+        'hot_folder': config.get('hot_folder'),
+        **({'warning': 'The old inbox watcher (de.mhphotos.inbox-watcher) also watches a hot folder and uploads '
+            'directly. Stop it so each JPEG takes one path: launchctl bootout gui/$(id -u)/de.mhphotos.inbox-watcher'}
+           if config.get('hot_folder') and (home / 'Library/LaunchAgents/de.mhphotos.inbox-watcher.plist').exists()
+           else {}),
         'export_directory': str(exports), 'agents': list(agents), 'apply': apply,
         'routing': 'Preserve existing Tailscale routes; configure explicitly using docs/rebuild.md'}
     if not apply:
@@ -197,6 +212,10 @@ def main():
         help='Offer planning Instagram posts in the MHPhotos social queue (published automatically at the planned time)')
     parser.add_argument('--no-allow-instagram', dest='allow_instagram', action='store_false',
         help='Remove Instagram planning again')
+    parser.add_argument('--hot-folder', nargs='?', const=str(Path.home() / 'Pictures/MHPhotos-Inbox'), default=None,
+        help="Folder of Lightroom's auto-export; finished JPEGs go through n8n into the MHPhotos inbox "
+             '(default ~/Pictures/MHPhotos-Inbox)')
+    parser.add_argument('--no-hot-folder', dest='hot_folder', action='store_false', help='Stop watching the hot folder')
     parser.add_argument('--configure-routing', action='store_true', help='Validate/create only MCP 443 and private assets 9443 Tailscale routes')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--start', action='store_true', help='Restart only the two managed services; requires --apply')
@@ -210,7 +229,7 @@ def main():
     github = {'client_id': args.github_client_id, 'owner_id': args.github_owner_id, 'login': args.github_login}
     result = configure(home, repo, Path(sys.executable), args.public_url, args.callback,
         args.github_secret_file, False, github, args.n8n_webhook_url, args.allow_writes, args.mhphotos_url,
-        args.allow_instagram)
+        args.allow_instagram, args.hot_folder)
     commands = []
     if args.configure_routing:
         from urllib.parse import urlsplit
@@ -220,7 +239,7 @@ def main():
         result['routing_commands'] = commands
     if args.apply:
         configure(home, repo, Path(sys.executable), args.public_url, args.callback, args.github_secret_file, True, github,
-            args.n8n_webhook_url, args.allow_writes, args.mhphotos_url, args.allow_instagram)
+            args.n8n_webhook_url, args.allow_writes, args.mhphotos_url, args.allow_instagram, args.hot_folder)
         result["apply"] = True
     print(json.dumps(result, indent=2))
     if args.start:
