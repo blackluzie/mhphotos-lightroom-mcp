@@ -136,38 +136,115 @@ def test_storage_balance():
     assert storage["freeable_gb"]["sum"] == 1.5
 
 
-async def test_set_capture_time_is_a_gated_write(monkeypatch):
-    assert (await server.set_capture_time(["p2"], "2019-12-08T19:35:23", confirm=True))["code"] == "disabled"
-    monkeypatch.setenv("MHPHOTOS_ALLOW_WRITES", "1")
-    assert "error" in await server.set_capture_time(["p2"], "gestern")
-    assert "error" in await server.set_capture_time(["p2"], "2019-13-45T00:00:00")
-    dry = await server.set_capture_time(["p2"], "2019-12-08T19:35:23")
-    assert dry["dry_run"] is True
-    done = await server.set_capture_time(["p2"], "2019-12-08T19:35:23", confirm=True)
-    assert done["applied"] is True and done["written"] == 1
-    assert (await server.get_photo_metadata("p2"))["capture_time"] == "2019-12-08T19:35:23"
+FAKE_EXIFTOOL = """#!{python}
+import sys
+args = sys.argv[1:]
+path = args[-1]
+side = path + ".exif"
+if "-s3" in args:
+    try:
+        print(open(side).read(), end="")
+    except OSError:
+        pass
+    sys.exit(0)
+if "boom" in path:
+    print("Error: cannot write", file=sys.stderr)
+    open(path, "wb").write(b"half written")
+    sys.exit(1)
+value = [a for a in args if a.startswith("-DateTimeOriginal=")][0].split("=", 1)[1]
+open(side, "w").write(value)
+print("    1 image files updated")
+"""
 
 
-async def test_apply_name_dates_uses_the_last_catalog_check(monkeypatch):
+def test_file_edits_over_http_only_when_enabled(monkeypatch):
+    monkeypatch.delenv(http_service.FILES_FLAG, raising=False)
+    app = FastMCP("a")
+    http_service.register_tools(app, writes=True)
+    assert not set(http_service.FILES_TOOLS) & {t.name for t in asyncio.run(app.list_tools())}
+    monkeypatch.setenv(http_service.FILES_FLAG, "1")
+    app = FastMCP("b")
+    http_service.register_tools(app, writes=False)  # file edits need the edit opt-in as well
+    assert not set(http_service.FILES_TOOLS) & {t.name for t in asyncio.run(app.list_tools())}
+    app = FastMCP("c")
+    http_service.register_tools(app, writes=True)
+    tools = {t.name: t for t in asyncio.run(app.list_tools())}
+    assert tools["write_name_dates_to_files"].annotations.destructiveHint is True
+
+
+@pytest.mark.parametrize(("iso", "expected"), [("2019-09-10T08:24:16", "2019:09:10 08:24:16")])
+def test_exif_time(iso, expected):
+    from mhphotos_lightroom_mcp import file_dates
+    assert file_dates.exif_time(iso) == expected
+
+
+def test_check_file_refuses_unsafe_targets(tmp_path):
+    from mhphotos_lightroom_mcp import file_dates
+    good = tmp_path / "a.jpeg"
+    good.write_bytes(b"x")
+    assert file_dates.check_file(str(good), "a.jpeg") is None
+    assert file_dates.check_file(str(good), "b.jpeg") == "Pfad passt nicht zum Dateinamen"
+    assert file_dates.check_file(None, "a.jpeg") == "Lightroom nennt keinen Pfad"
+    assert file_dates.check_file("a.jpeg", "a.jpeg") == "Pfad passt nicht zum Dateinamen"  # not absolute
+    png = tmp_path / "a.png"
+    png.write_bytes(b"x")
+    assert file_dates.check_file(str(png), "a.png") == "kein JPEG"
+    assert file_dates.check_file(str(tmp_path / "gone.jpeg"), "gone.jpeg") == "Datei nicht gefunden"
+    empty = tmp_path / "e.jpg"
+    empty.write_bytes(b"")
+    assert file_dates.check_file(str(empty), "e.jpg") == "Datei ist leer"
+    link = tmp_path / "l.jpg"
+    link.symlink_to(good)
+    assert file_dates.check_file(str(link), "l.jpg") == "Datei nicht gefunden"
+
+
+async def test_write_name_dates_to_files_end_to_end(monkeypatch, tmp_path):
+    import stat
+    import sys
+
+    from mhphotos_lightroom_mcp import file_dates
+    monkeypatch.setenv("MHPHOTOS_CONFIG_DIR", str(tmp_path / "cfg"))
+    fake = tmp_path / "exiftool"
+    fake.write_text(FAKE_EXIFTOOL.format(python=sys.executable))
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setattr(file_dates, "exiftool_path", lambda: str(fake))
+    pics = tmp_path / "Photos" / "2020-2029" / "2020" / "2020-01"
+    pics.mkdir(parents=True)
+    files = {"p2": "2019-12-08_19-35-23_000.jpeg", "p3": "2019-12-09_10-00-00_000.jpeg",
+             "p5": "2019-12-10_11-00-00_000.jpeg", "p1": "boom_2019-12-11_12-00-00.jpeg"}
+    for name in files.values():
+        (pics / name).write_bytes(b"original " + name.encode())
+    (pics / (files["p3"] + ".exif")).write_text("2019:12:09 10:00:00")  # already has a capture time
     findings = {k: [] for k in ca.KINDS}
     findings["date_in_name"] = [
-        {"id": "p2", "file": "2019-12-08_19-35-23_000.jpeg", "folder": "2020/2020-01", "name_date": "2019-12-08T19:35:23",
-         "folder_fits": False},
-        {"id": "p3", "file": "2019-12-09_000.jpeg", "folder": "2019/2019-12", "name_date": "2019-12-09", "folder_fits": True},
-        {"id": "p5", "file": "2018-01-02_10-00-00.jpeg", "folder": "2018/2018-01", "name_date": "2018-01-02T10:00:00",
-         "folder_fits": True},
-    ]
+        {"id": pid, "file": name, "folder": "2020-2029/2020/2020-01", "name_date": n_date,
+         "folder_fits": False}
+        for (pid, name), n_date in zip(files.items(), ["2019-12-08T19:35:23", "2019-12-09T10:00:00",
+                                                       "2019-12-10T11:00:00", "2019-12-11T12:00:00"], strict=True)]
     ca.save_result({"finished_at": "x", "findings": findings, "summary": {}})
-    assert (await server.apply_name_dates(confirm=True))["code"] == "disabled"
+    monkeypatch.setattr(server._adapter, "photo_paths", lambda ids: {"paths": {
+        i: str(pics / files[i]) for i in ids if i in files}})
+
+    assert (await server.write_name_dates_to_files(confirm=True))["code"] == "disabled"
     monkeypatch.setenv("MHPHOTOS_ALLOW_WRITES", "1")
-    dry = await server.apply_name_dates(year=2019)
-    assert dry["dry_run"] is True and dry["this_call"] == 1 and dry["date_only_skipped"] == 1
-    assert dry["examples"] == [{"file": "2019-12-08_19-35-23_000.jpeg", "folder": "2020/2020-01",
-                                "set_to": "2019-12-08T19:35:23"}]
-    wrong = await server.apply_name_dates(only_wrong_folder=True)
-    assert wrong["this_call"] == 1 and wrong["remaining_after"] == 0
-    done = await server.apply_name_dates(confirm=True)
-    assert done["applied"] is True and done["updated"] == 2 and done["remaining"] == 0
-    assert (await server.get_photo_metadata("p2"))["capture_time"] == "2019-12-08T19:35:23"
-    assert (await server.get_photo_metadata("p5"))["capture_time"] == "2018-01-02T10:00:00"
-    assert (await server.get_photo_metadata("p3"))["capture_time"] != "2019-12-09"  # date without time: skipped
+    assert (await server.write_name_dates_to_files(confirm=True))["code"] == "disabled"  # needs its own opt-in
+    monkeypatch.setenv("MHPHOTOS_ALLOW_FILE_EDITS", "1")
+
+    dry = await server.write_name_dates_to_files()  # limit defaults to 1: the first photo only
+    assert dry["dry_run"] is True and dry["this_call"] == 1
+    assert dry["will_write"] == [{"file": files["p2"], "folder": "2020-2029/2020/2020-01", "set_to": "2019-12-08T19:35:23"}]
+    assert not (pics / (files["p2"] + ".exif")).exists()  # nothing changed
+
+    done = await server.write_name_dates_to_files(confirm=True)
+    assert done["applied"] is True and done["written"] == 1 and done["failed"] == []
+    assert (pics / (files["p2"] + ".exif")).read_text() == "2019:12:08 19:35:23"
+    backups = list((tmp_path / "cfg" / "file-backups").rglob("*.jpeg"))
+    assert [b.read_bytes() for b in backups] == [b"original " + files["p2"].encode()]
+    assert done["collection"].endswith("Datum in Datei geschrieben")
+    assert server._adapter.review_collections[-1]["photo_ids"] == ["p2"]
+
+    rest = await server.write_name_dates_to_files(limit=10, confirm=True)
+    assert rest["written"] == 1 and [f["file"] for f in rest["failed"]] == [files["p1"]]
+    # the one written before and the one that had a time already are left alone
+    assert {s["file"] for s in rest["skipped"]} == {files["p2"], files["p3"]}
+    assert (pics / files["p1"]).read_bytes() == b"original " + files["p1"].encode()  # restored after the failure

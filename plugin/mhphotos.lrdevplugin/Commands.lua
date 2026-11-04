@@ -539,37 +539,13 @@ function Commands.set_location(args)
   return { updated = #photos, gps_written = gpsWritten, gps_error = gpsError }
 end
 
--- Write: capture time per photo, items = { { id = uuid, time = 'YYYY-MM-DDTHH:MM:SS' } } (camera wall
--- clock, like the folder names). Whether this Lightroom accepts a write to dateTimeOriginal is not
--- documented for the SDK, so every photo is tried on its own and refusals are reported, not fatal.
-local function parseWallClock(text)
-  local y, mo, d, h, mi, sec = tostring(text):match('^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)$')
-  if not y then error('time must be YYYY-MM-DDTHH:MM:SS: ' .. tostring(text), 0) end
-  y, mo, d, h, mi, sec = tonumber(y), tonumber(mo), tonumber(d), tonumber(h), tonumber(mi), tonumber(sec)
-  if y < 1900 or y > 2100 or mo < 1 or mo > 12 or d < 1 or d > 31 or h > 23 or mi > 59 or sec > 59 then
-    error('time out of range: ' .. tostring(text), 0)
+-- Read only: the file path of each photo (the server writes a capture time into JPEG files that way).
+function Commands.photo_paths(args)
+  local paths = {}
+  for i, photo in ipairs(findAll(args.photo_ids)) do
+    paths[args.photo_ids[i]] = photo:getRawMetadata('path')
   end
-  return y, mo, d, h, mi, sec
-end
-
-function Commands.set_capture_time(args)
-  local items = args.items
-  if type(items) ~= 'table' or #items == 0 then error('items must not be empty', 0) end
-  if #items > MAX_PAGE then error('too many photos in one call', 0) end
-  local resolved = {}
-  for i, item in ipairs(items) do
-    local y, mo, d, h, mi, sec = parseWallClock(item.time)
-    resolved[i] = { photo = findPhoto(item.id), stamp = LrDate.timeFromComponents(y, mo, d, h, mi, sec, 'local') }
-  end
-  local written, failed, firstError = 0, 0, nil
-  writeAccess('MHPhotos: Aufnahmezeit', function()
-    for _, r in ipairs(resolved) do
-      local ok, err = LrTasks.pcall(function() r.photo:setRawMetadata('dateTimeOriginal', r.stamp) end)
-      if ok then written = written + 1 else failed, firstError = failed + 1, firstError or tostring(err) end
-    end
-  end)
-  Audit.clearCache()
-  return { updated = #resolved, written = written, failed = failed, error = firstError }
+  return { paths = paths }
 end
 
 -- Write (additive): review collections below one collection set, e.g.

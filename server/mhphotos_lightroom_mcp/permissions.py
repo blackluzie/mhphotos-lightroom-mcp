@@ -11,11 +11,22 @@ import os
 from pathlib import Path
 
 WRITES_ENV = "MHPHOTOS_ALLOW_WRITES"
+FILE_EDITS_ENV = "MHPHOTOS_ALLOW_FILE_EDITS"
 EXPORT_DIR_ENV = "MHPHOTOS_EXPORT_DIR"
 
 
 def writes_enabled() -> bool:
     return os.environ.get(WRITES_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+def file_edits_enabled() -> bool:
+    """Writing into the photo files themselves (capture time via exiftool): a separate opt-in."""
+    return os.environ.get(FILE_EDITS_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+def file_edits_disabled_message() -> str:
+    return (f"Changing photo files is disabled. The operator must set {FILE_EDITS_ENV}=1 "
+            "(rebuild-mac.sh --allow-file-edits).")
 
 
 def export_dir() -> str | None:

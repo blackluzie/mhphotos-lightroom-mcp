@@ -208,8 +208,8 @@ class CatalogAdapter(Protocol):
     def audit_scan(self, year: int, start: int) -> dict[str, Any]:
         """One step of the capture-year scan: {"total", "next_start", "done", "hits"}."""
 
-    def set_capture_time(self, items: list[dict[str, str]]) -> dict[str, Any]:
-        """items: [{"id", "time": "YYYY-MM-DDTHH:MM:SS"}] -> {"updated", "written", "failed", "error"}"""
+    def photo_paths(self, photo_ids: list[str]) -> dict[str, Any]:
+        """{"paths": {photo id: absolute file path}}"""
 
     def create_review_collections(self, root: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
         """{"collections": [{"set", "name", "added"}], "missing"}"""
@@ -467,12 +467,9 @@ class MockAdapter:
             self._photos[p.id] = dataclasses.replace(p, extra=extra)
         return {"updated": len(photos), "gps_written": latitude is not None}
 
-    def set_capture_time(self, items):
-        photos = {i["id"]: self.get_photo(i["id"]) for i in items}  # raises before any change
-        for item in items:
-            p = photos[item["id"]]
-            self._photos[p.id] = dataclasses.replace(p, capture_time=item["time"])
-        return {"updated": len(items), "written": len(items), "failed": 0}
+    def photo_paths(self, photo_ids):
+        recs = {r["id"]: r["path"] for r in self._audit_records()}
+        return {"paths": {i: recs[i] for i in photo_ids if i in recs}}
 
     def _all(self, photo_ids: list[str]) -> list[Photo]:
         return [self.get_photo(i) for i in photo_ids]  # raises before any change

@@ -121,8 +121,7 @@ function import(name)
   if name == 'LrDate' then
     return { currentTime = function() return os.clock() end,
       -- the real one formats in the local time zone; UTC keeps the test deterministic
-      timeToUserFormat = function(t, fmt) return os.date('!' .. fmt, t + 978307200) end,
-      timeFromComponents = function(y, mo, d, h, mi, sec) return os.time({ year = y, month = mo, day = d, hour = h, min = mi, sec = sec }) end }
+      timeToUserFormat = function(t, fmt) return os.date('!' .. fmt, t + 978307200) end }
   end
   if name == 'LrStringUtils' then return { encodeBase64 = function(d) return 'B64(' .. d .. ')' end } end
   if name == 'LrApplication' then
@@ -375,21 +374,11 @@ p1.raw.path = oldPath
 local okY = pcall(Commands.run, 'audit_page', { year = 'abc' })
 eq(okY, false, 'a bad year is rejected')
 
--- set_capture_time: per photo, a refused write is reported (not fatal), bad times abort before any change
-writes = 0
-local sct = Commands.run('set_capture_time', { items = { { id = 'u2', time = '2019-12-08T19:35:23' } } })
-eq(sct.updated, 1); eq(sct.written, 1); eq(sct.failed, 0); eq(writes, 1)
-assert(p2.raw.dateTimeOriginal, 'capture time was written')
-local origSet = p2.setRawMetadata
-function p2:setRawMetadata(k, v) if k == 'dateTimeOriginal' then error('not allowed', 0) end return origSet(self, k, v) end
-local sct2 = Commands.run('set_capture_time', { items = { { id = 'u2', time = '2019-12-08T19:35:23' } } })
-eq(sct2.written, 0); eq(sct2.failed, 1); eq(sct2.error, 'not allowed')
-p2.setRawMetadata = origSet
-writes = 0
-eq(pcall(Commands.run, 'set_capture_time', { items = { { id = 'u2', time = 'gestern' } } }), false)
-eq(pcall(Commands.run, 'set_capture_time', { items = { { id = 'gone', time = '2019-12-08T19:35:23' } } }), false)
-eq(pcall(Commands.run, 'set_capture_time', { items = {} }), false)
-eq(writes, 0, 'nothing changed after bad input')
+-- photo_paths: read only, the file path per photo id; unknown ids abort
+local pp = Commands.run('photo_paths', { photo_ids = { 'u1', 'u2' } }).paths
+eq(pp.u1, p1.raw.path); eq(pp.u2, p2.raw.path)
+eq(pcall(Commands.run, 'photo_paths', { photo_ids = { 'gone' } }), false)
+eq(pcall(Commands.run, 'photo_paths', { photo_ids = {} }), false)
 
 -- review collections (write, additive): one set per kind below the root set
 writes = 0

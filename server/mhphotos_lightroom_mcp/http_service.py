@@ -31,7 +31,7 @@ WRITE_TOOLS = (
     'set_rating', 'set_flag', 'set_color_label', 'set_title_caption', 'add_keywords',
     'create_collection', 'add_to_collection', 'create_virtual_copies', 'undo_last_change',
     'apply_preset', 'apply_develop_settings', 'sync_develop_settings', 'create_preset',
-    'catalog_audit_collections', 'set_location', 'set_capture_time', 'apply_name_dates',
+    'catalog_audit_collections', 'set_location',
 )
 ADDITIVE_TOOLS = {'create_collection', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords',
     'catalog_audit_collections'}
@@ -45,6 +45,10 @@ MHPHOTOS_TOOLS = ('mhphotos_instagram_posts', 'mhphotos_instagram_images', 'mhph
 # when desktop.json has "allow_instagram": true (and an MHPhotos site); each post is a dry run first.
 INSTAGRAM_TOOLS = ('mhphotos_schedule_instagram', 'mhphotos_cancel_instagram', 'mhphotos_create_reel')
 INSTAGRAM_FLAG = 'MHPHOTOS_HTTP_INSTAGRAM'
+# Writing a capture time into the JPEG files themselves (exiftool, with backups). Offered only when
+# desktop.json has "allow_file_edits": true together with "allow_writes": true.
+FILES_TOOLS = ('write_name_dates_to_files',)
+FILES_FLAG = 'MHPHOTOS_HTTP_FILES'
 INSTAGRAM_ID = re.compile(r'^[0-9A-Za-z_-]{1,64}$')
 LOCAL_TOOLS = ('export_photos',)
 WEBHOOK_TOKEN = '.config/mhphotos-lightroom/n8n-webhook-token'
@@ -171,11 +175,13 @@ def register_tools(app, writes=None):
     writes = os.environ.get(WRITES_FLAG) == '1' if writes is None else writes
     mhphotos = bool(os.environ.get('MHPHOTOS_INBOX_URL'))
     instagram = mhphotos and os.environ.get(INSTAGRAM_FLAG) == '1'
+    files = writes and os.environ.get(FILES_FLAG) == '1'
     names = (READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ()) + (MHPHOTOS_TOOLS if mhphotos else ())
-        + (INSTAGRAM_TOOLS if instagram else ()))
+        + (INSTAGRAM_TOOLS if instagram else ()) + (FILES_TOOLS if files else ()))
     for name in names:
         function = export_photos if name == 'export_photos' else getattr(server, name)
-        overwrites = (name in WRITE_TOOLS and name not in ADDITIVE_TOOLS) or name == 'mhphotos_cancel_instagram'
+        overwrites = ((name in WRITE_TOOLS and name not in ADDITIVE_TOOLS) or name == 'mhphotos_cancel_instagram'
+            or name in FILES_TOOLS)
         reads = name in READ_TOOLS or name in MHPHOTOS_TOOLS
         app.add_tool(function,
             structured_output=False if name in {'get_photo_previews', 'get_contact_sheet', 'mhphotos_instagram_images'} else None,
@@ -194,7 +200,7 @@ def create_app():
 def main():
     # Never inherit an accidental write/publish opt-in from another launch context.
     for key in ('MHPHOTOS_ALLOW_WRITES', 'MHPHOTOS_ALLOW_PUBLISH', 'MHPHOTOS_ALLOW_INSTAGRAM', WRITES_FLAG,
-            'MHPHOTOS_INBOX_URL', INSTAGRAM_FLAG):
+            'MHPHOTOS_INBOX_URL', INSTAGRAM_FLAG, FILES_FLAG, 'MHPHOTOS_ALLOW_FILE_EDITS'):
         os.environ.pop(key, None)
     if not server.permissions.export_dir():
         raise ValueError('An operator-controlled export directory is required')
@@ -218,6 +224,9 @@ def main():
     if config.get('allow_writes') is True:
         os.environ[WRITES_FLAG] = '1'
         os.environ['MHPHOTOS_ALLOW_WRITES'] = '1'
+        if config.get('allow_file_edits') is True:
+            os.environ[FILES_FLAG] = '1'
+            os.environ['MHPHOTOS_ALLOW_FILE_EDITS'] = '1'
         # Stateless HTTP cannot ask the user (elicitation never arrives); the human check is the
         # client's per-tool permission ("ask" in claude.ai) plus the mandatory dry run / confirm=true.
         os.environ['MHPHOTOS_CONFIRMATION'] = 'flag'
