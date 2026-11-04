@@ -770,9 +770,12 @@ async def write_name_dates_to_files(
     if not saved:
         return {"error": "No finished catalog check yet. Start one with catalog_audit_start."}
     timed, date_only = _name_date_items(saved, year, only_wrong_folder)
+    already = file_dates.done_ids()  # written earlier; the catalog check lists them until Lightroom read the files
+    timed = [f for f in timed if f["id"] not in already]
     batch = timed[: max(1, min(limit, MAX_FILE_BATCH))]
     if not batch:
-        return {"nothing_to_do": True, "candidates": len(timed), "date_only_skipped": date_only}
+        return {"nothing_to_do": True, "candidates": len(timed), "date_only_skipped": date_only,
+                "already_written": len(already)}
     paths = await _run(_adapter.photo_paths, [f["id"] for f in batch])
     if _is_error(paths):
         return paths
@@ -789,13 +792,14 @@ async def write_name_dates_to_files(
                 except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
                     problem = f"exiftool: {exc}"
             if problem:
-                skipped.append({"file": f["file"], "reason": problem})
+                skipped.append({"file": f["file"], "reason": problem, "id": f["id"]})
             else:
                 ready.append({"id": f["id"], "file": f["file"], "path": str(path), "set_to": f["name_date"]})
         return ready, skipped
 
     ready, skipped = await anyio.to_thread.run_sync(inspect)
-    plan = {"candidates": len(timed), "date_only_skipped": date_only, "this_call": len(batch),
+    plan = {"candidates": len(timed), "date_only_skipped": date_only, "already_written": len(already),
+            "this_call": len(batch),
             "will_write": [{"file": r["file"], "folder": short_path(r["path"]), "set_to": r["set_to"]} for r in ready[:10]],
             "skipped": skipped[:10], "backup_folder": str(file_dates.backup_root())}
     if not ready:
@@ -817,10 +821,13 @@ async def write_name_dates_to_files(
                 failed.append({"file": r["file"], "error": str(exc)})
         return done, failed
 
+    # photos whose file already holds a capture time need nothing from this tool: do not offer them again
+    file_dates.remember_done([k["id"] for k in skipped if k["reason"].startswith("hat schon")])
     done, failed = await anyio.to_thread.run_sync(write)
     out: dict[str, Any] = {"applied": bool(done), "written": len(done), "failed": failed,
                            "backup_folder": str(file_dates.backup_root()), "skipped": skipped}
     if done:
+        file_dates.remember_done([d["id"] for d in done])
         group = [{"set": "Sonstiges", "name": "Datum in Datei geschrieben", "photo_ids": [d["id"] for d in done]}]
         made = await _run(_adapter.create_review_collections, catalog_audit.ROOT_SET, group)
         out["collection"] = ("Prüfen › Sonstiges › Datum in Datei geschrieben" if not _is_error(made)

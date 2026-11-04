@@ -9,6 +9,7 @@ is copied to the backup folder first and restored when exiftool fails.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -32,6 +33,27 @@ def exiftool_path() -> str | None:
 
 def backup_root() -> Path:
     return config_dir() / "file-backups"
+
+
+def _done_path() -> Path:
+    return backup_root() / "written-ids.json"
+
+
+def done_ids() -> set[str]:
+    """Photos this tool already wrote (the catalog check still lists them until Lightroom has read the files)."""
+    try:
+        data = json.loads(_done_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {str(i) for i in data} if isinstance(data, list) else set()
+
+
+def remember_done(ids: list[str]) -> None:
+    path = _done_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sorted(done_ids() | set(ids))), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def exif_time(iso: str) -> str:
