@@ -717,6 +717,82 @@ async def set_location(
     )
 
 
+_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
+
+
+def _valid_time(text: str) -> bool:
+    try:
+        datetime.strptime(text, "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return False
+    return bool(_TIME.match(text)) and 1900 <= int(text[:4]) <= 2100
+
+
+@mcp.tool()
+async def set_capture_time(
+    photo_ids: list[str], time: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Set the capture time (camera wall clock, YYYY-MM-DDTHH:MM:SS) of up to 100 photos to the same value.
+
+    For photos without a date (scans, downloads). To take the date from each file name use
+    apply_name_dates. The Lightroom SDK may refuse to write the capture time; the result then says
+    written=0 with the reason, and nothing else is changed. Dry run unless confirm=true; needs operator opt-in.
+    """
+    if not _valid_time(time):
+        return {"error": "time must be a real date like 2019-12-08T19:35:23"}
+    return await _edit(
+        photo_ids, {"capture_time": time},
+        lambda: _adapter.set_capture_time([{"id": i, "time": time} for i in photo_ids]),
+        confirm, ctx=ctx, tool="set_capture_time", fields=("capture_time",),
+        summary=f"Aufnahmezeit setzen: {time}",
+    )
+
+
+@mcp.tool()
+async def apply_name_dates(
+    year: int | None = None, only_wrong_folder: bool = False, limit: int = 100,
+    confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Set the capture time of photos without one from the date in their file name.
+
+    Uses the kind date_in_name of the last catalog check (file names like 2019-12-08_19-35-23_000.jpeg or
+    IMG_20191208_193523.jpg); names with a date but no time are skipped. year: only names of that year.
+    only_wrong_folder: only photos whose folder does not match that date. Up to 100 photos per call, repeat
+    until remaining is 0, then run the catalog check again. The Lightroom SDK may refuse to write the
+    capture time (written=0 with the reason). Dry run unless confirm=true; needs operator opt-in.
+    """
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    saved = catalog_audit.load_result()
+    if not saved:
+        return {"error": "No finished catalog check yet. Start one with catalog_audit_start."}
+    found = saved["findings"].get("date_in_name", [])
+    if year is not None:
+        found = [f for f in found if str(f.get("name_date") or "")[:4] == str(year)]
+    if only_wrong_folder:
+        found = [f for f in found if not f.get("folder_fits")]
+    timed = [f for f in found if _valid_time(str(f.get("name_date") or ""))]
+    batch = timed[: max(1, min(limit, MAX_BATCH))]
+    plan = {"candidates": len(found), "with_time": len(timed), "date_only_skipped": len(found) - len(timed),
+            "this_call": len(batch), "remaining_after": len(timed) - len(batch),
+            "examples": [{"file": f["file"], "folder": f["folder"], "set_to": f["name_date"]} for f in batch[:10]]}
+    if not batch:
+        return {**plan, "nothing_to_do": True}
+    if not confirm:
+        return {"dry_run": True, **plan, "hint": "Nothing was changed. Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Aufnahmezeit von {len(batch)} Fotos aus dem Dateinamen setzen")
+    if not approved:
+        return gate.refusal(how)
+    items = [{"id": f["id"], "time": f["name_date"]} for f in batch]
+    result = await _run(_adapter.set_capture_time, items)
+    if _is_error(result):
+        return result
+    change_id = audit.record("apply_name_dates", [i["id"] for i in items], {"count": len(items)},
+                             approved_by=how, result=result)
+    return {"applied": True, "change_id": change_id, **result, "remaining": plan["remaining_after"],
+            "hint": "Run the catalog check again for the year to see the folders of these photos."}
+
+
 # ---------------------------------------------------------------- catalog audit
 AUDIT_KINDS = ", ".join(catalog_audit.KINDS)
 
@@ -2203,7 +2279,7 @@ TOOLSETS: dict[str, set[str]] = {
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
         "create_collection", "add_to_collection", "export_photos", "undo_last_change",
-        "catalog_audit_collections", "set_location",
+        "catalog_audit_collections", "set_location", "set_capture_time", "apply_name_dates",
     },
     "develop": {
         "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",
