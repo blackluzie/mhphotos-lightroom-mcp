@@ -124,3 +124,9 @@ Jahre aus anderen Jahrzehnten, dazu Jahres-Ordner auf oberster Ebene, `ohne Datu
   Das Datum selbst setzt man in Lightroom (*Metadaten > Aufnahmezeit bearbeiten*), danach prüft ein neuer Lauf den Ordner.
 - **Nahezu gleich** (`near_duplicates`): gleiche Aufnahme und Namensstamm (`IMG_5.jpg`, `IMG_5-2.jpg`), Dateigröße
   auf 1 % gleich, nur Metadaten anders. Sammlungen „nahezu gleich – entfernen / behalten“.
+- **Aufnahmedatum aus dem Dateinamen setzen** (Plugin 0.1.8): `apply_name_dates` (aus `date_in_name` der letzten Prüfung,
+  nur Namen mit Uhrzeit, 100 pro Aufruf) und `set_capture_time` (ein Wert für mehrere Fotos). Ob Lightroom das Schreiben
+  von `dateTimeOriginal` über das SDK erlaubt, ist offen: Das Ergebnis meldet `written`/`failed` mit Grund.
+  Danach die Prüfung für das Jahr wiederholen; dann erscheinen die Fotos als `wrong_folder` und lassen sich in
+  Sammlungen sortieren. **Nicht möglich:** Dateien verschieben oder umbenennen (Lightroom-SDK), das bleibt Drag & Drop
+  im Ordner-Panel bzw. *Bibliothek > Fotos umbenennen*.

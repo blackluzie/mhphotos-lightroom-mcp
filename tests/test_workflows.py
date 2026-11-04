@@ -134,3 +134,40 @@ def test_storage_balance():
     assert storage["total_gb"] == 4.5 and storage["by_year_gb"] == {"2021": 4.5}
     assert storage["freeable_gb"]["jpeg_with_raw"] == 1.0 and storage["freeable_gb"]["non_photo"] == 0.5
     assert storage["freeable_gb"]["sum"] == 1.5
+
+
+async def test_set_capture_time_is_a_gated_write(monkeypatch):
+    assert (await server.set_capture_time(["p2"], "2019-12-08T19:35:23", confirm=True))["code"] == "disabled"
+    monkeypatch.setenv("MHPHOTOS_ALLOW_WRITES", "1")
+    assert "error" in await server.set_capture_time(["p2"], "gestern")
+    assert "error" in await server.set_capture_time(["p2"], "2019-13-45T00:00:00")
+    dry = await server.set_capture_time(["p2"], "2019-12-08T19:35:23")
+    assert dry["dry_run"] is True
+    done = await server.set_capture_time(["p2"], "2019-12-08T19:35:23", confirm=True)
+    assert done["applied"] is True and done["written"] == 1
+    assert (await server.get_photo_metadata("p2"))["capture_time"] == "2019-12-08T19:35:23"
+
+
+async def test_apply_name_dates_uses_the_last_catalog_check(monkeypatch):
+    findings = {k: [] for k in ca.KINDS}
+    findings["date_in_name"] = [
+        {"id": "p2", "file": "2019-12-08_19-35-23_000.jpeg", "folder": "2020/2020-01", "name_date": "2019-12-08T19:35:23",
+         "folder_fits": False},
+        {"id": "p3", "file": "2019-12-09_000.jpeg", "folder": "2019/2019-12", "name_date": "2019-12-09", "folder_fits": True},
+        {"id": "p5", "file": "2018-01-02_10-00-00.jpeg", "folder": "2018/2018-01", "name_date": "2018-01-02T10:00:00",
+         "folder_fits": True},
+    ]
+    ca.save_result({"finished_at": "x", "findings": findings, "summary": {}})
+    assert (await server.apply_name_dates(confirm=True))["code"] == "disabled"
+    monkeypatch.setenv("MHPHOTOS_ALLOW_WRITES", "1")
+    dry = await server.apply_name_dates(year=2019)
+    assert dry["dry_run"] is True and dry["this_call"] == 1 and dry["date_only_skipped"] == 1
+    assert dry["examples"] == [{"file": "2019-12-08_19-35-23_000.jpeg", "folder": "2020/2020-01",
+                                "set_to": "2019-12-08T19:35:23"}]
+    wrong = await server.apply_name_dates(only_wrong_folder=True)
+    assert wrong["this_call"] == 1 and wrong["remaining_after"] == 0
+    done = await server.apply_name_dates(confirm=True)
+    assert done["applied"] is True and done["updated"] == 2 and done["remaining"] == 0
+    assert (await server.get_photo_metadata("p2"))["capture_time"] == "2019-12-08T19:35:23"
+    assert (await server.get_photo_metadata("p5"))["capture_time"] == "2018-01-02T10:00:00"
+    assert (await server.get_photo_metadata("p3"))["capture_time"] != "2019-12-09"  # date without time: skipped
