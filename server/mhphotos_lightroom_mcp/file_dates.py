@@ -66,6 +66,20 @@ def existing_time(exiftool: str, path: str, runner: Runner = subprocess.run) -> 
     return done.stdout.strip()
 
 
+def _copy(source: Path | str, target: Path | str) -> None:
+    """Copy the content (and, where allowed, the modification time) of a file.
+
+    shutil.copy2 also copies flags and extended attributes, which macOS refuses for files from an SMB
+    share ("Operation not permitted"); the content is what the backup is for.
+    """
+    shutil.copyfile(source, target)
+    try:
+        info = os.stat(source)
+        os.utime(target, ns=(info.st_atime_ns, info.st_mtime_ns))
+    except OSError:
+        pass
+
+
 def write_time(exiftool: str, path: str, iso: str, runner: Runner = subprocess.run,
                root: Path | None = None) -> dict[str, str]:
     """Copy the file to the backup folder, write DateTimeOriginal and CreateDate, restore on failure."""
@@ -73,12 +87,12 @@ def write_time(exiftool: str, path: str, iso: str, runner: Runner = subprocess.r
     folder = (root or backup_root()) / stamp
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     backup = folder / (hashlib.sha1(path.encode()).hexdigest()[:8] + "_" + Path(path).name)
-    shutil.copy2(path, backup)
+    _copy(path, backup)
     stamp_value = exif_time(iso)
     done = runner([exiftool, "-overwrite_original", "-P", "-m", f"-DateTimeOriginal={stamp_value}",
                    f"-CreateDate={stamp_value}", path],
                   capture_output=True, text=True, timeout=TIMEOUT, check=False)
     if done.returncode != 0 or "1 image files updated" not in done.stdout:
-        shutil.copy2(backup, path)  # leave the file as it was
+        _copy(backup, path)  # leave the file as it was
         raise RuntimeError((done.stderr or done.stdout or "exiftool failed").strip()[:200])
     return {"backup": str(backup)}
