@@ -847,6 +847,24 @@ def short_path(path: str) -> str:
     return "/".join(parts[-3:])
 
 
+@mcp.tool()
+async def rotate_photos(
+    photo_ids: list[str], degrees: int = 180, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Rotate up to 100 photos clockwise by 90, 180 or 270 degrees (for photos shown sideways or upside down).
+
+    The result lists how many were rotated and why any failed. Turning back is another rotation (180 undoes 180,
+    270 undoes 90). Dry run unless confirm=true; needs operator opt-in.
+    """
+    if degrees not in (90, 180, 270):
+        return {"error": "degrees must be 90, 180 or 270 (clockwise)"}
+    return await _edit(
+        photo_ids, {"rotate_degrees_clockwise": degrees}, lambda: _adapter.rotate_photos(photo_ids, degrees),
+        confirm, ctx=ctx, tool="rotate_photos", fields=(),
+        summary=f"Drehen um {degrees}° im Uhrzeigersinn",
+    )
+
+
 # ---------------------------------------------------------------- catalog audit
 AUDIT_KINDS = ", ".join(catalog_audit.KINDS)
 
@@ -2333,7 +2351,7 @@ TOOLSETS: dict[str, set[str]] = {
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
         "create_collection", "add_to_collection", "export_photos", "undo_last_change",
-        "catalog_audit_collections", "set_location", "write_name_dates_to_files",
+        "catalog_audit_collections", "set_location", "rotate_photos", "write_name_dates_to_files",
     },
     "develop": {
         "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",

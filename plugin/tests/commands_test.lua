@@ -22,6 +22,9 @@ local function newPhoto(uuid, name, rating, pick, kws, t, cam)
   end
   p.develop = { Exposure2012 = 0.5, Contrast2012 = 10, ToneCurve = { 1, 2 }, CameraProfile = 'Adobe Color' }
   p.appliedPresets, p.appliedSettings = {}, {}
+  p.turns = 0
+  function p:rotateRight() self.turns = self.turns + 1 end
+  function p:rotateLeft() self.turns = self.turns - 1 end
   function p:getDevelopSettings() return self.develop end
   function p:applyDevelopPreset(preset, plugin) self.appliedPresets[#self.appliedPresets + 1] = { preset, plugin } end
   function p:applyDevelopSettings(settings, name) self.appliedSettings[#self.appliedSettings + 1] = { settings, name } end
@@ -373,6 +376,22 @@ eq(Commands.run('audit_scan', { year = 2026, start = 0 }).hits, 1)
 p1.raw.path = oldPath
 local okY = pcall(Commands.run, 'audit_page', { year = 'abc' })
 eq(okY, false, 'a bad year is rejected')
+
+-- rotate_photos: clockwise turns; a refused rotation is reported per photo, bad input aborts before any change
+writes = 0
+local rot = Commands.run('rotate_photos', { photo_ids = { 'u1', 'u2' }, degrees = 180 })
+eq(rot.updated, 2); eq(rot.rotated, 2); eq(rot.failed, 0); eq(p1.turns, 2); eq(p2.turns, 2); eq(writes, 1)
+eq(Commands.run('rotate_photos', { photo_ids = { 'u1' }, degrees = 270 }).rotated, 1); eq(p1.turns, 1)
+local origRot = p2.rotateRight
+function p2:rotateRight() error('refused', 0) end
+local rot2 = Commands.run('rotate_photos', { photo_ids = { 'u1', 'u2' }, degrees = 90 })
+eq(rot2.rotated, 1); eq(rot2.failed, 1); eq(rot2.error, 'refused'); eq(p1.turns, 2)
+p2.rotateRight = origRot
+writes = 0
+eq(pcall(Commands.run, 'rotate_photos', { photo_ids = { 'u1' }, degrees = 45 }), false)
+eq(pcall(Commands.run, 'rotate_photos', { photo_ids = { 'gone' }, degrees = 90 }), false)
+eq(writes, 0, 'nothing changed after bad input')
+p1.turns, p2.turns = 0, 0
 
 -- photo_paths: read only, the file path per photo id; unknown ids abort
 local pp = Commands.run('photo_paths', { photo_ids = { 'u1', 'u2' } }).paths

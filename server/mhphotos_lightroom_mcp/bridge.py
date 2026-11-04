@@ -362,6 +362,9 @@ class BridgeAdapter:
             args.update(latitude=latitude, longitude=longitude)
         return self._call("set_location", args)
 
+    def rotate_photos(self, photo_ids, degrees):
+        return self._call("rotate_photos", {"photo_ids": photo_ids, "degrees": degrees})
+
     def photo_paths(self, photo_ids):
         return self._call("photo_paths", {"photo_ids": photo_ids})
 
