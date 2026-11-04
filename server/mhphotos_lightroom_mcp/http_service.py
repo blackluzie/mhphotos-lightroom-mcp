@@ -38,10 +38,11 @@ WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
 # Read-only views of the MHPhotos app (Instagram library, inbox), offered when desktop.json
 # names the MHPhotos site ("mhphotos_url"); the admin token stays in the macOS Keychain.
 MHPHOTOS_TOOLS = ('mhphotos_instagram_posts', 'mhphotos_instagram_images', 'mhphotos_inbox',
-    'mhphotos_instagram_queue', 'mhphotos_best_times', 'instagram_candidates')
+    'mhphotos_instagram_queue', 'mhphotos_best_times', 'instagram_candidates', 'mhphotos_site_photos',
+    'mhphotos_reel_jobs')
 # Planning posts that the MHPhotos social queue later publishes on Instagram by itself. Offered only
 # when desktop.json has "allow_instagram": true (and an MHPhotos site); each post is a dry run first.
-INSTAGRAM_TOOLS = ('mhphotos_schedule_instagram', 'mhphotos_cancel_instagram')
+INSTAGRAM_TOOLS = ('mhphotos_schedule_instagram', 'mhphotos_cancel_instagram', 'mhphotos_create_reel')
 INSTAGRAM_FLAG = 'MHPHOTOS_HTTP_INSTAGRAM'
 INSTAGRAM_ID = re.compile(r'^[0-9A-Za-z_-]{1,64}$')
 LOCAL_TOOLS = ('export_photos',)

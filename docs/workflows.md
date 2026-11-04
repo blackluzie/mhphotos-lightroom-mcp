@@ -168,6 +168,8 @@ published there automatically at the planned time.
 4. Per post `mhphotos_schedule_instagram(caption, scheduled_at, photo_id=…)` **without** confirm: the user sees the
    plan (photo, time, text, duplicate check). Only after the user's OK the same call with `confirm=true`.
    Cancel later with `mhphotos_cancel_instagram`. After posting, `add_keywords([photo_id], ["Instagram"])`.
+5. Carousel: `mhphotos_schedule_instagram(caption, scheduled_at, photo_ids=[…2–10 Lightroom ids in order…])`, same
+   dry run first; the duplicate check looks at the first image.
 
 ## 16. Places for photos without GPS
 1. `suggest_locations(captured_from, captured_to)`: for camera photos without GPS, the position of the nearest
@@ -176,4 +178,14 @@ published there automatically at the planned time.
    repeat with `clock_offset_minutes`.
 3. `set_location(photo_ids, latitude, longitude, city=…, country=…)` per group, dry run first. The result says
    whether this Lightroom accepted the GPS write (`gps_written`); place names are written either way.
+
+## 17. Reels (silent photo slideshow)
+Needs `--allow-instagram` and the reel renderer on the Hetzner host (`apps-platform/infra/mhphotos-reel-renderer`).
+1. Reels are made from homepage photos: `mhphotos_site_photos(query)` (for Lightroom photos: best-of → inbox →
+   take over first, see 14).
+2. Pick 6–12 with a story and good order (opening shot, variety, strong last image).
+3. `mhphotos_create_reel(photo_ids, title, caption)`, dry run first. The renderer makes a 1080×1920 video
+   (3.2 s per photo, slow zoom, cross-fades, no music) within minutes; `mhphotos_reel_jobs` shows `bereit`.
+4. The user approves in the MHPhotos Content Studio. An automatically published reel cannot get Instagram music
+   later: for music, download the MP4 there and post it in the Instagram app.
 
