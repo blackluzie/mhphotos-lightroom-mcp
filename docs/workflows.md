@@ -118,6 +118,9 @@ Folders are `JJJJ/JJJJ-MM/JJJJ-MM-TT`; the capture time decides where a photo be
    background on the Mac and changes nothing; `catalog_audit_status()` shows progress and, at the end, the counts. With `year` the run first scans the
    whole catalog by capture year (percent shown), then reads details only for that year. `catalog_audit_cancel()`
    stops a run at its next step.
+   Target structure: `JJJJ-JJJJ/JJJJ/JJJJ-MM/JJJJ-MM-TT` (decade, year, month, day). `wrong_folder` has levels
+   `year`, `month`, `day`, `decade` and `no_day` (no day folder); `video_no_date`, `date_in_name` and
+   `near_duplicates` are their own kinds.
 2. `catalog_audit_results(kind="wrong_folder", year=…, level="year"|"month"|"day")`: `found` is the folder it is in,
    `expected` the day folder it belongs in. `day_diff` ±1 is often a time-zone or midnight effect (camera clock on
    travel), so check those before moving. Other kinds: `no_date`, `implausible_date`, `unrecognised_folder`,

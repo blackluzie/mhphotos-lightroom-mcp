@@ -1,7 +1,8 @@
 """Catalog audit: photos in the wrong date folder and duplicates (read only).
 
-The catalog is organised as ``JJJJ/JJJJ-MM/JJJJ-MM-TT`` (folder names may carry a suffix such
-as ``2021-07-14 Hochzeit``); the capture time decides where a photo belongs. A run pages through
+The catalog is organised as ``JJJJ-JJJJ/JJJJ/JJJJ-MM/JJJJ-MM-TT`` (decade, year, month, day, e.g.
+``2020-2029/2026/2026-10/2026-10-01``; folder names may carry a suffix such as ``2021-07-14 Hochzeit``;
+photos before 2000 live in ``1900-1999``); the capture time decides where a photo belongs. A run pages through
 the whole catalog in a background thread (250k+ photos take minutes), keeps only what the
 analysis needs, and writes the result to ``<config>/audit/latest.json`` on the Mac. Nothing is
 moved or deleted: Lightroom's SDK cannot do either, so findings become review collections.
@@ -28,7 +29,9 @@ FINGERPRINT_BYTES = 1 << 20  # head + tail of each candidate file, never the who
 MIN_YEAR = 1990
 RETRY_SECONDS = 5.0
 KINDS = ("wrong_folder", "no_date", "implausible_date", "unrecognised_folder", "missing_file",
-         "duplicates", "possible_duplicates", "non_photo", "jpeg_with_raw", "reimported_export")
+         "duplicates", "possible_duplicates", "non_photo", "jpeg_with_raw", "reimported_export",
+         "video_no_date", "date_in_name", "near_duplicates")
+NEAR_DUPLICATE_SIZE = 0.01  # copies whose file sizes differ by at most 1 % (other metadata, same image)
 RAW_FORMATS = {"RAW", "DNG"}
 JPEG_FORMATS = {"JPG", "JPEG", "HEIC", "HEIF"}
 # Portrait and landscape sizes of common phone, tablet and computer screens.
@@ -44,6 +47,11 @@ _MESSENGER_NAME = re.compile(r"-WA\d{3,}|^IMG-\d{8}-|^signal-\d{4}|^telegram|^ph
 _DAY = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?!\d)")
 _MONTH = re.compile(r"^(\d{4})-(\d{2})(?![\d-]\d)(?!\d)")
 _YEAR = re.compile(r"^(\d{4})(?![\d-])")
+_DECADE = re.compile(r"^(\d{4})-(\d{4})$")
+# Capture date in a file name: 2019-12-08_19-35-23_000.jpeg, IMG_20191208_193523.jpg, 20191208.png
+_NAME_DATE = re.compile(
+    r"(?<!\d)((?:19|20)\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])"
+    r"(?:[ _T-]+([01]\d|2[0-3])[-_.:]?([0-5]\d)[-_.:]?([0-5]\d))?(?!\d)")
 
 
 def folder_dates(path: str) -> tuple[str | None, str | None, str | None]:
@@ -59,6 +67,39 @@ def folder_dates(path: str) -> tuple[str | None, str | None, str | None]:
     return year, month, day
 
 
+def decade_folder(year: int) -> str:
+    """The decade folder a year belongs in: 2020-2029, 2010-2019, 2000-2009; everything before 2000: 1900-1999."""
+    if year < 2000:
+        return "1900-1999"
+    start = year // 10 * 10
+    return f"{start}-{start + 9}"
+
+
+def folder_decade(path: str) -> str | None:
+    """The decade folder (2020-2029, 1900-1999) on the path, None when there is none."""
+    found = None
+    for part in PurePosixPath(path).parts[:-1]:
+        if (m := _DECADE.match(part)) and int(m.group(2)) - int(m.group(1)) in (9, 99):
+            found = part
+    return found
+
+
+def name_date(path: str, today: str | None = None) -> str | None:
+    """A plausible capture date in the file name (``YYYY-MM-DDTHH:MM:SS`` or ``YYYY-MM-DD``), else None."""
+    today = today or date.today().isoformat()
+    m = _NAME_DATE.search(PurePosixPath(path).name)
+    if not m:
+        return None
+    y, mo, d, hh, mi, ss = m.groups()
+    try:
+        day = date(int(y), int(mo), int(d)).isoformat()
+    except ValueError:
+        return None
+    if int(y) < MIN_YEAR or day > today:
+        return None
+    return f"{day}T{hh}:{mi}:{ss}" if hh else day
+
+
 def short_folder(path: str, depth: int = 3) -> str:
     """The last folders of a path, enough to recognise it without the volume layout."""
     parts = PurePosixPath(path).parts[:-1]
@@ -66,10 +107,20 @@ def short_folder(path: str, depth: int = 3) -> str:
 
 
 def classify(rec: dict[str, Any], today: str | None = None) -> dict[str, Any] | None:
-    """Folder finding for one photo, or None when it sits where its capture date says."""
+    """Folder finding for one photo, or None when it sits where its capture date says.
+
+    A photo belongs in ``<decade>/<year>/<year-month>/<day>``. Levels of wrong_folder: year, month, day
+    (a folder of another date), decade (right year, wrong or missing decade folder) and no_day (right
+    year and month, but not in a day folder).
+    """
     path, taken = rec.get("path") or "", rec.get("t") or ""
     today = today or date.today().isoformat()
     if not taken:
+        if (rec.get("fmt") or "").upper() == "VIDEO":
+            return {"kind": "video_no_date"}
+        if guess := name_date(path, today):
+            fits = classify({**rec, "t": guess if "T" in guess else guess + "T00:00:00"}, today) is None
+            return {"kind": "date_in_name", "name_date": guess, "folder_fits": fits}
         return {"kind": "no_date"}
     if int(taken[:4]) < MIN_YEAR or taken[:10] > today:
         return {"kind": "implausible_date"}
@@ -85,9 +136,15 @@ def classify(rec: dict[str, Any], today: str | None = None) -> dict[str, Any] | 
         level = "year" if month[:4] != taken[:4] else "month"
     elif day and day[:10] != expected:
         level = "year" if day[:4] != taken[:4] else "month" if day[:7] != taken[:7] else "day"
+    elif folder_decade(path) != decade_folder(int(taken[:4])):
+        level = "decade"
+    elif not day:
+        level = "no_day"
     if level is None:
         return None
-    out: dict[str, Any] = {"kind": "wrong_folder", "level": level, "found": found, "expected": expected}
+    y = taken[:4]
+    out: dict[str, Any] = {"kind": "wrong_folder", "level": level, "found": found, "expected": expected,
+                           "expected_path": f"{decade_folder(int(y))}/{y}/{taken[:7]}/{expected}"}
     if level == "day" and day:
         out["day_diff"] = (date.fromisoformat(expected) - date.fromisoformat(day[:10])).days
     return out
@@ -305,10 +362,14 @@ class Analysis:
                         continue
                     self.findings["duplicates"].append(self._group(items, verified=True))
             # Same second, camera and size but different bytes is usually a burst. Only copies that
-            # also share the file name (IMG_1.jpg, IMG_1-2.jpg) are worth a look.
+            # also share the file name (IMG_1.jpg, IMG_1-2.jpg) are worth a look; when the file sizes
+            # are within 1 % it is the same image with other metadata (near_duplicates).
             for items in _name_clusters(loose):
                 if len(items) > 1:
-                    self.findings["possible_duplicates"].append(self._group(items, verified=False))
+                    sizes = [int(i.get("size") or 0) for i in items]
+                    near = min(sizes) > 0 and max(sizes) - min(sizes) <= NEAR_DUPLICATE_SIZE * max(sizes)
+                    self.findings["near_duplicates" if near else "possible_duplicates"].append(
+                        self._group(items, verified=False))
 
     @staticmethod
     def _group(items: list[dict[str, Any]], verified: bool) -> dict[str, Any]:
@@ -324,6 +385,8 @@ class Analysis:
     def summary(self) -> dict[str, Any]:
         counts = {k: len(v) for k, v in self.findings.items()}
         counts["duplicates_to_remove"] = sum(len(g["remove"]) for g in self.findings["duplicates"])
+        counts["near_duplicates_to_remove"] = sum(len(g["remove"]) for g in self.findings["near_duplicates"])
+        counts["date_in_name_folder_wrong"] = sum(1 for f in self.findings["date_in_name"] if not f.get("folder_fits"))
         counts["jpeg_with_raw_to_check"] = sum(1 for f in self.findings["jpeg_with_raw"] if f.get("check"))
         levels: dict[str, int] = defaultdict(int)
         by_year: dict[str, int] = defaultdict(int)
@@ -340,6 +403,7 @@ class Analysis:
             "by_year_gb": {y: round(b / gb, 1) for y, b in sorted(self.bytes_by_year.items())},
             "freeable_gb": {
                 "duplicates": total([r for g in self.findings["duplicates"] for r in g["remove"]]),
+                "near_duplicates": total([r for g in self.findings["near_duplicates"] for r in g["remove"]]),
                 "jpeg_with_raw": total([f for f in self.findings["jpeg_with_raw"] if not f.get("check")]),
                 "reimported_export": total(self.findings["reimported_export"]),
                 "non_photo": total(self.findings["non_photo"]),
@@ -542,14 +606,21 @@ SINGLE = {
     "implausible_date": "Datum unplausibel",
     "unrecognised_folder": "kein Datumsordner",
     "missing_file": "Datei fehlt",
+    "video_no_date": "Videos ohne Aufnahmedatum",
+    "date_in_name": "Datum steht im Dateinamen",
 }
 
 
-def review_groups(result: dict[str, Any], kind: str, year: int | None = None) -> tuple[list[dict[str, Any]], str]:
-    """Collections to create for one kind: [{set, name, photo_ids}], plus how they are cut."""
+def review_groups(result: dict[str, Any], kind: str, year: int | None = None,
+                  level: str | None = None) -> tuple[list[dict[str, Any]], str]:
+    """Collections to create for one kind: [{set, name, photo_ids}], plus how they are cut.
+
+    level (wrong_folder only): year, month, day, decade or no_day.
+    """
     findings = result["findings"]
     if kind == "wrong_folder":
-        items = [f for f in findings["wrong_folder"] if not year or f["expected"][:4] == str(year)]
+        items = [f for f in findings["wrong_folder"]
+                 if (not year or f["expected"][:4] == str(year)) and (not level or f.get("level") == level)]
         by_day: dict[str, list[str]] = defaultdict(list)
         for f in items:
             by_day[f["expected"]].append(f["id"])
@@ -568,6 +639,12 @@ def review_groups(result: dict[str, Any], kind: str, year: int | None = None) ->
         keep = [g["keep"]["id"] for g in findings["duplicates"]]
         return [{"set": "Duplikate", "name": "entfernen", "photo_ids": ids},
                 {"set": "Duplikate", "name": "behalten (Gegenstück)", "photo_ids": keep}], "remove + keep"
+    if kind == "near_duplicates":
+        groups = findings.get("near_duplicates", [])
+        return [{"set": "Duplikate", "name": "nahezu gleich – entfernen",
+                 "photo_ids": [r["id"] for g in groups for r in g["remove"]]},
+                {"set": "Duplikate", "name": "nahezu gleich – behalten",
+                 "photo_ids": [g["keep"]["id"] for g in groups]}], "remove + keep"
     if kind == "possible_duplicates":
         ids = [i for g in findings["possible_duplicates"] for i in [g["keep"]["id"]] + [r["id"] for r in g["remove"]]]
         return [{"set": "Duplikate", "name": "möglich – bitte ansehen", "photo_ids": ids}], "one collection"

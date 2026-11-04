@@ -407,7 +407,8 @@ class MockAdapter:
             day = p.capture_time[:10]
             if p.id == "p3":
                 day = "2026-05-01"  # sample: one photo in the folder of the day before
-            out.append({"id": p.id, "path": f"/Volumes/NAS/Fotos/{day[:4]}/{day[:7]}/{day}/{p.filename}",
+            decade = "1900-1999" if int(day[:4]) < 2000 else f"{int(day[:4]) // 10 * 10}-{int(day[:4]) // 10 * 10 + 9}"
+            out.append({"id": p.id, "path": f"/Volumes/NAS/Fotos/{decade}/{day[:4]}/{day[:7]}/{day}/{p.filename}",
                         "size": 1000 + len(p.id), "fmt": p.filename.rsplit(".", 1)[-1].upper(),
                         "w": 6000, "h": 4000, "t": p.capture_time, "cam": p.camera,
                         **({"r": p.rating} if p.rating else {})})
