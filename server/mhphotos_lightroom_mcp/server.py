@@ -1786,6 +1786,7 @@ async def mhphotos_schedule_instagram(
     scheduled_at: str,
     photo_id: str | None = None,
     inbox_item_id: str | None = None,
+    photo_ids: list[str] | None = None,
     accounts: str = "mhphotos",
     post_type: str = "post",
     adjust: dict[str, Any] | None = None,
@@ -1795,8 +1796,9 @@ async def mhphotos_schedule_instagram(
 ) -> dict[str, Any]:
     """Queue a photo for Instagram in the MHPhotos social queue (it publishes automatically at that time).
 
-    Source: either a Lightroom photo (photo_id, needs the Lightroom bridge and MHPHOTOS_EXPORT_DIR) or
-    an MHPhotos inbox item (inbox_item_id, works without Lightroom). accounts: mhphotos (default),
+    Source: either a Lightroom photo (photo_id, needs the Lightroom bridge and MHPHOTOS_EXPORT_DIR),
+    a carousel of 2-10 Lightroom photos (photo_ids, in this order; post only) or an MHPhotos inbox
+    item (inbox_item_id, works without Lightroom). accounts: mhphotos (default),
     malou, martin, or a comma list. post_type: post|story. adjust: optional basic edits for the
     Instagram copy only (see mhphotos_edit_preview). The MHPhotos duplicate check runs first; a photo
     that is already planned/posted is refused unless allow_duplicate=true. scheduled_at: ISO 8601 with
@@ -1808,8 +1810,14 @@ async def mhphotos_schedule_instagram(
         return cfg
     if not publishing.instagram_enabled():
         return {"error": publishing.instagram_disabled_message(), "code": "disabled"}
-    if bool(photo_id) == bool(inbox_item_id):
-        return {"error": "Give exactly one of photo_id (Lightroom) or inbox_item_id (MHPhotos inbox)"}
+    if sum(bool(x) for x in (photo_id, inbox_item_id, photo_ids)) != 1:
+        return {"error": "Give exactly one of photo_id, photo_ids (carousel) or inbox_item_id"}
+    if photo_ids is not None:
+        if not 2 <= len(photo_ids) <= 10 or len(set(photo_ids)) != len(photo_ids):
+            return {"error": "photo_ids: 2-10 different Lightroom photos for a carousel"}
+        if post_type != "post":
+            return {"error": "a carousel is always post_type post"}
+    lr_ids = photo_ids or ([photo_id] if photo_id else [])
     caption = caption.strip()
     if not caption or len(caption) > 2200:
         return {"error": "caption required (max 2200 characters)"}
@@ -1826,14 +1834,17 @@ async def mhphotos_schedule_instagram(
         return when
     dest = permissions.export_dir()
     label: str
-    if photo_id:
+    names_lr: list[str] = []
+    if lr_ids:
         if dest is None:
             return {"error": permissions.export_disabled_message(), "code": "disabled"}
-        meta = await _run(_adapter.get_photo, photo_id)
-        if _is_error(meta):
-            return meta
-        label = meta.filename
-        look = await _run(_adapter.get_preview, photo_id, 1024)  # for the duplicate check only
+        for pid in lr_ids:
+            meta = await _run(_adapter.get_photo, pid)
+            if _is_error(meta):
+                return meta
+            names_lr.append(meta.filename)
+        label = names_lr[0]
+        look = await _run(_adapter.get_preview, lr_ids[0], 1024)  # for the duplicate check only
         if _is_error(look):
             return look
         original: bytes | None = None
@@ -1863,6 +1874,7 @@ async def mhphotos_schedule_instagram(
         pass
     plan = {
         "photo": label,
+        **({"carousel": names_lr} if photo_ids else {}),
         "accounts": names,
         "type": post_type,
         "scheduled_at": when.astimezone(UTC).isoformat(timespec="minutes"),
@@ -1880,28 +1892,33 @@ async def mhphotos_schedule_instagram(
     approved, how = await gate.approve(
         ctx,
         f"AUTOMATISCH auf Instagram ({', '.join(names)}, {post_type}) am {when.astimezone().strftime('%d.%m.%Y %H:%M')} "
-        f"veröffentlichen: {label} – \"{caption[:80]}\"",
+        f"veröffentlichen: {label}{f' (Karussell, {len(photo_ids)} Bilder)' if photo_ids else ''} – \"{caption[:80]}\"",
     )
     if not approved:
         return gate.refusal(how)
-    if photo_id:
+    originals: list[bytes] = []
+    if lr_ids:
         batch_dir = Path(dest) / f"insta-{uuid.uuid4().hex[:8]}"
         batch_dir.mkdir(parents=True, exist_ok=True)
-        exported = await _run(_adapter.export_photos, [photo_id], str(batch_dir))
+        exported = await _run(_adapter.export_photos, lr_ids, str(batch_dir))
         if _is_error(exported):
             return exported
-        path = batch_dir / f"{label.rsplit('.', 1)[0]}.jpg"
-        if not path.is_file():
-            return {"error": "exported file not found"}
-        original = path.read_bytes()
+        for name in names_lr:
+            path = batch_dir / f"{name.rsplit('.', 1)[0]}.jpg"
+            if not path.is_file():
+                return {"error": f"exported file not found: {path.name}"}
+            originals.append(path.read_bytes())
+    else:
+        originals.append(original)
     try:
-        def prepare() -> bytes:
-            data = imaging.adjust(original, edits) if edits else original
-            return imaging.instagram_jpeg(data)
+        def prepare(data: bytes) -> bytes:
+            return imaging.instagram_jpeg(imaging.adjust(data, edits) if edits else data)
 
-        final = await anyio.to_thread.run_sync(prepare)
+        prepared = [await anyio.to_thread.run_sync(prepare, data) for data in originals]
     except (OSError, ValueError) as exc:
         return {"error": f"image could not be prepared: {exc}"}
+    final = prepared[0]
+    extras = [(f"{Path(label).stem}-{i}.jpg", data) for i, data in enumerate(prepared[1:], start=1)]
     fields = {
         "accountId": ",".join(names), "type": post_type, "caption": caption,
         "scheduledAt": when.astimezone(UTC).isoformat(),
@@ -1909,13 +1926,13 @@ async def mhphotos_schedule_instagram(
     if img_hash:
         fields["imgHash"] = img_hash
     code, resp = await anyio.to_thread.run_sync(
-        publishing.social_schedule, cfg, f"{Path(label).stem}.jpg", final, fields
+        lambda: publishing.social_schedule(cfg, f"{Path(label).stem}.jpg", final, fields, extras=extras or None)
     )
     if code != 200 or not resp.get("ok"):
         return _app_error(code, resp)
     ids = resp.get("ids") or [resp.get("id")]
     change_id = audit.record(
-        "mhphotos_schedule_instagram", [photo_id] if photo_id else [],
+        "mhphotos_schedule_instagram", lr_ids,
         {**plan, "queue_ids": ids, "inbox_item": inbox_item_id}, approved_by=how,
     )
     return {"applied": True, "change_id": change_id, "queue_ids": ids, **plan}
@@ -1946,6 +1963,92 @@ async def mhphotos_instagram_queue(status: str | None = None, limit: int = 30) -
             for r in rows[: max(1, min(limit, 100))]
         ]
     }
+
+
+@mcp.tool()
+async def mhphotos_site_photos(query: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    """Photos published on the MHPhotos homepage (newest first), e.g. to pick photos for a reel.
+
+    query matches title, place, gallery or year (case-insensitive). Read-only.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    code, data = await anyio.to_thread.run_sync(publishing.site_photos, cfg)
+    if code != 200:
+        return _app_error(code, data)
+    photos = data.get("photos") or []
+    if query:
+        q = query.lower().strip()
+        photos = [p for p in photos if q in " ".join(str(v) for v in (
+            p.get("title"), p.get("location"), p.get("year"), " ".join(p.get("categories") or []))).lower()]
+    photos = sorted(photos, key=lambda p: str(p.get("uploadedAt") or ""), reverse=True)
+    limit, offset = max(1, min(limit, 200)), max(0, offset)
+    page = photos[offset : offset + limit]
+    out: dict[str, Any] = {"total": len(photos), "photos": [
+        {k: p.get(k) for k in ("id", "title", "location", "year", "categories", "width", "height") if p.get(k)}
+        for p in page]}
+    if offset + len(page) < len(photos):
+        out["next_offset"] = offset + len(page)
+    return out
+
+
+@mcp.tool()
+async def mhphotos_reel_jobs(limit: int = 20) -> dict[str, Any]:
+    """Reel jobs of the MHPhotos app: wartet -> rendering -> bereit (video ready) -> freigegeben. Read-only.
+
+    The Hetzner reel renderer turns waiting jobs into silent 9:16 videos. Approving and scheduling a
+    finished reel happens in the MHPhotos Content Studio; for music, download it there and post it in
+    the Instagram app.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    code, data = await anyio.to_thread.run_sync(publishing.reel_jobs, cfg)
+    if code != 200:
+        return _app_error(code, data)
+    jobs = data.get("jobs") or []
+    return {"jobs": [
+        {k: j.get(k) for k in ("id", "title", "status", "photoIds", "error", "createdAt", "updatedAt") if j.get(k)}
+        | {"caption": (j.get("caption") or "")[:160]}
+        for j in jobs[: max(1, min(limit, 100))]]}
+
+
+@mcp.tool()
+async def mhphotos_create_reel(
+    photo_ids: list[str], title: str, caption: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Order a reel: a silent 9:16 slideshow of 3-12 homepage photos (ids from mhphotos_site_photos).
+
+    Creates a reel job in the MHPhotos app; the Hetzner renderer makes the video (a few minutes).
+    Nothing is published: approving and scheduling stay in the Content Studio. Order = photo order.
+    Dry run unless confirm=true; needs MHPHOTOS_ALLOW_INSTAGRAM=1.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    if not publishing.instagram_enabled():
+        return {"error": publishing.instagram_disabled_message(), "code": "disabled"}
+    ids = [i.strip() for i in photo_ids if i and i.strip()]
+    if not 3 <= len(ids) <= 12 or len(set(ids)) != len(ids):
+        return {"error": "3-12 different homepage photo ids"}
+    title, caption = title.strip()[:120], caption.strip()
+    if not title or not caption or len(caption) > 2200:
+        return {"error": "title and caption required (caption max 2200 characters)"}
+    plan = {"photos": ids, "title": title, "caption": caption,
+            "seconds": round(len(ids) * 3.2 - (len(ids) - 1) * 0.6, 1), "published": False}
+    if not confirm:
+        return {"dry_run": True, **plan, "hint": "Call again with confirm=true to order the reel."}
+    approved, how = await gate.approve(ctx, f"Reel „{title}“ aus {len(ids)} Fotos rendern lassen (nichts wird veröffentlicht)")
+    if not approved:
+        return gate.refusal(how)
+    code, data = await anyio.to_thread.run_sync(publishing.create_reel_job, cfg, ids, title, caption)
+    if code != 200 or not data.get("ok"):
+        return _app_error(code, data)
+    job = data.get("job") or {}
+    change_id = audit.record("mhphotos_create_reel", [], {**plan, "job_id": job.get("id")}, approved_by=how)
+    return {"applied": True, "change_id": change_id, "job_id": job.get("id"), "status": job.get("status"), **plan,
+            "next": "Check progress with mhphotos_reel_jobs; approve in the MHPhotos Content Studio."}
 
 
 @mcp.tool()
@@ -2083,7 +2186,8 @@ TOOLSETS: dict[str, set[str]] = {
         "mhphotos_publish", "mhphotos_instagram_posts", "mhphotos_instagram_images",
         "mhphotos_schedule_instagram", "mhphotos_instagram_queue", "mhphotos_cancel_instagram",
         "mhphotos_inbox_images", "mhphotos_inbox_contact_sheet", "mhphotos_edit_preview",
-        "mhphotos_best_times", "instagram_candidates",
+        "mhphotos_best_times", "instagram_candidates", "mhphotos_site_photos", "mhphotos_reel_jobs",
+        "mhphotos_create_reel",
     },
 }
 

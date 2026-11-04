@@ -28,7 +28,14 @@ class FakeMHPhotos:
         ]
         self.social_uploads: list[dict] = []
         self.duplicate: dict | None = None  # set to simulate "already planned"
-        self.duplicate_after: int | None = None  # the first n checks are new, the rest "already posted"
+        self.duplicate_after: int | None = None
+        self.reel_jobs: list[dict] = []
+        self.site_photos = [
+            {"id": "hp-1", "title": "Dom im Nebel", "location": "Münster", "year": 2025, "categories": ["heimat/muensterland"],
+             "uploadedAt": "2026-01-02"},
+            {"id": "hp-2", "title": "Hafen", "location": "Palma", "year": 2026, "categories": ["unterwegs/staedte"],
+             "uploadedAt": "2026-03-01"},
+        ]  # the first n checks are new, the rest "already posted"
         self.images = {k: _jpeg(c) for k, c in (("lr-1", (200, 80, 40)), ("lr-2", (40, 120, 200)),
                                                   ("lr-3", (60, 160, 60)), ("lr-4", (180, 180, 40)))}
         self.galleries = [
@@ -80,7 +87,11 @@ class FakeMHPhotos:
                     msg = BytesParser().parsebytes(b"Content-Type: " + ctype.encode() + b"\r\n\r\n" + raw)
                     body = {}
                     for part in msg.get_payload():
-                        body[part.get_param("name", header="content-disposition")] = part.get_payload(decode=True)
+                        name = part.get_param("name", header="content-disposition")
+                        if name == "extra":  # repeated: further carousel images
+                            body.setdefault("extra", []).append(part.get_payload(decode=True))
+                        else:
+                            body[name] = part.get_payload(decode=True)
                 else:
                     body = json.loads(raw or b"{}") if raw else {}
                 outer.calls.append((method, self.path, body))
@@ -106,6 +117,16 @@ class FakeMHPhotos:
                                 "scheduled_at": body["scheduledAt"].decode(), "status": "geplant",
                             })
                         return self._reply(200, {"ok": True, "id": ids[0], **({"ids": ids} if len(ids) > 1 else {})})
+                if method == "GET" and path == "/api/admin/photos":
+                    return self._reply(200, {"photos": outer.site_photos})
+                if path == "/api/admin/reel-jobs":
+                    if method == "GET":
+                        return self._reply(200, {"jobs": outer.reel_jobs})
+                    if len(body.get("photoIds") or []) < 3:
+                        return self._reply(400, {"error": "Mindestens drei Bilder auswählen."})
+                    job = {"id": f"reel-{len(outer.reel_jobs):04d}", "status": "wartet", **body}
+                    outer.reel_jobs.insert(0, job)
+                    return self._reply(200, {"ok": True, "job": job, "recovered": False})
                 if method == "GET" and path.startswith("/api/admin/social-hub-best-time?accountId="):
                     return self._reply(200, {"slots": [{"weekday": 3, "hour": 19}], "account": path.rsplit("=", 1)[1]})
                 if method == "POST" and path == "/api/admin/social-hub-duplicate":

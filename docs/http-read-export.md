@@ -17,11 +17,12 @@ Instagram tools are registered, and nothing deletes photos.
 then also offers `mhphotos_instagram_posts`, `mhphotos_instagram_images` and `mhphotos_inbox` (read-only; the admin
 token is read from the Keychain entry `mhphotos-admin-token`, never from the client). `export_photos` accepts
 `instagram_post_id` for a single photo; it travels into the inbox and lets the app link the post when published.
-With the site configured the service also offers `mhphotos_instagram_queue`, `mhphotos_best_times` and
-`instagram_candidates` (reads).
+With the site configured the service also offers `mhphotos_instagram_queue`, `mhphotos_best_times`,
+`instagram_candidates`, `mhphotos_site_photos` and `mhphotos_reel_jobs` (reads).
 
 **Instagram planning (opt-in).** `rebuild-mac.sh --mhphotos-url https://<site> --allow-instagram` stores
-`"allow_instagram": true`; the service then offers `mhphotos_schedule_instagram` and `mhphotos_cancel_instagram`.
+`"allow_instagram": true`; the service then offers `mhphotos_schedule_instagram` (single photo or carousel),
+`mhphotos_cancel_instagram` and `mhphotos_create_reel` (orders a reel video, publishes nothing).
 Planned posts are published by the MHPhotos social queue at the planned time without further questions, so every
 plan is a dry run until `confirm=true`, and in claude.ai these two tools should stay on "ask". The consent page
 names this right. `--no-allow-instagram` removes it again.
