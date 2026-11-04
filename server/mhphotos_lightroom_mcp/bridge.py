@@ -344,6 +344,10 @@ class BridgeAdapter:
             args["year"] = year
         return self._call("audit_page", args, timeout=600.0)
 
+    def audit_scan(self, year, start):
+        # one step of the year scan; the first step reads the photo list of the whole catalog
+        return self._call("audit_scan", {"year": year, "start": start}, timeout=600.0)
+
     def create_review_collections(self, root, groups):
         return self._call("create_review_collections", {"root": root, "groups": groups}, timeout=600.0)
 

@@ -502,6 +502,9 @@ end
 -- Read only: one page of the whole catalog with path, size, capture time and camera (Audit.lua).
 function Commands.audit_page(args) return Audit.page(args) end
 
+-- Read only: one step of the capture-year scan (progress for the server, stops between steps).
+function Commands.audit_scan(args) return Audit.scan(args) end
+
 -- Read only: photos captured in a date range, with rating, flag, place, GPS, title/caption presence.
 function Commands.photos_by_date(args) return Audit.range(args) end
 

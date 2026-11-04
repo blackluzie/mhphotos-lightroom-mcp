@@ -21,7 +21,7 @@ READ_TOOLS = (
     'connection_status', 'list_collections', 'list_photos',
     'get_photo_metadata', 'get_photo_previews', 'get_contact_sheet',
     'get_develop_settings', 'list_presets', 'list_changes',
-    'catalog_audit_start', 'catalog_audit_status', 'catalog_audit_results',
+    'catalog_audit_start', 'catalog_audit_status', 'catalog_audit_results', 'catalog_audit_cancel',
     'photos_by_date', 'suggest_locations',
 )
 # Catalog edits, offered only when the operator enabled them (desktop.json "allow_writes").

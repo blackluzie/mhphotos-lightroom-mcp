@@ -78,27 +78,59 @@ end
 
 -- Only the photos of one year (capture year or year folder): the capture time and the path are read in
 -- big batches for the whole catalog, the detailed metadata later only for the matching photos.
+-- The scan can be done in steps (Audit.scan), so the server can show progress and stop between steps.
 local SCOPE_CHUNK = 5000
+
+local function checkYear(value)
+  local year = value ~= nil and tostring(math.floor(tonumber(value) or 0)) or nil
+  if not year or not year:match('^%d%d%d%d$') then error('year must be four digits', 0) end
+  return year
+end
+
+local function scanChunk(list, entry, year)
+  local cat = catalog()
+  local first = entry.next + 1
+  local last = math.min(entry.next + SCOPE_CHUNK, #list.photos)
+  local slice = {}
+  for i = first, last do slice[#slice + 1] = list.photos[i] end
+  local raw = batch(cat, slice, { 'dateTimeOriginal', 'path' }, false) or {}
+  local okI, iso = LrTasks.pcall(batch, cat, slice, { 'dateTimeOriginalISO8601' }, false)
+  if not okI or type(iso) ~= 'table' then iso = {} end
+  for _, p in ipairs(slice) do
+    local r = raw[p] or {}
+    local t = localTime(iso[p] and iso[p].dateTimeOriginalISO8601, r.dateTimeOriginal)
+    if (t and t:sub(1, 4) == year) or folderYear(r.path) == year then entry.hits[#entry.hits + 1] = p end
+  end
+  entry.next = last
+  entry.done = last >= #list.photos
+end
+
+local function yearEntry(list, year, fresh)
+  list.years = list.years or {}
+  if fresh or not list.years[year] then list.years[year] = { hits = {}, next = 0, done = false } end
+  return list.years[year]
+end
+
+-- args: year (four digits), start (0 = begin a new scan and re-read the photo list), chunks (default 4,
+-- each 5000 photos). Returns total, next_start, done, hits. Call again with start = next_start.
+function Audit.scan(args)
+  local year = checkYear(args.year)
+  local start = math.max(0, math.floor(tonumber(args.start) or 0))
+  local list = cachedList(start == 0)
+  local entry = yearEntry(list, year, start == 0)
+  if entry.next ~= start then error('scan out of order: expected start ' .. entry.next, 0) end
+  for _ = 1, math.max(1, math.min(math.floor(tonumber(args.chunks) or 4), 20)) do
+    if entry.done then break end
+    scanChunk(list, entry, year)
+  end
+  return { total = #list.photos, next_start = entry.next, done = entry.done, hits = #entry.hits }
+end
 
 local function yearPhotos(year, refresh)
   local list = cachedList(refresh)
-  list.years = list.years or {}
-  if list.years[year] then return list.years[year] end
-  local cat, hits = catalog(), {}
-  for start = 1, #list.photos, SCOPE_CHUNK do
-    local slice = {}
-    for i = start, math.min(start + SCOPE_CHUNK - 1, #list.photos) do slice[#slice + 1] = list.photos[i] end
-    local raw = batch(cat, slice, { 'dateTimeOriginal', 'path' }, false) or {}
-    local okI, iso = LrTasks.pcall(batch, cat, slice, { 'dateTimeOriginalISO8601' }, false)
-    if not okI or type(iso) ~= 'table' then iso = {} end
-    for _, p in ipairs(slice) do
-      local r = raw[p] or {}
-      local t = localTime(iso[p] and iso[p].dateTimeOriginalISO8601, r.dateTimeOriginal)
-      if (t and t:sub(1, 4) == year) or folderYear(r.path) == year then hits[#hits + 1] = p end
-    end
-  end
-  list.years[year] = hits
-  return hits
+  local entry = yearEntry(list, year, false)
+  while not entry.done do scanChunk(list, entry, year) end
+  return entry.hits
 end
 
 -- args: offset (default 0), limit (default 1000, max 2000), refresh (re-read the photo list),
@@ -106,10 +138,9 @@ end
 function Audit.page(args)
   local offset = math.max(0, math.floor(tonumber(args.offset) or 0))
   local limit = math.max(1, math.min(math.floor(tonumber(args.limit) or 1000), MAX_LIMIT))
-  local refresh = args.refresh == true or offset == 0
-  local year = args.year ~= nil and tostring(math.floor(tonumber(args.year) or 0)) or nil
-  if year and not year:match('^%d%d%d%d$') then error('year must be four digits', 0) end
-  local photos = year and yearPhotos(year, refresh) or allPhotos(refresh)
+  local year = args.year ~= nil and checkYear(args.year) or nil
+  -- with a year, a finished scan is reused; the photo list is only re-read when asked for
+  local photos = year and yearPhotos(year, args.refresh == true) or allPhotos(args.refresh == true or offset == 0)
   local slice = {}
   for i = offset + 1, math.min(offset + limit, #photos) do slice[#slice + 1] = photos[i] end
   local out = { total = #photos, offset = offset, next_offset = offset + #slice, photos = {}, unsupported = {} }

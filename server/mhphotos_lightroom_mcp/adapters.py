@@ -205,6 +205,9 @@ class CatalogAdapter(Protocol):
     def audit_page(self, offset: int, limit: int, refresh: bool = False, year: int | None = None) -> dict[str, Any]:
         """year: only photos of that capture year or year folder. {"total", "offset", "next_offset", "photos": [compact records], "unsupported"}"""
 
+    def audit_scan(self, year: int, start: int) -> dict[str, Any]:
+        """One step of the capture-year scan: {"total", "next_start", "done", "hits"}."""
+
     def create_review_collections(self, root: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
         """{"collections": [{"set", "name", "added"}], "missing"}"""
 
@@ -417,6 +420,14 @@ class MockAdapter:
         part = recs[offset : offset + limit]
         return {"total": len(recs), "offset": offset, "next_offset": offset + len(part), "photos": part,
                 "unsupported": []}
+
+    scan_step = 2  # photos per scan step in this stand-in, so tests see several steps
+
+    def audit_scan(self, year, start):
+        total = len(self._audit_records())
+        nxt = min(start + self.scan_step, total)
+        hits = sum(1 for r in self._audit_records()[:nxt] if r["t"][:4] == str(year) or f"/{year}/" in r["path"])
+        return {"total": total, "next_start": nxt, "done": nxt >= total, "hits": hits}
 
     def create_review_collections(self, root, groups):
         made, missing = [], 0

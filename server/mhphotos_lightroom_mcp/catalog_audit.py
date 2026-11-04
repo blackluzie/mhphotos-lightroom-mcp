@@ -374,38 +374,83 @@ def save_result(result: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+class Cancelled(Exception):
+    """The run was stopped by catalog_audit_cancel."""
+
+
 class Job:
-    """One background run. ``fetch(offset, limit, refresh)`` returns an audit_page dict."""
+    """One background run.
+
+    ``fetch(offset, limit, refresh)`` returns an audit_page dict. With a year, ``scan(year, start)``
+    walks the catalog's capture dates and paths in steps (progress is visible, the run can be stopped
+    between steps); it returns {"total", "next_start", "done", "hits"}.
+    """
 
     def __init__(self, fetch: Callable[[int, int, bool], dict[str, Any]], year: int | None,
-                 check_files: bool) -> None:
+                 check_files: bool, scan: Callable[[int, int], dict[str, Any]] | None = None) -> None:
         self.fetch = fetch
+        self.scan = scan if year else None
         self.analysis = Analysis(year, check_files)
         self.state: dict[str, Any] = {"status": "running", "phase": "reading catalog", "year": year,
                                       "check_files": check_files, "started": time.time(), "total": None,
                                       "read": 0}
         self.unsupported: set[str] = set()
+        self.cancelled = threading.Event()
         self.thread = threading.Thread(target=self._run, name="catalog-audit", daemon=True)
 
     def start(self) -> Job:
         self.thread.start()
         return self
 
-    def _fetch(self, offset: int) -> dict[str, Any]:
-        """One page; a slow or busy Lightroom gets two more tries before the run fails."""
+    def cancel(self) -> None:
+        """Stop at the next step (a Lightroom call that is already running finishes first)."""
+        self.cancelled.set()
+        if self.state["status"] == "running":
+            self.state["cancel_requested"] = True
+
+    def _check(self) -> None:
+        if self.cancelled.is_set():
+            raise Cancelled
+
+    def _retry(self, call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        """A slow or busy Lightroom gets two more tries before the run fails."""
         for attempt in range(3):
+            self._check()
             try:
-                return self.fetch(offset, PAGE, offset == 0)
+                return call()
             except Exception:
                 if attempt == 2:
                     raise
                 time.sleep(RETRY_SECONDS)
         raise AssertionError("unreachable")
 
+    def _fetch(self, offset: int) -> dict[str, Any]:
+        # after a year scan the photo list is reused; otherwise the first page reads it
+        refresh = offset == 0 and self.scan is None
+        return self._retry(lambda: self.fetch(offset, PAGE, refresh))
+
+    def _scan_year(self) -> None:
+        assert self.scan is not None
+        scan, year, start = self.scan, int(self.state["year"]), 0
+        self.state["phase"] = "scanning catalog by capture year"
+        self.state["note"] = "the first step reads the photo list of the whole catalog (1-3 minutes)"
+        while True:
+            step = self._retry(lambda s=start: scan(year, s))
+            self.state.pop("note", None)
+            self.state.update(scanned=int(step["next_start"]), total_photos=int(step["total"]),
+                              matches=int(step["hits"]))
+            if step.get("done") or int(step["next_start"]) <= start:
+                break
+            start = int(step["next_start"])
+        self.state["phase"] = "reading catalog"
+
     def _run(self) -> None:
         try:
+            if self.scan:
+                self._scan_year()
             offset = 0
             while True:
+                self._check()
                 page = self._fetch(offset)
                 self.unsupported.update(page.get("unsupported") or [])
                 for rec in page.get("photos") or []:
@@ -416,9 +461,11 @@ class Job:
                 if nxt <= offset or nxt >= int(page["total"]):
                     break
                 offset = nxt
+            self._check()
             self.state["phase"] = "checking duplicate candidates"
 
             def progress(done: int, total: int) -> None:
+                self._check()
                 self.state["fingerprints"] = f"{done}/{total}"
 
             self.analysis.finish(progress)
@@ -432,6 +479,9 @@ class Job:
             }
             save_result(result)
             self.state.update(status="done", phase="done", seconds=result["seconds"])
+        except Cancelled:
+            self.state.update(status="cancelled", phase="cancelled")
+            self.state.pop("cancel_requested", None)
         except Exception as exc:  # noqa: BLE001 - reported through catalog_audit_status
             self.state.update(status="failed", error=f"{type(exc).__name__}: {exc}")
 
@@ -439,10 +489,17 @@ class Job:
         out = {k: v for k, v in self.state.items() if k != "started"}
         elapsed = time.time() - self.state["started"]
         out["elapsed_seconds"] = round(elapsed)
-        total, read = self.state.get("total"), self.state.get("read") or 0
-        if self.state["status"] == "running" and total and read and self.state["phase"] == "reading catalog":
-            out["percent"] = round(100 * read / total, 1)
-            out["eta_seconds"] = round(elapsed * (total - read) / read)
+        if self.state["status"] != "running":
+            return out
+        phase = self.state["phase"]
+        if phase.startswith("scanning"):
+            total, done = self.state.get("total_photos"), self.state.get("scanned") or 0
+        else:
+            total, done = self.state.get("total"), self.state.get("read") or 0
+        if total and done and phase in ("reading catalog", "scanning catalog by capture year"):
+            out["percent"] = round(100 * done / total, 1)
+            if phase == "reading catalog":
+                out["eta_seconds"] = round(elapsed * (total - done) / done)
         return out
 
 
@@ -450,18 +507,29 @@ _lock = threading.Lock()
 _job: Job | None = None
 
 
-def start(fetch: Callable[[int, int, bool], dict[str, Any]], year: int | None, check_files: bool) -> tuple[bool, Job]:
+def start(fetch: Callable[[int, int, bool], dict[str, Any]], year: int | None, check_files: bool,
+          scan: Callable[[int, int], dict[str, Any]] | None = None) -> tuple[bool, Job]:
     """Start a run unless one is running. Returns (started, job)."""
     global _job
     with _lock:
         if _job is not None and _job.state["status"] == "running":
             return False, _job
-        _job = Job(fetch, year, check_files).start()
+        _job = Job(fetch, year, check_files, scan).start()
         return True, _job
 
 
 def current() -> Job | None:
     return _job
+
+
+def cancel() -> Job | None:
+    """Ask the running job to stop; returns it (None when nothing is running)."""
+    with _lock:
+        job = _job
+        if job is None or job.state["status"] != "running":
+            return None
+        job.cancel()
+        return job
 
 
 # ---------------------------------------------------------------- review collections
