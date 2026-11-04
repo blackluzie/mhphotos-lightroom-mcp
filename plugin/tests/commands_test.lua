@@ -367,6 +367,10 @@ for i = 1, 5001 do many[i] = 'u1' end
 local okMany, errMany = pcall(Commands.run, 'create_review_collections', { root = 'R', groups = { { set = 'S', name = 'N', photo_ids = many } } })
 eq(okMany, false); assert(tostring(errMany):find('5000'), tostring(errMany))
 
+-- capture time is the camera's wall clock everywhere (no UTC shift around midnight)
+eq(Commands.run('get_photo', { photo_id = 'u2' }).capture_time, '2026-10-14T00:30:00')
+eq(ids(Commands.run('list_photos', { filters = { captured_from = '2026-10-14', captured_to = '2026-10-14' } })), 'u2')
+
 -- photos by capture date (read only, uses the cached date index)
 p2.raw.gps = nil; p2.fmt.city = 'Münster'; p2.fmt.caption = 'Hallo'
 p2.raw.keywords = { { getName = function() return 'Instagram' end } }

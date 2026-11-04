@@ -13,7 +13,6 @@ local Audit = require 'Audit'
 
 local Commands = {}
 
-local COCOA_EPOCH_OFFSET = 978307200 -- 2001-01-01 -> 1970-01-01 (seconds)
 local MAX_PAGE = 100
 
 local function notFound(msg) error({ code = 'not_found', message = msg }, 0) end
@@ -27,10 +26,9 @@ local function pickStatusToFlag(p)
   return 'none'
 end
 
-local function isoTime(raw)
-  if type(raw) ~= 'number' then return '' end
-  return os.date('!%Y-%m-%dT%H:%M:%S', raw + COCOA_EPOCH_OFFSET)
-end
+-- Capture time as the camera's wall clock (the old UTC formatting moved photos taken shortly
+-- after midnight to the previous day in date filters).
+local function captureTime(photo) return Audit.captureTime(photo) end
 
 local function photoSummary(photo)
   return {
@@ -70,7 +68,7 @@ local function photoMetadata(photo)
   end
   s.flag = pickStatusToFlag(photo:getRawMetadata('pickStatus'))
   s.keywords = keywords
-  s.capture_time = isoTime(photo:getRawMetadata('dateTimeOriginal'))
+  s.capture_time = captureTime(photo)
   s.camera = photo:getFormattedMetadata('cameraModel') or ''
   s.iso = photo:getRawMetadata('isoSpeedRating')
   s.aperture = photo:getRawMetadata('aperture')
@@ -151,7 +149,7 @@ end
 local function matchesFilters(photo, f)
   if f.min_rating and (photo:getRawMetadata('rating') or 0) < f.min_rating then return false end
   if f.captured_from or f.captured_to then
-    local day = isoTime(photo:getRawMetadata('dateTimeOriginal')):sub(1, 10)
+    local day = captureTime(photo):sub(1, 10)
     if day == '' then return false end
     if f.captured_from and day < f.captured_from then return false end
     if f.captured_to and day > f.captured_to then return false end
