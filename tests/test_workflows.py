@@ -248,8 +248,11 @@ async def test_write_name_dates_to_files_end_to_end(monkeypatch, tmp_path):
     assert done["collection"].endswith("Datum in Datei geschrieben")
     assert server._adapter.review_collections[-1]["photo_ids"] == ["p2"]
 
+    assert file_dates.done_ids() == {"p2"}
     rest = await server.write_name_dates_to_files(limit=10, confirm=True)
     assert rest["written"] == 1 and [f["file"] for f in rest["failed"]] == [files["p1"]]
-    # the one written before and the one that had a time already are left alone
-    assert {s["file"] for s in rest["skipped"]} == {files["p2"], files["p3"]}
+    # the one written before is no longer a candidate; the one that had a time already is left alone
+    assert {s["file"] for s in rest["skipped"]} == {files["p3"]}
+    # p3 had a time in the file, so it is not offered again; the failed p1 is tried again next time
+    assert file_dates.done_ids() == {"p2", "p3", "p5"}
     assert (pics / files["p1"]).read_bytes() == b"original " + files["p1"].encode()  # restored after the failure
