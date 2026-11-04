@@ -539,6 +539,30 @@ function Commands.set_location(args)
   return { updated = #photos, gps_written = gpsWritten, gps_error = gpsError }
 end
 
+-- Write: rotate photos clockwise by 90, 180 or 270 degrees (LrPhoto:rotateRight / rotateLeft). Each photo is
+-- tried on its own, a refusal is reported and does not stop the others. Turning back is another rotation.
+function Commands.rotate_photos(args)
+  local degrees = tonumber(args.degrees)
+  if degrees ~= 90 and degrees ~= 180 and degrees ~= 270 then
+    error('degrees must be 90, 180 or 270 (clockwise)', 0)
+  end
+  local photos = findAll(args.photo_ids)
+  local rotated, failed, firstError = 0, 0, nil
+  writeAccess('MHPhotos: Drehen', function()
+    for _, p in ipairs(photos) do
+      local ok, err = LrTasks.pcall(function()
+        if degrees == 270 then
+          p:rotateLeft()
+        else
+          for _ = 1, math.floor(degrees / 90) do p:rotateRight() end
+        end
+      end)
+      if ok then rotated = rotated + 1 else failed, firstError = failed + 1, firstError or tostring(err) end
+    end
+  end)
+  return { updated = #photos, rotated = rotated, failed = failed, error = firstError }
+end
+
 -- Read only: the file path of each photo (the server writes a capture time into JPEG files that way).
 function Commands.photo_paths(args)
   local paths = {}

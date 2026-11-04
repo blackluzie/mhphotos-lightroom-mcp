@@ -36,7 +36,7 @@ opt-in (environment variable) and, when your client supports it, **you are asked
 | Group | Tools |
 |-------|-------|
 | Look & search | `connection_status`, `lightroom_selftest`, `list_collections` (`name_contains`), `list_photos` (`min_rating`, `year`/dates, `keyword`, `flag`, `location`, GPS circle), `get_photo_metadata`, `get_photo_previews` (images), `get_contact_sheet` (one numbered overview image), `get_develop_settings`, `list_presets`, `backlog_report`, `list_changes`, `catalog_audit_start` / `catalog_audit_status` / `catalog_audit_cancel` / `catalog_audit_results` (wrong date folder, duplicates, storage), `photos_by_date` (fast date queries: unreviewed, best, missing captions/GPS), `suggest_locations` |
-| Organise (`MHPHOTOS_ALLOW_WRITES=1`) | `set_rating`, `set_flag`, `set_color_label`, `set_title_caption`, `add_keywords`, `create_collection`, `add_to_collection`, `undo_last_change`, `catalog_audit_collections`, `set_location` |
+| Organise (`MHPHOTOS_ALLOW_WRITES=1`) | `set_rating`, `set_flag`, `set_color_label`, `set_title_caption`, `add_keywords`, `create_collection`, `add_to_collection`, `undo_last_change`, `catalog_audit_collections`, `set_location`, `rotate_photos` (90/180/270° clockwise) |
 | Change files (`MHPHOTOS_ALLOW_FILE_EDITS=1`, needs the edit opt-in) | `write_name_dates_to_files` (writes a capture time from the file name into JPEGs with exiftool, backup first) |
 | Edit looks (`MHPHOTOS_ALLOW_WRITES=1`) | `apply_preset`, `apply_develop_settings`, `sync_develop_settings`, `create_preset`, `create_virtual_copies` |
 | Export | `export_photos` (`MHPHOTOS_EXPORT_DIR`) |
