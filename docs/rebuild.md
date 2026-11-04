@@ -106,3 +106,9 @@ passwords/2FA and does not attempt a login using the obsolete setup password.
 It never cuts over production or overwrites Kickdesk. A production disaster
 recovery cutover must verify host identity, DNS, free ports, backup/key pairing
 and restored login before enabling private access; that switch is deliberate.
+
+## Dateien ändern (optional)
+
+`--allow-file-edits` (zusammen mit `--allow-writes`) bietet `write_name_dates_to_files` an: Das Aufnahmedatum aus dem
+Dateinamen wird mit `exiftool` in JPEG-Dateien geschrieben (vorher Kopie nach `~/.mhphotos-lightroom-mcp/file-backups`).
+`brew install exiftool` ist nötig. `--no-allow-file-edits` nimmt es wieder weg.

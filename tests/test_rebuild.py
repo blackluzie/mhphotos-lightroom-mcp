@@ -170,3 +170,20 @@ def test_allow_instagram_needs_the_site_and_is_kept(tmp_path):
     configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_instagram=False)
     conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
     assert conf['allow_instagram'] is False
+
+
+def test_allow_file_edits_needs_writes_and_is_kept(tmp_path):
+    import pytest
+    home, secret = setup(tmp_path)
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', ['https://client.example/callback'],
+        secret, True, GITHUB)
+    with pytest.raises(ValueError, match='allow-writes'):
+        configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_file_edits=True)
+    plan = configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True,
+        allow_writes=True, allow_file_edits=True)
+    assert plan['allow_file_edits'] is True
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['allow_file_edits'] is True
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_file_edits=False)
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['allow_file_edits'] is False

@@ -362,8 +362,8 @@ class BridgeAdapter:
             args.update(latitude=latitude, longitude=longitude)
         return self._call("set_location", args)
 
-    def set_capture_time(self, items):
-        return self._call("set_capture_time", {"items": items})
+    def photo_paths(self, photo_ids):
+        return self._call("photo_paths", {"photo_ids": photo_ids})
 
     def export_photos(self, photo_ids, dest_dir):
         return self._call(

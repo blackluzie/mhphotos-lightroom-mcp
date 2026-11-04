@@ -121,8 +121,9 @@ Folders are `JJJJ/JJJJ-MM/JJJJ-MM-TT`; the capture time decides where a photo be
    Target structure: `JJJJ-JJJJ/JJJJ/JJJJ-MM/JJJJ-MM-TT` (decade, year, month, day). `wrong_folder` has levels
    `year`, `month`, `day`, `decade` and `no_day` (no day folder); `video_no_date`, `date_in_name` and
    `near_duplicates` are their own kinds. Photos whose file name carries the date (`date_in_name`) get their
-   capture time with `apply_name_dates` (dry run first, 100 per call; writes are opt-in); run the check again
-   afterwards so they show up as `wrong_folder`.
+   capture time with `write_name_dates_to_files`: it writes the date into the JPEG (exiftool, backup first, one photo
+   by default, opt-in `--allow-file-edits`). Then in Lightroom select the collection "Prüfen › Sonstiges › Datum in Datei
+   geschrieben" and use *Metadata > Read Metadata from Files*; run the check again so they show up as `wrong_folder`.
 2. `catalog_audit_results(kind="wrong_folder", year=…, level="year"|"month"|"day")`: `found` is the folder it is in,
    `expected` the day folder it belongs in. `day_diff` ±1 is often a time-zone or midnight effect (camera clock on
    travel), so check those before moving. Other kinds: `no_date`, `implausible_date`, `unrecognised_folder`,
