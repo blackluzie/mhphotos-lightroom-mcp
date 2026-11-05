@@ -22,6 +22,9 @@ local function newPhoto(uuid, name, rating, pick, kws, t, cam)
   end
   p.develop = { Exposure2012 = 0.5, Contrast2012 = 10, ToneCurve = { 1, 2 }, CameraProfile = 'Adobe Color' }
   p.appliedPresets, p.appliedSettings = {}, {}
+  p.turns = 0
+  function p:rotateRight() self.turns = self.turns + 1 end
+  function p:rotateLeft() self.turns = self.turns - 1 end
   function p:getDevelopSettings() return self.develop end
   function p:applyDevelopPreset(preset, plugin) self.appliedPresets[#self.appliedPresets + 1] = { preset, plugin } end
   function p:applyDevelopSettings(settings, name) self.appliedSettings[#self.appliedSettings + 1] = { settings, name } end
@@ -48,7 +51,7 @@ local set = { getName = function() return 'Set' end,
 local writes = 0
 local createdSets = {}
 local lastWriteOpts
-local createdCollection, selected, activeSource, virtualCopyName
+local createdCollection, selected, activeSource, virtualCopyName, ignoreSelection, wrongMaster
 local viewCalls = {}
 local fakeCatalog = {
   getChildCollections = function() return { coll } end,
@@ -86,12 +89,13 @@ local fakeCatalog = {
   end,
   createCollection = function(_, name, parent, prior) createdCollection = { name = name, parent = parent, prior = prior, localIdentifier = 99,
     addPhotos = function(self, ps) self.added = ps end, isSmartCollection = function() return false end }; return createdCollection end,
-  setSelectedPhotos = function(_, p) selected = p end,
+  setSelectedPhotos = function(_, p) if not ignoreSelection then selected = p end end,
+  getTargetPhoto = function() return selected end,
   setActiveSources = function(_, src) activeSource = src; return true end,
   createVirtualCopies = function(_, copyName)
     virtualCopyName = copyName
     local copy = newPhoto('copy-of-' .. selected.raw.uuid, 'IMG_copy.dng', 0, 0, {}, 0, 'x')
-    copy.raw.isVirtualCopy = true; copy.raw.masterPhoto = selected
+    copy.raw.isVirtualCopy = true; copy.raw.masterPhoto = wrongMaster or selected
     photos[#photos + 1] = copy
     return { copy }
   end,
@@ -293,6 +297,20 @@ eq(pcall(Commands.run, 'create_virtual_copies', { photo_ids = {} }), false)
 -- the copy is made from the Library grid, with 'All Photographs' as source and only that photo selected
 eq(table.concat(viewCalls, ','), 'module:library,grid'); eq(activeSource, 'kAllPhotos')
 eq(selected.raw.uuid, 'u1'); eq(virtualCopyName, 'MHPhotos')
+Commands.run('create_virtual_copies', { photo_ids = { 'u1' }, copy_name = 'Insta 4:5' })
+eq(virtualCopyName, 'Insta 4:5', 'the copy gets the requested name')
+eq(pcall(Commands.run, 'create_virtual_copies', { photo_ids = { 'u1' }, copy_name = '' }), false)
+-- the selection is proven: if Lightroom keeps another photo selected, no copy is made
+local nBefore = #photos
+ignoreSelection = true
+local okSel, errSel = pcall(Commands.run, 'create_virtual_copies', { photo_ids = { 'u2' } })
+ignoreSelection = false
+eq(okSel, false); assert(tostring(errSel):find('did not select'), tostring(errSel)); eq(#photos, nBefore, 'no copy was made')
+-- a copy of the wrong photo is reported with both ids
+wrongMaster = p2
+local okM, errM = pcall(Commands.run, 'create_virtual_copies', { photo_ids = { 'u1' } })
+wrongMaster = nil
+eq(okM, false); assert(tostring(errM):find('ANOTHER photo'), tostring(errM)); assert(tostring(errM):find('u2'), tostring(errM))
 -- write access never queues: it waits (asynchronous=false) with a timeout
 eq(lastWriteOpts.asynchronous, false); eq(lastWriteOpts.timeout, 15)
 -- a collection SET id (no getPhotos/addPhotos) gets a clear message, not a Lua crash
@@ -373,6 +391,29 @@ eq(Commands.run('audit_scan', { year = 2026, start = 0 }).hits, 1)
 p1.raw.path = oldPath
 local okY = pcall(Commands.run, 'audit_page', { year = 'abc' })
 eq(okY, false, 'a bad year is rejected')
+
+-- rotate_photos: clockwise turns; a refused rotation is reported per photo, bad input aborts before any change
+writes = 0
+local rot = Commands.run('rotate_photos', { photo_ids = { 'u1', 'u2' }, degrees = 180 })
+eq(rot.updated, 2); eq(rot.rotated, 2); eq(rot.failed, 0); eq(p1.turns, 2); eq(p2.turns, 2); eq(writes, 1)
+eq(Commands.run('rotate_photos', { photo_ids = { 'u1' }, degrees = 270 }).rotated, 1); eq(p1.turns, 1)
+local origRot = p2.rotateRight
+function p2:rotateRight() error('refused', 0) end
+local rot2 = Commands.run('rotate_photos', { photo_ids = { 'u1', 'u2' }, degrees = 90 })
+eq(rot2.rotated, 1); eq(rot2.failed, 1); eq(rot2.error, 'refused'); eq(p1.turns, 2)
+p2.rotateRight = origRot
+writes = 0
+eq(pcall(Commands.run, 'rotate_photos', { photo_ids = { 'u1' }, degrees = 45 }), false)
+eq(pcall(Commands.run, 'rotate_photos', { photo_ids = { 'gone' }, degrees = 90 }), false)
+eq(writes, 0, 'nothing changed after bad input')
+p1.turns, p2.turns = 0, 0
+
+-- photo_dimensions: read only, size after crop per photo id
+p1.raw.croppedDimensions = { width = 4032, height = 3024 }
+local dims = Commands.run('photo_dimensions', { photo_ids = { 'u1' } }).dimensions
+eq(dims.u1.width, 4032); eq(dims.u1.height, 3024)
+eq(dims.u1.full_width, 6000); eq(dims.u1.full_height, 4000)
+eq(pcall(Commands.run, 'photo_dimensions', { photo_ids = { 'gone' } }), false)
 
 -- photo_paths: read only, the file path per photo id; unknown ids abort
 local pp = Commands.run('photo_paths', { photo_ids = { 'u1', 'u2' } }).paths

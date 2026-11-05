@@ -193,8 +193,11 @@ class CatalogAdapter(Protocol):
     def remove_keywords(self, photo_ids: list[str], keywords: list[str]) -> dict[str, Any]:
         """Only used by undo, to remove keywords this server added."""
 
-    def create_virtual_copies(self, photo_ids: list[str]) -> dict[str, Any]:
-        """{"copies": [{"source_id", "id"}]}"""
+    def create_virtual_copies(self, photo_ids: list[str], copy_name: str | None = None) -> dict[str, Any]:
+        """{"copies": [{"source_id", "id"}]}; copy_name is the name Lightroom shows for the copies."""
+
+    def photo_dimensions(self, photo_ids: list[str]) -> dict[str, Any]:
+        """{"dimensions": {photo id: {"width", "height"}}} after rotation and crop"""
 
     def apply_develop_settings(
         self, photo_ids: list[str], settings: dict[str, Any]
@@ -207,6 +210,9 @@ class CatalogAdapter(Protocol):
 
     def audit_scan(self, year: int, start: int) -> dict[str, Any]:
         """One step of the capture-year scan: {"total", "next_start", "done", "hits"}."""
+
+    def rotate_photos(self, photo_ids: list[str], degrees: int) -> dict[str, Any]:
+        """Rotate clockwise by 90, 180 or 270 degrees: {"updated", "rotated", "failed", "error"}"""
 
     def photo_paths(self, photo_ids: list[str]) -> dict[str, Any]:
         """{"paths": {photo id: absolute file path}}"""
@@ -392,13 +398,29 @@ class MockAdapter:
             self._photos[p.id] = dataclasses.replace(p, keywords=kept)
         return {"updated": len(photo_ids)}
 
-    def create_virtual_copies(self, photo_ids):
+    def photo_dimensions(self, photo_ids):
+        out = {}
+        for p in self._all(photo_ids):
+            w, h = int(p.extra.get("width") or 3024), int(p.extra.get("height") or 4032)
+            dev = self._develop[p.id]
+            frac_w = dev.get("CropRight", 1.0) - dev.get("CropLeft", 0.0)
+            frac_h = dev.get("CropBottom", 1.0) - dev.get("CropTop", 0.0)
+            if p.extra.get("stored_turned"):  # like a phone portrait: Crop* refer to the stored (landscape) frame
+                cw, ch = round(h * frac_w), round(w * frac_h)  # stored frame is h wide and w high
+                cw, ch = ch, cw
+            else:
+                cw, ch = round(w * frac_w), round(h * frac_h)
+            out[p.id] = {"width": cw, "height": ch, "full_width": w, "full_height": h,
+                         "orientation": "BC" if p.extra.get("stored_turned") else "AB"}
+        return {"dimensions": out}
+
+    def create_virtual_copies(self, photo_ids, copy_name=None):
         copies = []
         for p in self._all(photo_ids):
             n = sum(1 for k in self._photos if k.startswith(f"{p.id}-vc")) + 1
             cid = f"{p.id}-vc{n}"
             self._photos[cid] = dataclasses.replace(
-                p, id=cid, extra={**p.extra, "virtual_copy_of": p.id}
+                p, id=cid, extra={**p.extra, "virtual_copy_of": p.id, **({"copy_name": copy_name} if copy_name else {})}
             )
             self._develop[cid] = dict(self._develop[p.id])
             copies.append({"source_id": p.id, "id": cid})
@@ -466,6 +488,14 @@ class MockAdapter:
                 extra["location"] = ", ".join(v for v in place.values() if v)
             self._photos[p.id] = dataclasses.replace(p, extra=extra)
         return {"updated": len(photos), "gps_written": latitude is not None}
+
+    def rotate_photos(self, photo_ids, degrees):
+        photos = self._all(photo_ids)  # raises before any change
+        for p in photos:
+            extra = dict(p.extra)
+            extra["rotation"] = (int(extra.get("rotation") or 0) + degrees) % 360
+            self._photos[p.id] = dataclasses.replace(p, extra=extra)
+        return {"updated": len(photos), "rotated": len(photos), "failed": 0}
 
     def photo_paths(self, photo_ids):
         recs = {r["id"]: r["path"] for r in self._audit_records()}

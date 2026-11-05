@@ -259,3 +259,17 @@ async def test_write_name_dates_to_files_end_to_end(monkeypatch, tmp_path):
     # p3 had a time in the file, so it is not offered again; the failed p1 is tried again next time
     assert file_dates.done_ids() == {"p2", "p3", "p5"}
     assert (pics / files["p1"]).read_bytes() == b"original " + files["p1"].encode()  # restored after the failure
+
+
+async def test_rotate_photos_is_a_gated_write(monkeypatch):
+    assert (await server.rotate_photos(["p2"], 180, confirm=True))["code"] == "disabled"
+    monkeypatch.setenv("MHPHOTOS_ALLOW_WRITES", "1")
+    assert "error" in await server.rotate_photos(["p2"], 45)
+    dry = await server.rotate_photos(["p2"], 180)
+    assert dry["dry_run"] is True
+    assert (await server.get_photo_metadata("p2")).get("rotation") is None  # a dry run changes nothing
+    done = await server.rotate_photos(["p2"], 180, confirm=True)
+    assert done["applied"] is True and done["rotated"] == 1
+    assert (await server.get_photo_metadata("p2"))["rotation"] == 180
+    await server.rotate_photos(["p2"], 180, confirm=True)  # turning back
+    assert (await server.get_photo_metadata("p2"))["rotation"] == 0

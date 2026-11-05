@@ -472,30 +472,66 @@ end
 -- photos of the active source (and works reliably in the Library grid). So: grid view, source
 -- "All Photographs", select exactly one photo, create its copy. One copy per call keeps every
 -- copy unambiguously tied to its source. The Lightroom selection/view changes as a side effect.
+-- Lightroom copies the SELECTED photo, so the selection must be proven, not assumed: if it silently stays
+-- on another photo, the copy would be made of that one.
 local function selectOnly(photo)
   local cat = catalog()
   LrTasks.pcall(function() LrApplicationView.switchToModule('library') end)
   LrTasks.pcall(function() LrApplicationView.gridView() end)
   LrTasks.pcall(function() cat:setActiveSources(cat.kAllPhotos) end)
-  cat:setSelectedPhotos(photo, {})
+  local want = photo:getRawMetadata('uuid')
+  for _ = 1, 6 do
+    cat:setSelectedPhotos(photo, {})
+    local target = cat.getTargetPhoto and cat:getTargetPhoto() or nil
+    if target and target:getRawMetadata('uuid') == want then return end
+    LrTasks.sleep(0.5)
+  end
+  error('Lightroom did not select the photo ' .. tostring(want) .. ' (is it visible in All Photographs?); no copy was made', 0)
 end
 
 function Commands.create_virtual_copies(args)
   local photos = findAll(args.photo_ids)
   if #photos > 10 then error('at most 10 virtual copies per call', 0) end
+  local copyName = args.copy_name
+  if copyName == nil then copyName = 'MHPhotos' end
+  if type(copyName) ~= 'string' or copyName == '' or #copyName > 60 then error('copy_name must be text (max 60 characters)', 0) end
   local copies = {}
   for _, p in ipairs(photos) do
     selectOnly(p)
     local made
     writeAccess('MHPhotos: virtual copy', function()
-      made = catalog():createVirtualCopies('MHPhotos')
+      made = catalog():createVirtualCopies(copyName)
     end)
     if type(made) ~= 'table' or not made[1] then
       error('Lightroom created no virtual copy (is the Library module in grid view?)', 0)
     end
+    local master = made[1]:getRawMetadata('masterPhoto')
+    if master and master:getRawMetadata('uuid') ~= p:getRawMetadata('uuid') then
+      error('Lightroom made a virtual copy of ANOTHER photo (copy ' .. tostring(made[1]:getRawMetadata('uuid'))
+        .. ', master ' .. tostring(master:getRawMetadata('uuid')) .. '). Delete that copy in Lightroom.', 0)
+    end
     copies[#copies + 1] = { source_id = p:getRawMetadata('uuid'), id = made[1]:getRawMetadata('uuid') }
   end
   return { copies = copies }
+end
+
+-- Read only: size of each picture after rotation and crop (croppedDimensions); the server uses it to
+-- compute a crop for a social format.
+function Commands.photo_dimensions(args)
+  local out = {}
+  for i, photo in ipairs(findAll(args.photo_ids)) do
+    local c = photo:getRawMetadata('croppedDimensions')
+    local f = photo:getRawMetadata('dimensions')
+    local d = c or f
+    if type(d) == 'table' and d.width and d.height then
+      local rec = { width = d.width, height = d.height }
+      if type(f) == 'table' and f.width and f.height then rec.full_width, rec.full_height = f.width, f.height end
+      local ok, o = LrTasks.pcall(function() return photo:getRawMetadata('orientation') end)
+      if ok and type(o) == 'string' then rec.orientation = o end
+      out[args.photo_ids[i]] = rec
+    end
+  end
+  return { dimensions = out }
 end
 
 -- ---------------------------------------------------------------- catalog audit
@@ -537,6 +573,30 @@ function Commands.set_location(args)
     end
   end)
   return { updated = #photos, gps_written = gpsWritten, gps_error = gpsError }
+end
+
+-- Write: rotate photos clockwise by 90, 180 or 270 degrees (LrPhoto:rotateRight / rotateLeft). Each photo is
+-- tried on its own, a refusal is reported and does not stop the others. Turning back is another rotation.
+function Commands.rotate_photos(args)
+  local degrees = tonumber(args.degrees)
+  if degrees ~= 90 and degrees ~= 180 and degrees ~= 270 then
+    error('degrees must be 90, 180 or 270 (clockwise)', 0)
+  end
+  local photos = findAll(args.photo_ids)
+  local rotated, failed, firstError = 0, 0, nil
+  writeAccess('MHPhotos: Drehen', function()
+    for _, p in ipairs(photos) do
+      local ok, err = LrTasks.pcall(function()
+        if degrees == 270 then
+          p:rotateLeft()
+        else
+          for _ = 1, math.floor(degrees / 90) do p:rotateRight() end
+        end
+      end)
+      if ok then rotated = rotated + 1 else failed, firstError = failed + 1, firstError or tostring(err) end
+    end
+  end)
+  return { updated = #photos, rotated = rotated, failed = failed, error = firstError }
 end
 
 -- Read only: the file path of each photo (the server writes a capture time into JPEG files that way).
