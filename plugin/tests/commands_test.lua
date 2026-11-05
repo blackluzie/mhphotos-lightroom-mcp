@@ -412,6 +412,7 @@ p1.turns, p2.turns = 0, 0
 p1.raw.croppedDimensions = { width = 4032, height = 3024 }
 local dims = Commands.run('photo_dimensions', { photo_ids = { 'u1' } }).dimensions
 eq(dims.u1.width, 4032); eq(dims.u1.height, 3024)
+eq(dims.u1.full_width, 6000); eq(dims.u1.full_height, 4000)
 eq(pcall(Commands.run, 'photo_dimensions', { photo_ids = { 'gone' } }), false)
 
 -- photo_paths: read only, the file path per photo id; unknown ids abort

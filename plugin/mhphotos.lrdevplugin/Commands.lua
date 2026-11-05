@@ -520,8 +520,14 @@ end
 function Commands.photo_dimensions(args)
   local out = {}
   for i, photo in ipairs(findAll(args.photo_ids)) do
-    local d = photo:getRawMetadata('croppedDimensions') or photo:getRawMetadata('dimensions')
-    if type(d) == 'table' and d.width and d.height then out[args.photo_ids[i]] = { width = d.width, height = d.height } end
+    local c = photo:getRawMetadata('croppedDimensions')
+    local f = photo:getRawMetadata('dimensions')
+    local d = c or f
+    if type(d) == 'table' and d.width and d.height then
+      local rec = { width = d.width, height = d.height }
+      if type(f) == 'table' and f.width and f.height then rec.full_width, rec.full_height = f.width, f.height end
+      out[args.photo_ids[i]] = rec
+    end
   end
   return { dimensions = out }
 end

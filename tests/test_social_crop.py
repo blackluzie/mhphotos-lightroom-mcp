@@ -91,3 +91,15 @@ def test_straighten_with_aspect_and_limits():
     assert cw / ch == pytest.approx(0.8, rel=1e-3)
     with pytest.raises(ValueError):
         social_crop.crop_settings(6000, 4000, "4:5", angle=50)
+
+
+@pytest.mark.parametrize(("size", "expected"), [
+    ({"width": 3024, "height": 4032}, (3024, 4032)),
+    # cropped size is stale (still the old 4:5 crop of the same picture): the uncropped size wins
+    ({"width": 3024, "height": 3780, "full_width": 3024, "full_height": 4032}, (3024, 4032)),
+    # uncropped size comes unrotated while the cropped one is portrait: turn it
+    ({"width": 3024, "height": 4032, "full_width": 4032, "full_height": 3024}, (3024, 4032)),
+    ({"width": 4032, "height": 3024, "full_width": 4032, "full_height": 3024}, (4032, 3024)),
+])
+def test_uncropped_size(size, expected):
+    assert social_crop.uncropped_size(size) == expected
