@@ -401,7 +401,17 @@ class MockAdapter:
     def photo_dimensions(self, photo_ids):
         out = {}
         for p in self._all(photo_ids):
-            out[p.id] = {"width": int(p.extra.get("width") or 3024), "height": int(p.extra.get("height") or 4032)}
+            w, h = int(p.extra.get("width") or 3024), int(p.extra.get("height") or 4032)
+            dev = self._develop[p.id]
+            frac_w = dev.get("CropRight", 1.0) - dev.get("CropLeft", 0.0)
+            frac_h = dev.get("CropBottom", 1.0) - dev.get("CropTop", 0.0)
+            if p.extra.get("stored_turned"):  # like a phone portrait: Crop* refer to the stored (landscape) frame
+                cw, ch = round(h * frac_w), round(w * frac_h)  # stored frame is h wide and w high
+                cw, ch = ch, cw
+            else:
+                cw, ch = round(w * frac_w), round(h * frac_h)
+            out[p.id] = {"width": cw, "height": ch, "full_width": w, "full_height": h,
+                         "orientation": "BC" if p.extra.get("stored_turned") else "AB"}
         return {"dimensions": out}
 
     def create_virtual_copies(self, photo_ids, copy_name=None):
