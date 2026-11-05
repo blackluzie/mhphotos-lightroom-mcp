@@ -22,6 +22,14 @@ claude mcp add mhphotos-lightroom --env MHPHOTOS_ADAPTER=bridge -- \
 From a clone instead: `pip install -e '.[dev]'` (then `mhphotos-lightroom-mcp ...`); the committed `.mcp.json` starts the server
 in bridge mode with reads only.
 
+## Skill `/mhphotos` (Foto-Durchsicht)
+
+`skills/mhphotos/SKILL.md` packt den Ablauf der Durchsicht zusammen: einen Monat, eine Reise oder eine Sammlung sichten, Sterne,
+Fotobuch- und Aussortieren-Vorschläge, Titel und Stichwörter, S/W, Presets, 4:5/9:16-Zuschnitte und Begradigung.
+Aufruf zum Beispiel `/mhphotos 2026/10` oder „alle Fotos aus 2026/09 Südtirol in ein Album legen und optimieren“.
+Installation: in Claude Code den Ordner `skills/mhphotos` nach `~/.claude/skills/` kopieren; in claude.ai den Ordner als ZIP unter
+Einstellungen → Fähigkeiten (Skills) hochladen. Der MHPhotos-Lightroom-Connector muss verbunden sein.
+
 ## Remote clients and rebuilding
 
 The private HTTP deployment supports explicitly allowlisted OAuth MCP clients.
