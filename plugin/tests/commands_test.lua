@@ -296,6 +296,9 @@ eq(pcall(Commands.run, 'create_virtual_copies', { photo_ids = {} }), false)
 -- the copy is made from the Library grid, with 'All Photographs' as source and only that photo selected
 eq(table.concat(viewCalls, ','), 'module:library,grid'); eq(activeSource, 'kAllPhotos')
 eq(selected.raw.uuid, 'u1'); eq(virtualCopyName, 'MHPhotos')
+Commands.run('create_virtual_copies', { photo_ids = { 'u1' }, copy_name = 'Insta 4:5' })
+eq(virtualCopyName, 'Insta 4:5', 'the copy gets the requested name')
+eq(pcall(Commands.run, 'create_virtual_copies', { photo_ids = { 'u1' }, copy_name = '' }), false)
 -- write access never queues: it waits (asynchronous=false) with a timeout
 eq(lastWriteOpts.asynchronous, false); eq(lastWriteOpts.timeout, 15)
 -- a collection SET id (no getPhotos/addPhotos) gets a clear message, not a Lua crash
@@ -392,6 +395,12 @@ eq(pcall(Commands.run, 'rotate_photos', { photo_ids = { 'u1' }, degrees = 45 }),
 eq(pcall(Commands.run, 'rotate_photos', { photo_ids = { 'gone' }, degrees = 90 }), false)
 eq(writes, 0, 'nothing changed after bad input')
 p1.turns, p2.turns = 0, 0
+
+-- photo_dimensions: read only, size after crop per photo id
+p1.raw.croppedDimensions = { width = 4032, height = 3024 }
+local dims = Commands.run('photo_dimensions', { photo_ids = { 'u1' } }).dimensions
+eq(dims.u1.width, 4032); eq(dims.u1.height, 3024)
+eq(pcall(Commands.run, 'photo_dimensions', { photo_ids = { 'gone' } }), false)
 
 -- photo_paths: read only, the file path per photo id; unknown ids abort
 local pp = Commands.run('photo_paths', { photo_ids = { 'u1', 'u2' } }).paths

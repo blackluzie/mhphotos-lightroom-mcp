@@ -483,12 +483,15 @@ end
 function Commands.create_virtual_copies(args)
   local photos = findAll(args.photo_ids)
   if #photos > 10 then error('at most 10 virtual copies per call', 0) end
+  local copyName = args.copy_name
+  if copyName == nil then copyName = 'MHPhotos' end
+  if type(copyName) ~= 'string' or copyName == '' or #copyName > 60 then error('copy_name must be text (max 60 characters)', 0) end
   local copies = {}
   for _, p in ipairs(photos) do
     selectOnly(p)
     local made
     writeAccess('MHPhotos: virtual copy', function()
-      made = catalog():createVirtualCopies('MHPhotos')
+      made = catalog():createVirtualCopies(copyName)
     end)
     if type(made) ~= 'table' or not made[1] then
       error('Lightroom created no virtual copy (is the Library module in grid view?)', 0)
@@ -496,6 +499,17 @@ function Commands.create_virtual_copies(args)
     copies[#copies + 1] = { source_id = p:getRawMetadata('uuid'), id = made[1]:getRawMetadata('uuid') }
   end
   return { copies = copies }
+end
+
+-- Read only: size of each picture after rotation and crop (croppedDimensions); the server uses it to
+-- compute a crop for a social format.
+function Commands.photo_dimensions(args)
+  local out = {}
+  for i, photo in ipairs(findAll(args.photo_ids)) do
+    local d = photo:getRawMetadata('croppedDimensions') or photo:getRawMetadata('dimensions')
+    if type(d) == 'table' and d.width and d.height then out[args.photo_ids[i]] = { width = d.width, height = d.height } end
+  end
+  return { dimensions = out }
 end
 
 -- ---------------------------------------------------------------- catalog audit

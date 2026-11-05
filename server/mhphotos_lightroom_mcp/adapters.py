@@ -193,8 +193,11 @@ class CatalogAdapter(Protocol):
     def remove_keywords(self, photo_ids: list[str], keywords: list[str]) -> dict[str, Any]:
         """Only used by undo, to remove keywords this server added."""
 
-    def create_virtual_copies(self, photo_ids: list[str]) -> dict[str, Any]:
-        """{"copies": [{"source_id", "id"}]}"""
+    def create_virtual_copies(self, photo_ids: list[str], copy_name: str | None = None) -> dict[str, Any]:
+        """{"copies": [{"source_id", "id"}]}; copy_name is the name Lightroom shows for the copies."""
+
+    def photo_dimensions(self, photo_ids: list[str]) -> dict[str, Any]:
+        """{"dimensions": {photo id: {"width", "height"}}} after rotation and crop"""
 
     def apply_develop_settings(
         self, photo_ids: list[str], settings: dict[str, Any]
@@ -395,13 +398,19 @@ class MockAdapter:
             self._photos[p.id] = dataclasses.replace(p, keywords=kept)
         return {"updated": len(photo_ids)}
 
-    def create_virtual_copies(self, photo_ids):
+    def photo_dimensions(self, photo_ids):
+        out = {}
+        for p in self._all(photo_ids):
+            out[p.id] = {"width": int(p.extra.get("width") or 3024), "height": int(p.extra.get("height") or 4032)}
+        return {"dimensions": out}
+
+    def create_virtual_copies(self, photo_ids, copy_name=None):
         copies = []
         for p in self._all(photo_ids):
             n = sum(1 for k in self._photos if k.startswith(f"{p.id}-vc")) + 1
             cid = f"{p.id}-vc{n}"
             self._photos[cid] = dataclasses.replace(
-                p, id=cid, extra={**p.extra, "virtual_copy_of": p.id}
+                p, id=cid, extra={**p.extra, "virtual_copy_of": p.id, **({"copy_name": copy_name} if copy_name else {})}
             )
             self._develop[cid] = dict(self._develop[p.id])
             copies.append({"source_id": p.id, "id": cid})
