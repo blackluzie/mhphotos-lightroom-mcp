@@ -65,3 +65,19 @@ def crop_settings(width: int, height: int, aspect: str, focus_x: float = 0.5, fo
         bottom = top + frac
     return {"CropLeft": round(left, 6), "CropRight": round(right, 6), "CropTop": round(top, 6),
             "CropBottom": round(bottom, 6), "CropAngle": 0.0}
+
+
+def uncropped_size(size: dict[str, int]) -> tuple[int, int]:
+    """Size of the whole picture, turned the way it is shown, from Lightroom's size record.
+
+    Lightroom's cropped size can lag behind a crop that was just reset, so the uncropped size is preferred; it is
+    turned if it is the other way round than the cropped one (a picture straight from the camera, not yet rotated).
+    """
+    cw, ch = int(size["width"]), int(size["height"])
+    fw, fh = size.get("full_width"), size.get("full_height")
+    if not fw or not fh:
+        return cw, ch
+    fw, fh = int(fw), int(fh)
+    same = abs(cw / ch - fw / fh) < 0.02
+    turned = abs(cw / ch - fh / fw) < 0.02
+    return (fh, fw) if turned and not same else (fw, fh)

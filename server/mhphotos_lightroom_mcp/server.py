@@ -515,15 +515,17 @@ async def crop_to_aspect(
             targets = [c["id"] for c in copies]
         _adapter.apply_develop_settings(targets, social_crop.FULL_FRAME)  # a copy inherits the crop of its source
         dims = _adapter.photo_dimensions(targets).get("dimensions") or {}
-        cropped = []
+        cropped, used = [], {}
         for t in targets:
             size = dims.get(t)
             if not size:
                 raise NotFoundError(f"Lightroom reported no size for {t}")
-            settings = social_crop.crop_settings(int(size["width"]), int(size["height"]), aspect, focus_x, focus_y, angle)
+            width, height = social_crop.uncropped_size(size)
+            settings = social_crop.crop_settings(width, height, aspect, focus_x, focus_y, angle)
             _adapter.apply_develop_settings([t], settings)
             cropped.append(t)
-        return {"cropped": len(cropped), "aspect": aspect, "copies": copies or None, "photo_ids": cropped}
+            used[t] = {"size": [width, height], "lightroom_size": size, "crop": settings}
+        return {"cropped": len(cropped), "aspect": aspect, "copies": copies or None, "photo_ids": cropped, "used": used}
 
     return await _edit(
         photo_ids, {"crop_aspect": aspect, "focus": [focus_x, focus_y], "angle": angle, "virtual_copies": virtual_copies}, apply,
