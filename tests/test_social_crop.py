@@ -1,5 +1,7 @@
 """Crops for Instagram formats: the geometry and the tool."""
 
+import dataclasses
+
 import pytest
 from mhphotos_lightroom_mcp import server, social_crop
 
@@ -103,3 +105,26 @@ def test_straighten_with_aspect_and_limits():
 ])
 def test_uncropped_size(size, expected):
     assert social_crop.uncropped_size(size) == expected
+
+
+def test_to_raw_orientation_turns_the_crop_into_the_stored_frame():
+    shown = {"CropLeft": 0.125, "CropRight": 0.875, "CropTop": 0.0, "CropBottom": 1.0, "CropAngle": 0.0}
+    cw = social_crop.to_raw_orientation(shown, "BC")
+    assert (cw["CropLeft"], cw["CropRight"], cw["CropTop"], cw["CropBottom"]) == pytest.approx((0.0, 1.0, 0.125, 0.875))
+    ccw = social_crop.to_raw_orientation(shown, "DA")
+    assert (ccw["CropLeft"], ccw["CropRight"], ccw["CropTop"], ccw["CropBottom"]) == pytest.approx((0.0, 1.0, 0.125, 0.875))
+    corner = {"CropLeft": 0.0, "CropRight": 0.5, "CropTop": 0.0, "CropBottom": 1.0}  # left half as shown
+    cw = social_crop.to_raw_orientation(corner, "BC")  # clockwise: shown left is stored bottom
+    assert (cw["CropTop"], cw["CropBottom"]) == pytest.approx((0.5, 1.0))
+    ccw = social_crop.to_raw_orientation(corner, "DA")  # counter-clockwise: shown left is stored top
+    assert (ccw["CropTop"], ccw["CropBottom"]) == pytest.approx((0.0, 0.5))
+
+
+async def test_crop_to_aspect_fixes_a_picture_stored_turned(monkeypatch):
+    monkeypatch.setenv("MHPHOTOS_ALLOW_WRITES", "1")
+    server._adapter._photos["p2"] = dataclasses.replace(
+        server._adapter._photos["p2"], extra={**server._adapter._photos["p2"].extra, "stored_turned": True})
+    done = await server.crop_to_aspect(["p2"], "9:16", focus_x=0.5, virtual_copies=False, confirm=True)
+    assert done["applied"] is True
+    size = server._adapter.photo_dimensions(["p2"])["dimensions"]["p2"]
+    assert size["width"] / size["height"] == pytest.approx(9 / 16, rel=0.01)

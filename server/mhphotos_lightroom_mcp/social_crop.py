@@ -81,3 +81,26 @@ def uncropped_size(size: dict[str, int]) -> tuple[int, int]:
     same = abs(cw / ch - fw / fh) < 0.02
     turned = abs(cw / ch - fh / fw) < 0.02
     return (fh, fw) if turned and not same else (fw, fh)
+
+
+def to_raw_orientation(settings: dict[str, float], orientation: str | None) -> dict[str, float]:
+    """The same crop in the stored (unrotated) frame of a picture Lightroom shows turned by 90 degrees.
+
+    Lightroom's Crop* values refer to the picture as stored, not as shown. A portrait photo from a phone is stored
+    landscape and shown turned clockwise ("BC", the usual case); "DA" is turned counter-clockwise.
+    """
+    left, right, top, bottom = (settings[k] for k in ("CropLeft", "CropRight", "CropTop", "CropBottom"))
+    if orientation == "DA":
+        raw = {"CropLeft": 1 - bottom, "CropRight": 1 - top, "CropTop": left, "CropBottom": right}
+    else:
+        raw = {"CropLeft": top, "CropRight": bottom, "CropTop": 1 - right, "CropBottom": 1 - left}
+    return {**settings, **{k: round(v, 6) for k, v in raw.items()}}
+
+
+def crop_shape_ok(settings: dict[str, float], width: int, height: int, result: dict[str, int]) -> bool:
+    """Does Lightroom's reported size after the crop match the crop that was meant (shape only, 2 % tolerance)?"""
+    want_w = (settings["CropRight"] - settings["CropLeft"]) * width
+    want_h = (settings["CropBottom"] - settings["CropTop"]) * height
+    if want_w <= 0 or want_h <= 0 or not result.get("width") or not result.get("height"):
+        return False
+    return abs((result["width"] / result["height"]) / (want_w / want_h) - 1) < 0.02

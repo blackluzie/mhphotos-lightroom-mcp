@@ -526,6 +526,8 @@ function Commands.photo_dimensions(args)
     if type(d) == 'table' and d.width and d.height then
       local rec = { width = d.width, height = d.height }
       if type(f) == 'table' and f.width and f.height then rec.full_width, rec.full_height = f.width, f.height end
+      local ok, o = LrTasks.pcall(function() return photo:getRawMetadata('orientation') end)
+      if ok and type(o) == 'string' then rec.orientation = o end
       out[args.photo_ids[i]] = rec
     end
   end

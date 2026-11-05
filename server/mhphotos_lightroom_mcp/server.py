@@ -523,8 +523,17 @@ async def crop_to_aspect(
             width, height = social_crop.uncropped_size(size)
             settings = social_crop.crop_settings(width, height, aspect, focus_x, focus_y, angle)
             _adapter.apply_develop_settings([t], settings)
+            after = (_adapter.photo_dimensions([t]).get("dimensions") or {}).get(t) or {}
+            if not social_crop.crop_shape_ok(settings, width, height, after):
+                # a picture stored turned (phone portrait): Lightroom reads Crop* in the stored frame
+                settings = social_crop.to_raw_orientation(settings, size.get("orientation"))
+                _adapter.apply_develop_settings([t], settings)
+                after = (_adapter.photo_dimensions([t]).get("dimensions") or {}).get(t) or {}
+                expected = social_crop.ASPECTS.get(aspect)
+                if expected and abs(after.get("width", 0) / max(after.get("height", 1), 1) - expected[0] / expected[1]) > 0.02 * expected[0] / expected[1] and not angle:
+                    raise NotFoundError(f"Lightroom cropped {t} to {after}, not {aspect}; check it in Lightroom")
             cropped.append(t)
-            used[t] = {"size": [width, height], "lightroom_size": size, "crop": settings}
+            used[t] = {"size": [width, height], "lightroom_size": size, "crop": settings, "result_size": after}
         return {"cropped": len(cropped), "aspect": aspect, "copies": copies or None, "photo_ids": cropped, "used": used}
 
     return await _edit(
