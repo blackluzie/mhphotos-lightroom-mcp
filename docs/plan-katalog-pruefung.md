@@ -173,13 +173,17 @@ Jahre aus anderen Jahrzehnten, dazu Jahres-Ordner auf oberster Ebene, `ohne Datu
 
 ## Auswahlregeln des Eigentümers (gelten für alle Auswertungen)
 
-- **MHPhotos (Homepage) und Instagram: keine Familie.** Fotos mit der Familie (Selfies, Gruppen, Porträts, die Kinder) kommen nicht dorthin.
-  **Fremde Personen sind erlaubt, wenn es ein Spitzenfoto ist** (Straßenfotografie: Person in der Gasse, verregnete Gasse mit Regenschirmen,
-  Menschen als Teil der Szene, von hinten oder nicht erkennbar). Zweifelsfälle (gehört die Person zur Familie?) frage ich nach.
+- **MHPhotos (Homepage) und Instagram: standardmäßig keine Familie.** Fotos mit der Familie (Selfies, Gruppen, Porträts, die Kinder) werden nicht
+  automatisch dafür vorgesehen. **Fremde Personen sind erlaubt, wenn es ein Spitzenfoto ist** (Straßenfotografie: Person in der Gasse, verregnete Gasse
+  mit Regenschirmen, Menschen als Teil der Szene). Zweifelsfälle (gehört die Person zur Familie?) frage ich nach.
+- **Lieber ein Foto zu viel vorschlagen:** Ein wirklich schönes Foto mit Familie (zum Beispiel ein Kind von hinten vor einem Wandbild) schlage ich mit
+  Hinweis vor. Eigentümer entscheidet; es geht nichts automatisch online.
 - **Gute Fotos mit Personen** (Familie, Selfies, Gruppenbilder) in die eigene Sammlung **„Fotobuch Hoffis 2026“** legen, als Vorrat für ein Fotobuch.
-- **Sterne:** nur für Fotos ohne Familie (5 = Instagram/MHPhotos-tauglich, 4 = sehr gut, Reserve). Bestehende Sterne nie senken.
-  Fotos mit der Familie werden über die Sammlung „Fotobuch Hoffis 2026“ markiert, nicht über Sterne, damit Filter nach Sternen (Instagram-Kandidaten,
-  MHPhotos-Export) nie Familienfotos treffen.
+- **Sterne:** 5 = Spitzenfoto (Instagram/MHPhotos-tauglich), 4 = sehr gut (Reserve). Bestehende Sterne nie senken. Gelungene Familienfotos
+  bekommen höchstens 4 Sterne und stehen zusätzlich im Fotobuch; 5 Sterne sind für Fotos reserviert, die online gehen könnten. Filter für
+  Instagram-Kandidaten und MHPhotos-Export nutzen 5 Sterne, treffen also keine Familienfotos, außer der Eigentümer gibt eines frei.
+- **Doppelte Serien** (Selfie-Reihen, Mehrfachaufnahmen): pro Serie bleibt das beste Foto, die übrigen kommen in
+  „Kreuzfahrt 2026 – Aussortieren (Vorschlag)“. Gelöscht wird nichts; das entscheidet der Eigentümer in Lightroom.
 - Lightroom hat in der Sammlung „Kreuzfahrt 2026“ schon automatische Stichwörter: `Person` (210 von 843) und `Gesicht` (164). Sie helfen beim
   Vorsortieren, ersetzen die Sichtprüfung aber nicht.
 - Sammlungen für die Handy-Synchronisierung brauchen den Haken „Mit Lightroom synchronisieren“ von Hand (das SDK kann ihn nicht setzen).
