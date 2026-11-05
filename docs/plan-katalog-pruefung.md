@@ -131,3 +131,59 @@ Jahre aus anderen Jahrzehnten, dazu Jahres-Ordner auf oberster Ebene, `ohne Datu
   Lightroom die Sammlung „Prüfen › Sonstiges › Datum in Datei geschrieben“ markieren und *Metadaten > Metadaten aus
   Datei lesen*, dann die Prüfung für das Jahr wiederholen. **Nicht möglich:** Dateien verschieben oder umbenennen
   (Lightroom-SDK); „Ordner synchronisieren“ würde neue Fotos anlegen und Bearbeitungen verlieren.
+
+## Offene Punkte (Stand 2026-11-04, abends)
+
+**Lightroom-Verbindung (wichtig für alles Weitere)**
+- Bei längeren Aufrufen kam mehrfach „Lightroom did not answer … within 30s“ und danach „plugin is not connected“.
+  Vermutung: App Nap drosselt Lightroom im Hintergrund. Vorbereiten: Lightroom vorn lassen, `caffeinate -di` im Terminal,
+  App Nap für Lightroom ausschalten (`defaults write <Bundle-ID> NSAppSleepDisabled -bool YES`; Bundle-ID mit
+  `osascript -e 'id of app "Adobe Lightroom Classic"'` ermitteln), Lightroom neu starten.
+- `write_name_dates_to_files` in Blöcken zu **15** statt 50: 50 dauern über das NAS länger als die 60 s des Connectors.
+- In den claude.ai-Einstellungen zeigte der Connector „keine Tools“, obwohl die Sitzung ihn nutzen konnte: trennen und neu verbinden.
+
+**Datum aus dem Dateinamen (2020, 545 Kandidaten von 598)**
+- Geschrieben: 10 Fotos sicher (1 eingelesen, 9 noch nicht). Ein Aufruf mit 50 lief in die Zeitgrenze, deshalb ist unklar, wie
+  viele davon schon in den Dateien stehen. Das ist unkritisch (Sicherung in `~/.mhphotos-lightroom-mcp/file-backups`, schon
+  beschriebene Dateien werden übersprungen), aber diese Fotos fehlen in der Sammlung „Datum in Datei geschrieben“.
+  Abhilfe: `catalog_audit_collections(kind="date_in_name", confirm=true)` legt eine Sammlung mit allen Fotos mit Datum im Namen an,
+  diese komplett markieren (Cmd+A) und *Metadaten > Metadaten aus Datei lesen*.
+- 53 Namen mit Platzhalterdatum (z. B. `1899-01-01_…`) werden bewusst ausgelassen; ansehen und von Hand klären.
+- Danach die Prüfung für 2020 wiederholen: Die Fotos gehören nach 2019 (`2010-2019/2019/…`).
+
+**Ordnerstruktur**
+- Lightroom kann Ordner nicht zusammenführen („Ein Ordner mit dem Namen … existiert bereits“). Dann Unterordner (Monatsordner)
+  oder Fotos (Unterordner einbeziehen, Cmd+A) auf den vorhandenen Zielordner ziehen, leere Quellordner entfernen.
+  Verschieben am NAS plus „Synchronisieren“ ist keine Lösung (neue Fotos, Bearbeitungen weg); nur „Fehlenden Ordner suchen“ je Ordner.
+- Jahresordner auf oberster Ebene (`2010`, `2011`, `2022`, `2023`, `2026` …) in ihre Jahrzehnt-Ordner bringen.
+- 2020: 3.373 Fotos ohne Tagesordner, 8 mit falschem Jahr (Mannschaftsfoto, Videos). Sammlungen pro Tag oder Monat nur nach Okay anlegen.
+- Prüfung für die übrigen Jahre (2021–2026, 2010–2019, vor 2000) und eine Liste der Verschiebungen auf Ordner-Ebene.
+
+**Aufräumen aus der Prüfung 2020** (alles nur nach Okay, nichts wird gelöscht oder verschoben)
+- 194 nahezu gleiche Kopien (202 zum Entfernen), 8 bestätigte und 27 mögliche Duplikate, 411 Nicht-Fotos, 124 Videos ohne Datum,
+  149 sonstige ohne Datum, 5 Fotos im Ordner „ohne Datum“ mit Aufnahmedatum.
+
+**Neue Aufgabe: Sammlung „Aus Lightroom/Kreuzfahrt 2026“ analysieren**
+- 843 Fotos (DNG, HEIC, MOV), iPhone 17 Pro und iPhone 13, Aufnahmen ab 19.10.2026, GPS meist vorhanden, Stichwörter teils schon da.
+  Mögliche Auswertung: Best-of, Aussortieren, Stichwörter/Titel, Orte prüfen, Instagram-Wochenplan.
+
+**Weiter offen (aus früheren Runden)**
+- n8n: Workflows importieren (Status-Push, Montagsbericht, Fehler-Push), Reel-Renderer auf Hetzner starten, Swift-Test für das Löschen in der iOS-Ansicht (#2582).
+- Excire-Plugin bewerten, gemergte Branches auf GitHub löschen.
+
+## Auswahlregeln des Eigentümers (gelten für alle Auswertungen)
+
+- **MHPhotos (Homepage) und Instagram: standardmäßig keine Familie.** Fotos mit der Familie (Selfies, Gruppen, Porträts, die Kinder) werden nicht
+  automatisch dafür vorgesehen. **Fremde Personen sind erlaubt, wenn es ein Spitzenfoto ist** (Straßenfotografie: Person in der Gasse, verregnete Gasse
+  mit Regenschirmen, Menschen als Teil der Szene). Zweifelsfälle (gehört die Person zur Familie?) frage ich nach.
+- **Lieber ein Foto zu viel vorschlagen:** Ein wirklich schönes Foto mit Familie (zum Beispiel ein Kind von hinten vor einem Wandbild) schlage ich mit
+  Hinweis vor. Eigentümer entscheidet; es geht nichts automatisch online.
+- **Gute Fotos mit Personen** (Familie, Selfies, Gruppenbilder) in die eigene Sammlung **„Fotobuch Hoffis 2026“** legen, als Vorrat für ein Fotobuch.
+- **Sterne:** 5 = Spitzenfoto (Instagram/MHPhotos-tauglich), 4 = sehr gut (Reserve). Bestehende Sterne nie senken. Gelungene Familienfotos
+  bekommen höchstens 4 Sterne und stehen zusätzlich im Fotobuch; 5 Sterne sind für Fotos reserviert, die online gehen könnten. Filter für
+  Instagram-Kandidaten und MHPhotos-Export nutzen 5 Sterne, treffen also keine Familienfotos, außer der Eigentümer gibt eines frei.
+- **Doppelte Serien** (Selfie-Reihen, Mehrfachaufnahmen): pro Serie bleibt das beste Foto, die übrigen kommen in
+  „Kreuzfahrt 2026 – Aussortieren (Vorschlag)“. Gelöscht wird nichts; das entscheidet der Eigentümer in Lightroom.
+- Lightroom hat in der Sammlung „Kreuzfahrt 2026“ schon automatische Stichwörter: `Person` (210 von 843) und `Gesicht` (164). Sie helfen beim
+  Vorsortieren, ersetzen die Sichtprüfung aber nicht.
+- Sammlungen für die Handy-Synchronisierung brauchen den Haken „Mit Lightroom synchronisieren“ von Hand (das SDK kann ihn nicht setzen).
