@@ -324,8 +324,12 @@ class BridgeAdapter:
     def remove_keywords(self, photo_ids, keywords):
         return self._call("remove_keywords", {"photo_ids": photo_ids, "keywords": keywords})
 
-    def create_virtual_copies(self, photo_ids):
-        return self._call("create_virtual_copies", {"photo_ids": photo_ids}, timeout=120.0)
+    def create_virtual_copies(self, photo_ids, copy_name=None):
+        args = {"photo_ids": photo_ids, **({"copy_name": copy_name} if copy_name else {})}
+        return self._call("create_virtual_copies", args, timeout=120.0)
+
+    def photo_dimensions(self, photo_ids):
+        return self._call("photo_dimensions", {"photo_ids": photo_ids})
 
     def set_rating(self, photo_ids, rating):
         return self._call("set_rating", {"photo_ids": photo_ids, "rating": rating})

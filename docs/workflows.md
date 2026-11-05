@@ -205,3 +205,11 @@ Needs `--allow-instagram` and the reel renderer on the Hetzner host (`apps-platf
 3. Drag photos into the collection. Within about 15 minutes the plugin exports them, the HTTP service checks and
    batches them (bad files go to `~/Pictures/MHPhotos-Inbox/fehler/`), n8n uploads them, and they wait in the inbox.
 
+
+## 19. Instagram formats (4:5 feed, 9:16 stories) as virtual copies
+1. Pick the photo, look at it (`get_photo_previews`) and choose the subject: where is it (focus_x / focus_y, 0 = left/top, 1 = right/bottom)?
+2. `crop_to_aspect(photo_ids, aspect="4:5", focus_x, focus_y)`, dry run first: each photo gets a virtual copy "Insta 4:5"
+   that is cropped; the original stays as it is. `aspect="9:16"` makes "Story 9:16" copies. At most 10 photos per call,
+   one call per focus point.
+3. Check the copy with `get_photo_previews`; a different crop is another call with a new focus (delete the old copy in Lightroom).
+4. Virtual copies can also get a look: `apply_preset` or `apply_develop_settings` (for black and white: `ConvertToGrayscale`).

@@ -30,6 +30,7 @@ from . import (
     permissions,
     preset_xmp,
     publishing,
+    social_crop,
 )
 from .adapters import (
     COLOR_LABELS,
@@ -458,20 +459,71 @@ async def add_to_collection(
 
 @mcp.tool()
 async def create_virtual_copies(
-    photo_ids: list[str], confirm: bool = False, ctx: Context | None = None
+    photo_ids: list[str], copy_name: str | None = None, confirm: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Create virtual copies (max 10) so edits can be tried without touching the originals.
 
     Apply presets/settings to the returned copy ids, compare with get_photo_previews, keep or
     delete the copy in Lightroom. Lightroom only copies the selected photos, so the plugin
-    switches to the Library grid and "All Photographs" and changes your selection. Needs opt-in.
+    switches to the Library grid and "All Photographs" and changes your selection. copy_name (max 60
+    characters) is the name Lightroom shows for the copies, e.g. "Insta 4:5". Needs opt-in.
     """
     if len(photo_ids) > 10:
         return {"error": "At most 10 virtual copies per call"}
+    if copy_name is not None and not 0 < len(copy_name.strip()) <= 60:
+        return {"error": "copy_name must be 1-60 characters"}
+    name = copy_name.strip() if copy_name else None
     return await _edit(
-        photo_ids, {"virtual_copies": len(photo_ids)}, lambda: _adapter.create_virtual_copies(photo_ids),
+        photo_ids, {"virtual_copies": len(photo_ids), **({"copy_name": name} if name else {})},
+        lambda: _adapter.create_virtual_copies(photo_ids, name),
         confirm, ctx=ctx, tool="create_virtual_copies",
         summary="Virtuelle Kopien anlegen (Auswahl in Lightroom ändert sich)",
+    )
+
+
+@mcp.tool()
+async def crop_to_aspect(
+    photo_ids: list[str], aspect: str = "4:5", focus_x: float = 0.5, focus_y: float = 0.5,
+    virtual_copies: bool = True, confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Crop up to 10 photos to a social format, as virtual copies by default so the originals stay as they are.
+
+    aspect: 4:5 (Instagram feed, portrait), 9:16 (Stories, Reels), 1:1, 3:4, 2:3, 16:9 or 1.91:1. The crop keeps as
+    much of the picture as the format allows, centred on (focus_x, focus_y): 0 = left/top, 1 = right/bottom, 0.5 = middle;
+    choose the focus from the picture (the subject), one call per focus. With virtual_copies=true each photo first gets a
+    virtual copy named "Insta 4:5" (or the format) and the crop goes on the copy; false crops the photo itself and
+    replaces an existing crop. Check the result with get_photo_previews. Dry run unless confirm=true; needs operator opt-in.
+    """
+    if aspect not in social_crop.ASPECTS:
+        return {"error": f"aspect must be one of: {', '.join(social_crop.ASPECTS)}"}
+    if len(photo_ids) > 10:
+        return {"error": "At most 10 photos per call"}
+    if not (0 <= focus_x <= 1 and 0 <= focus_y <= 1):
+        return {"error": "focus_x and focus_y must be between 0 and 1"}
+    label = "Story" if aspect == "9:16" else "Insta"
+
+    def apply() -> dict[str, Any]:
+        targets, copies = list(photo_ids), []
+        if virtual_copies:
+            made = _adapter.create_virtual_copies(photo_ids, f"{label} {aspect}")
+            copies = made.get("copies") or []
+            targets = [c["id"] for c in copies]
+        _adapter.apply_develop_settings(targets, social_crop.FULL_FRAME)  # a copy inherits the crop of its source
+        dims = _adapter.photo_dimensions(targets).get("dimensions") or {}
+        cropped = []
+        for t in targets:
+            size = dims.get(t)
+            if not size:
+                raise NotFoundError(f"Lightroom reported no size for {t}")
+            settings = social_crop.crop_settings(int(size["width"]), int(size["height"]), aspect, focus_x, focus_y)
+            _adapter.apply_develop_settings([t], settings)
+            cropped.append(t)
+        return {"cropped": len(cropped), "aspect": aspect, "copies": copies or None, "photo_ids": cropped}
+
+    return await _edit(
+        photo_ids, {"crop_aspect": aspect, "focus": [focus_x, focus_y], "virtual_copies": virtual_copies}, apply,
+        confirm, ctx=ctx, tool="crop_to_aspect",
+        summary=f"Zuschnitt {aspect}{' auf virtuellen Kopien' if virtual_copies else ''}",
     )
 
 
@@ -2355,7 +2407,7 @@ TOOLSETS: dict[str, set[str]] = {
     },
     "develop": {
         "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",
-        "create_virtual_copies",
+        "create_virtual_copies", "crop_to_aspect",
     },
     "mhphotos": {
         "send_to_mhphotos_inbox", "mhphotos_galleries", "mhphotos_inbox", "mhphotos_analyze_inbox",
