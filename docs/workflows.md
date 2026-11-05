@@ -212,4 +212,12 @@ Needs `--allow-instagram` and the reel renderer on the Hetzner host (`apps-platf
    that is cropped; the original stays as it is. `aspect="9:16"` makes "Story 9:16" copies. At most 10 photos per call,
    one call per focus point.
 3. Check the copy with `get_photo_previews`; a different crop is another call with a new focus (delete the old copy in Lightroom).
+   Tested in Lightroom (plugin 0.1.14): 4:5, 9:16 and straightening give the exact format. The result lists `used` with the
+   size Lightroom reports after the crop, so a wrong format shows at once. Lightroom reads the crop in the stored frame
+   (phone portraits are stored landscape); the tool converts that itself and checks the result.
+   Straightening: `crop_to_aspect(photo_ids, aspect="original", angle=-2.5, virtual_copies=false)`. A negative angle levels a
+   horizon that rises to the right; read the tilt from the preview (rise in pixels over the width, about atan(rise / width)) and
+   adjust in steps of 0.5. The crop is centred and as large as fits without empty corners (focus is ignored).
+   Copies are created in about a minute; if the call times out, the copy usually exists anyway: drag it into a
+   collection and find it there by its file name (a search over the whole catalog is too slow).
 4. Virtual copies can also get a look: `apply_preset` or `apply_develop_settings` (for black and white: `ConvertToGrayscale`).
