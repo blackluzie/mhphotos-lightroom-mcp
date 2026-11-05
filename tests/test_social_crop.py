@@ -67,3 +67,27 @@ async def test_virtual_copies_can_be_named(monkeypatch):
     assert "error" in await server.create_virtual_copies(["p1"], copy_name="x" * 61)
     done = await server.create_virtual_copies(["p1"], copy_name="Insta 4:5", confirm=True)
     assert server._adapter._photos[done["copies"][0]["id"]].extra["copy_name"] == "Insta 4:5"
+
+
+def test_straighten_keeps_corners_inside():
+    import math
+    w, h, angle = 6000, 4000, 3.0
+    got = social_crop.crop_settings(w, h, "original", angle=angle)
+    assert got["CropAngle"] == angle
+    cw = (got["CropRight"] - got["CropLeft"]) * w
+    ch = (got["CropBottom"] - got["CropTop"]) * h
+    rad = math.radians(angle)
+    assert cw * math.cos(rad) + ch * math.sin(rad) <= w + 1
+    assert cw * math.sin(rad) + ch * math.cos(rad) <= h + 1
+    assert cw / ch == pytest.approx(w / h, rel=1e-3)
+    assert got["CropLeft"] + got["CropRight"] == pytest.approx(1)
+
+
+def test_straighten_with_aspect_and_limits():
+    got = social_crop.crop_settings(6000, 4000, "4:5", angle=-2.0)
+    assert got["CropAngle"] == -2.0
+    cw = (got["CropRight"] - got["CropLeft"]) * 6000
+    ch = (got["CropBottom"] - got["CropTop"]) * 4000
+    assert cw / ch == pytest.approx(0.8, rel=1e-3)
+    with pytest.raises(ValueError):
+        social_crop.crop_settings(6000, 4000, "4:5", angle=50)
