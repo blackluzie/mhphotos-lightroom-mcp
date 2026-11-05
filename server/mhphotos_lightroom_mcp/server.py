@@ -484,7 +484,7 @@ async def create_virtual_copies(
 @mcp.tool()
 async def crop_to_aspect(
     photo_ids: list[str], aspect: str = "4:5", focus_x: float = 0.5, focus_y: float = 0.5,
-    virtual_copies: bool = True, confirm: bool = False, ctx: Context | None = None,
+    virtual_copies: bool = True, angle: float = 0.0, confirm: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Crop up to 10 photos to a social format, as virtual copies by default so the originals stay as they are.
 
@@ -492,15 +492,20 @@ async def crop_to_aspect(
     much of the picture as the format allows, centred on (focus_x, focus_y): 0 = left/top, 1 = right/bottom, 0.5 = middle;
     choose the focus from the picture (the subject), one call per focus. With virtual_copies=true each photo first gets a
     virtual copy named "Insta 4:5" (or the format) and the crop goes on the copy; false crops the photo itself and
-    replaces an existing crop. Check the result with get_photo_previews. Dry run unless confirm=true; needs operator opt-in.
+    replaces an existing crop. aspect="original" keeps the shape (use it just to level a horizon). angle (degrees, -45..45)
+    also straightens the horizon: the crop is then centred and as large as fits without empty corners (focus is ignored);
+    the sign is Lightroom's CropAngle, so check the first photo with get_photo_previews and flip the sign if it got worse.
+    Check the result with get_photo_previews. Dry run unless confirm=true; needs operator opt-in.
     """
-    if aspect not in social_crop.ASPECTS:
-        return {"error": f"aspect must be one of: {', '.join(social_crop.ASPECTS)}"}
+    if aspect not in social_crop.ASPECTS and aspect != social_crop.ORIGINAL:
+        return {"error": f"aspect must be one of: {', '.join([*social_crop.ASPECTS, social_crop.ORIGINAL])}"}
+    if not -45 <= angle <= 45:
+        return {"error": "angle must be between -45 and 45 degrees"}
     if len(photo_ids) > 10:
         return {"error": "At most 10 photos per call"}
     if not (0 <= focus_x <= 1 and 0 <= focus_y <= 1):
         return {"error": "focus_x and focus_y must be between 0 and 1"}
-    label = "Story" if aspect == "9:16" else "Insta"
+    label = "Story" if aspect == "9:16" else "Gerade" if aspect == social_crop.ORIGINAL else "Insta"
 
     def apply() -> dict[str, Any]:
         targets, copies = list(photo_ids), []
@@ -515,13 +520,13 @@ async def crop_to_aspect(
             size = dims.get(t)
             if not size:
                 raise NotFoundError(f"Lightroom reported no size for {t}")
-            settings = social_crop.crop_settings(int(size["width"]), int(size["height"]), aspect, focus_x, focus_y)
+            settings = social_crop.crop_settings(int(size["width"]), int(size["height"]), aspect, focus_x, focus_y, angle)
             _adapter.apply_develop_settings([t], settings)
             cropped.append(t)
         return {"cropped": len(cropped), "aspect": aspect, "copies": copies or None, "photo_ids": cropped}
 
     return await _edit(
-        photo_ids, {"crop_aspect": aspect, "focus": [focus_x, focus_y], "virtual_copies": virtual_copies}, apply,
+        photo_ids, {"crop_aspect": aspect, "focus": [focus_x, focus_y], "angle": angle, "virtual_copies": virtual_copies}, apply,
         confirm, ctx=ctx, tool="crop_to_aspect",
         summary=f"Zuschnitt {aspect}{' auf virtuellen Kopien' if virtual_copies else ''}",
     )

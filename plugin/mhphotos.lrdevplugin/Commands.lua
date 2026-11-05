@@ -472,12 +472,21 @@ end
 -- photos of the active source (and works reliably in the Library grid). So: grid view, source
 -- "All Photographs", select exactly one photo, create its copy. One copy per call keeps every
 -- copy unambiguously tied to its source. The Lightroom selection/view changes as a side effect.
+-- Lightroom copies the SELECTED photo, so the selection must be proven, not assumed: if it silently stays
+-- on another photo, the copy would be made of that one.
 local function selectOnly(photo)
   local cat = catalog()
   LrTasks.pcall(function() LrApplicationView.switchToModule('library') end)
   LrTasks.pcall(function() LrApplicationView.gridView() end)
   LrTasks.pcall(function() cat:setActiveSources(cat.kAllPhotos) end)
-  cat:setSelectedPhotos(photo, {})
+  local want = photo:getRawMetadata('uuid')
+  for _ = 1, 6 do
+    cat:setSelectedPhotos(photo, {})
+    local target = cat.getTargetPhoto and cat:getTargetPhoto() or nil
+    if target and target:getRawMetadata('uuid') == want then return end
+    LrTasks.sleep(0.5)
+  end
+  error('Lightroom did not select the photo ' .. tostring(want) .. ' (is it visible in All Photographs?); no copy was made', 0)
 end
 
 function Commands.create_virtual_copies(args)
@@ -495,6 +504,11 @@ function Commands.create_virtual_copies(args)
     end)
     if type(made) ~= 'table' or not made[1] then
       error('Lightroom created no virtual copy (is the Library module in grid view?)', 0)
+    end
+    local master = made[1]:getRawMetadata('masterPhoto')
+    if master and master:getRawMetadata('uuid') ~= p:getRawMetadata('uuid') then
+      error('Lightroom made a virtual copy of ANOTHER photo (copy ' .. tostring(made[1]:getRawMetadata('uuid'))
+        .. ', master ' .. tostring(master:getRawMetadata('uuid')) .. '). Delete that copy in Lightroom.', 0)
     end
     copies[#copies + 1] = { source_id = p:getRawMetadata('uuid'), id = made[1]:getRawMetadata('uuid') }
   end
