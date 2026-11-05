@@ -173,12 +173,13 @@ Jahre aus anderen Jahrzehnten, dazu Jahres-Ordner auf oberster Ebene, `ohne Datu
 
 ## Auswahlregeln des Eigentümers (gelten für alle Auswertungen)
 
-- **MHPhotos (Homepage) und Instagram: immer Fotos ohne erkennbare Personen.** Gute Fotos mit Personen kommen nicht dorthin.
-  Kleine, nicht erkennbare Menschen im Hintergrund sind in Ordnung; Selfies, Gruppen- und Porträtfotos nicht.
+- **MHPhotos (Homepage) und Instagram: keine Familie.** Fotos mit der Familie (Selfies, Gruppen, Porträts, die Kinder) kommen nicht dorthin.
+  **Fremde Personen sind erlaubt, wenn es ein Spitzenfoto ist** (Straßenfotografie: Person in der Gasse, verregnete Gasse mit Regenschirmen,
+  Menschen als Teil der Szene, von hinten oder nicht erkennbar). Zweifelsfälle (gehört die Person zur Familie?) frage ich nach.
 - **Gute Fotos mit Personen** (Familie, Selfies, Gruppenbilder) in die eigene Sammlung **„Fotobuch Hoffis 2026“** legen, als Vorrat für ein Fotobuch.
-- **Sterne:** nur für Fotos ohne Personen (5 = Instagram/MHPhotos-tauglich, 4 = sehr gut, Reserve). Bestehende Sterne nie senken.
-  Fotos mit Personen werden über die Sammlung „Fotobuch Hoffis 2026“ markiert, nicht über Sterne, damit Filter nach Sternen (Instagram-Kandidaten,
-  MHPhotos-Export) nie Personenfotos treffen.
+- **Sterne:** nur für Fotos ohne Familie (5 = Instagram/MHPhotos-tauglich, 4 = sehr gut, Reserve). Bestehende Sterne nie senken.
+  Fotos mit der Familie werden über die Sammlung „Fotobuch Hoffis 2026“ markiert, nicht über Sterne, damit Filter nach Sternen (Instagram-Kandidaten,
+  MHPhotos-Export) nie Familienfotos treffen.
 - Lightroom hat in der Sammlung „Kreuzfahrt 2026“ schon automatische Stichwörter: `Person` (210 von 843) und `Gesicht` (164). Sie helfen beim
   Vorsortieren, ersetzen die Sichtprüfung aber nicht.
 - Sammlungen für die Handy-Synchronisierung brauchen den Haken „Mit Lightroom synchronisieren“ von Hand (das SDK kann ihn nicht setzen).
