@@ -629,6 +629,41 @@ local function selectOnly(photo)
   error('Lightroom did not select the photo ' .. tostring(want) .. ' (is it visible in All Photographs?); no copy was made', 0)
 end
 
+-- uuids of the existing virtual copies of a photo (to find the new one when Lightroom does not return it)
+local function copyIds(photo)
+  local ids = {}
+  local ok, list = LrTasks.pcall(function() return photo:getRawMetadata('virtualCopies') end)
+  if ok and type(list) == 'table' then
+    for _, c in ipairs(list) do ids[c:getRawMetadata('uuid')] = c end
+  end
+  return ids
+end
+
+-- createVirtualCopies runs Lightroom's own menu command ("Create Virtual Copy"), which opens its own
+-- catalog transaction. Calling it INSIDE our withWriteAccessDo (up to 0.1.21) nested that transaction in
+-- ours; afterwards the plug-in task stopped answering and the bridge was gone until Lightroom restarted.
+-- So it is called outside any write gate, like setSelectedPhotos. Only if Lightroom insists on a gate
+-- (older versions) is it retried inside one.
+local function makeCopy(photo, copyName)
+  local before = copyIds(photo)
+  invalidateCache()
+  local ok, made = LrTasks.pcall(function() return catalog():createVirtualCopies(copyName) end)
+  if not ok then
+    local msg = tostring(type(made) == 'table' and made.message or made)
+    if not msg:lower():find('write') then error(made, 0) end
+    writeAccess('MHPhotos: virtual copy', function() made = catalog():createVirtualCopies(copyName) end)
+  end
+  if type(made) == 'table' and made[1] then return made[1] end
+  -- the command may finish a moment later: look for a copy of this photo that was not there before
+  for _ = 1, 20 do
+    for id, c in pairs(copyIds(photo)) do
+      if not before[id] then return c end
+    end
+    LrTasks.sleep(0.5)
+  end
+  return nil
+end
+
 function Commands.create_virtual_copies(args)
   local photos = findAll(args.photo_ids)
   if #photos > 10 then error('at most 10 virtual copies per call', 0) end
@@ -638,19 +673,16 @@ function Commands.create_virtual_copies(args)
   local copies = {}
   for _, p in ipairs(photos) do
     selectOnly(p)
-    local made
-    writeAccess('MHPhotos: virtual copy', function()
-      made = catalog():createVirtualCopies(copyName)
-    end)
-    if type(made) ~= 'table' or not made[1] then
+    local copy = makeCopy(p, copyName)
+    if not copy then
       error('Lightroom created no virtual copy (is the Library module in grid view?)', 0)
     end
-    local master = made[1]:getRawMetadata('masterPhoto')
+    local master = copy:getRawMetadata('masterPhoto')
     if master and master:getRawMetadata('uuid') ~= p:getRawMetadata('uuid') then
-      error('Lightroom made a virtual copy of ANOTHER photo (copy ' .. tostring(made[1]:getRawMetadata('uuid'))
+      error('Lightroom made a virtual copy of ANOTHER photo (copy ' .. tostring(copy:getRawMetadata('uuid'))
         .. ', master ' .. tostring(master:getRawMetadata('uuid')) .. '). Delete that copy in Lightroom.', 0)
     end
-    copies[#copies + 1] = { source_id = p:getRawMetadata('uuid'), id = made[1]:getRawMetadata('uuid') }
+    copies[#copies + 1] = { source_id = p:getRawMetadata('uuid'), id = copy:getRawMetadata('uuid') }
   end
   return { copies = copies }
 end

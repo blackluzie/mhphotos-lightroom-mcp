@@ -54,6 +54,7 @@ local writes = 0
 local createdSets = {}
 local lastWriteOpts
 local createdCollection, selected, activeSource, virtualCopyName, ignoreSelection, wrongMaster
+local inGate, copyInGate, copyReturnsNothing, copyNeedsGate = false, nil, false, false
 local viewCalls = {}
 local autoCalls = {}
 local hookFile, hookPosts = nil, {}
@@ -63,7 +64,9 @@ local fakeCatalog = {
   getAllPhotos = function() return photos end,
   findPhotoByUuid = function(_, id) for _, p in ipairs(photos) do if p.raw.uuid == id then return p end end end,
   getCollectionByLocalIdentifier = function(_, id) if id == 7 then return coll end end,
-  withWriteAccessDo = function(_, name, fn, opts) writes = writes + 1; lastWriteOpts = opts; fn(); return 'executed' end,
+  withWriteAccessDo = function(_, name, fn, opts)
+    writes = writes + 1; lastWriteOpts = opts; inGate = true; fn(); inGate = false; return 'executed'
+  end,
   createKeyword = function(_, name) return { getName = function() return name end } end,
   batchGetRawMetadata = function(_, ps, keys)
     local out = {}
@@ -97,10 +100,16 @@ local fakeCatalog = {
   getTargetPhoto = function() return selected end,
   setActiveSources = function(_, src) activeSource = src; return true end,
   createVirtualCopies = function(_, copyName)
+    if copyNeedsGate and not inGate then error('LrCatalog:createVirtualCopies must be called within withWriteAccessDo', 0) end
     virtualCopyName = copyName
-    local copy = newPhoto('copy-of-' .. selected.raw.uuid, 'IMG_copy.dng', 0, 0, {}, 0, 'x')
+    copyInGate = inGate
+    local copy = newPhoto('copy-of-' .. selected.raw.uuid .. (copyReturnsNothing and '-late' or ''), 'IMG_copy.dng', 0, 0, {}, 0, 'x')
     copy.raw.isVirtualCopy = true; copy.raw.masterPhoto = wrongMaster or selected
     photos[#photos + 1] = copy
+    local master = selected
+    master.raw.virtualCopies = master.raw.virtualCopies or {}
+    master.raw.virtualCopies[#master.raw.virtualCopies + 1] = copy
+    if copyReturnsNothing then return nil end
     return { copy }
   end,
 }
@@ -341,6 +350,19 @@ eq(table.concat(viewCalls, ','), 'module:library,grid'); eq(activeSource, 'kAllP
 eq(selected.raw.uuid, 'u1'); eq(virtualCopyName, 'MHPhotos')
 Commands.run('create_virtual_copies', { photo_ids = { 'u1' }, copy_name = 'Insta 4:5' })
 eq(virtualCopyName, 'Insta 4:5', 'the copy gets the requested name')
+-- Lightroom's own "Create Virtual Copy" command runs OUTSIDE our write gate (nesting it stalled the bridge)
+eq(copyInGate, false, 'createVirtualCopies must not run inside withWriteAccessDo')
+-- if Lightroom returns nothing, the new copy is found among the photo's virtual copies
+copyReturnsNothing = true
+local found = Commands.run('create_virtual_copies', { photo_ids = { 'u1' } }).copies
+copyReturnsNothing = false
+eq(found[1].source_id, 'u1'); eq(found[1].id, 'copy-of-u1-late')
+eq(#found, 1)
+-- a Lightroom that insists on write access gets the call inside the gate
+copyNeedsGate = true
+local gated = Commands.run('create_virtual_copies', { photo_ids = { 'u1' } }).copies
+copyNeedsGate = false
+eq(gated[1].source_id, 'u1'); eq(copyInGate, true)
 eq(pcall(Commands.run, 'create_virtual_copies', { photo_ids = { 'u1' }, copy_name = '' }), false)
 -- the selection is proven: if Lightroom keeps another photo selected, no copy is made
 local nBefore = #photos

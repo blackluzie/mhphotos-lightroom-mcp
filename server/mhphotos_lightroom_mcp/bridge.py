@@ -38,10 +38,11 @@ class BridgeError(RuntimeError):
 
 
 class _Command:
-    def __init__(self, name: str, args: dict[str, Any]) -> None:
+    def __init__(self, name: str, args: dict[str, Any], timeout: float = 30.0) -> None:
         self.id = uuid.uuid4().hex
         self.name = name
         self.args = args
+        self.deadline = time.monotonic() + timeout
         self.done = threading.Event()
         self.cancelled = False
         self.ok = False
@@ -105,7 +106,7 @@ class Bridge:
                 "Lightroom plugin is not connected. Start Lightroom Classic and enable "
                 "the MHPhotos plugin."
             )
-        cmd = _Command(name, args or {})
+        cmd = _Command(name, args or {}, timeout)
         self._queue.put(cmd)
         if not cmd.done.wait(timeout):
             cmd.cancelled = True
@@ -205,8 +206,12 @@ class Bridge:
                     bridge._touch()
                     if cmd is None:
                         return self._send(200, {"command": None})
+                    # seconds left until call() gives up: the plugin answers (with an error if
+                    # need be) before that and keeps polling, instead of going silent
+                    left = max(1, int(cmd.deadline - time.monotonic()))
                     return self._send(
-                        200, {"command": {"id": cmd.id, "name": cmd.name, "args": cmd.args}}
+                        200,
+                        {"command": {"id": cmd.id, "name": cmd.name, "args": cmd.args, "timeout": left}},
                     )
                 if self.path == "/v1/result":
                     bridge._touch()
