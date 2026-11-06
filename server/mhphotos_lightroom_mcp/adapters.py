@@ -185,6 +185,12 @@ class CatalogAdapter(Protocol):
     def move_collection(self, collection_id: str, parent: str) -> dict[str, Any]:
         """Move a collection into the set path ``parent`` ('' = top level): {"id", "parent", "moved"}."""
 
+    def list_webhooks(self) -> dict[str, Any]:
+        """Names of the webhooks in the Mac's webhooks.json: {"hooks": [...], "problems": [...]}."""
+
+    def send_webhook(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST the payload to the named webhook: {"name", "http_status", "ok", "response"}."""
+
     def set_custom_metadata(self, photo_ids: list[str], status: str | None, note: str | None) -> dict[str, Any]:
         """Set the plug-in's own fields (status, note): {"updated": n}."""
 
@@ -571,6 +577,13 @@ class MockAdapter:
             merged = tuple(dict.fromkeys((*p.keywords, *keywords)))
             self._photos[p.id] = dataclasses.replace(p, keywords=merged)
         return {"updated": len(photo_ids)}
+
+    def list_webhooks(self):
+        return {"hooks": sorted(getattr(self, "_hooks", {"n8n-import": 1})), "problems": []}
+
+    def send_webhook(self, name, payload):
+        self._sent_hooks = [*getattr(self, "_sent_hooks", []), (name, payload)]
+        return {"name": name, "http_status": 200, "ok": True, "response": "accepted"}
 
     def set_custom_metadata(self, photo_ids, status, note):
         values = {}

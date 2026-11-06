@@ -8,8 +8,11 @@ local LrPathUtils = import 'LrPathUtils'
 local Json = require 'Json'
 local State = require 'State'
 local Commands = require 'Commands'
+local Stats = require 'Stats'
+local Version = require 'Version'
 
 local Loop = {}
+local stats = Stats.new(Version, os.time())
 
 local function readConfig()
   local home = LrPathUtils.getStandardFilePath('home')
@@ -39,11 +42,15 @@ local function mark(status)
   State.status = status
   pcall(function()
     local home = LrPathUtils.getStandardFilePath('home')
-    local f = io.open(LrPathUtils.child(LrPathUtils.child(home, '.mhphotos-lightroom-mcp'), 'plugin-status.txt'), 'w')
+    local dir = LrPathUtils.child(home, '.mhphotos-lightroom-mcp')
+    local f = io.open(LrPathUtils.child(dir, 'plugin-status.txt'), 'w')
     if f then
       f:write(os.date('%Y-%m-%d %H:%M:%S ') .. status .. ' | last command: ' .. tostring(State.lastCommand or '-') .. '\n')
       f:close()
     end
+    stats.status = status
+    local j = io.open(LrPathUtils.child(dir, 'plugin-status.json'), 'w')
+    if j then j:write(Json.encode(stats)); j:close() end
   end)
 end
 
@@ -63,6 +70,7 @@ local function execute(cfg, command)
     end
     payload = { id = command.id, ok = false, error = msg }
   end
+  Stats.finished(stats, command.name, ok, ok and '' or payload.error, os.time())
   post(cfg, '/v1/result', payload, 30)
   mark('connected (finished ' .. command.name .. ')')
 end

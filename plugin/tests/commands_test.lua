@@ -56,6 +56,7 @@ local lastWriteOpts
 local createdCollection, selected, activeSource, virtualCopyName, ignoreSelection, wrongMaster
 local viewCalls = {}
 local autoCalls = {}
+local hookFile, hookPosts = nil, {}
 local fakeCatalog = {
   getChildCollections = function() return { coll } end,
   getChildCollectionSets = function() return { set } end,
@@ -134,7 +135,16 @@ function import(name)
     return { setAutoTone = function() autoCalls[#autoCalls + 1] = 'tone' end,
              setAutoWhiteBalance = function() autoCalls[#autoCalls + 1] = 'wb' end }
   end
-  if name == 'LrFileUtils' then return { exists = function(path) if path == '/Users/x/new.jpg' then return 'file' end return false end } end
+  if name == 'LrFileUtils' then
+    return { exists = function(path) if path == '/Users/x/new.jpg' then return 'file' end return false end,
+             readFile = function(path) return hookFile end }
+  end
+  if name == 'LrPathUtils' then
+    return { getStandardFilePath = function() return '/home/u' end, child = function(a, b) return a .. '/' .. b end }
+  end
+  if name == 'LrHttp' then
+    return { post = function(url, body, headers, method, timeout) hookPosts[#hookPosts + 1] = { url = url, body = body, method = method }; return 'ok', { status = 204 } end }
+  end
   if name == 'LrStringUtils' then return { encodeBase64 = function(d) return 'B64(' .. d .. ')' end } end
   if name == 'LrApplication' then
     return {
@@ -520,6 +530,21 @@ Commands.run('auto_tone', { photo_ids = { 'u1' } }); eq(table.concat(autoCalls, 
 local def = dofile('../mhphotos.lrdevplugin/MetadataDefinition.lua')
 eq(def.schemaVersion, 1); eq(def.metadataFieldsForPhotos[1].id, 'status'); eq(def.metadataFieldsForPhotos[2].id, 'notiz')
 eq(#def.metadataFieldsForPhotos[1].values, 4)
+
+-- webhooks: addresses only from webhooks.json, never from the call
+local noFile = Commands.run('webhook_list')
+eq(#noFile.hooks, 0); eq(#noFile.problems, 1)
+hookFile = '{"hooks": {"n8n-import": {"url": "https://n8n.example.com/webhook/abc"}, "kaputt": {"url": "ftp://x"}}}'
+local hl = Commands.run('webhook_list')
+eq(table.concat(hl.hooks, ','), 'n8n-import'); eq(#hl.problems, 1)
+local hs = Commands.run('webhook_send', { name = 'n8n-import', payload = { photo = 'u1' } })
+eq(hs.name, 'n8n-import'); eq(#hookPosts, 1); eq(hookPosts[1].url, 'https://n8n.example.com/webhook/abc'); eq(hookPosts[1].method, 'POST')
+eq(pcall(Commands.run, 'webhook_send', { name = 'kaputt' }), false)
+eq(pcall(Commands.run, 'webhook_send', { name = 'https://evil.example.com' }), false)
+eq(pcall(Commands.run, 'webhook_send', {}), false)
+hookFile = 'not json'
+eq(Commands.run('webhook_list').problems[1], 'webhooks.json is not valid JSON')
+hookFile = nil
 
 -- photo_dimensions: read only, size after crop per photo id
 p1.raw.croppedDimensions = { width = 4032, height = 3024 }

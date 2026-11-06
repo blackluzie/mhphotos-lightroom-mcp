@@ -50,6 +50,7 @@ Eigentümer-Rückfragen nur, wo er entscheiden muss. Sonst weiterarbeiten.
 - **Eigene Felder** (Plugin ab 0.1.17): `set_custom_metadata(photo_ids, status="insta_kandidat" | "fotobuch" | "veroeffentlicht" | "aussortiert", note="…")` setzt „MHPhotos-Status“ und „MHPhotos-Notiz“; die Felder sind in Lightroom suchbar und in smarten Sammlungen nutzbar. `get_photo_metadata` zeigt sie als `mhphotos_status` / `mhphotos_note`.
 - **Auto-Ton**: `auto_tone(photo_ids, white_balance=false)` (max. 10 Fotos) nutzt Lightrooms „Auto“; das Plugin öffnet dafür Foto für Foto das Entwickeln-Modul, danach wieder das Raster. Nur auf Wunsch und an einem Foto prüfen lassen.
 - **Export mit Format**: `export_photos(photo_ids, preset="instagram" | "story" | "web" | "full")` oder `long_edge`, `quality`, `sharpen`. Vorher mit `crop_to_aspect` auf 4:5 oder 9:16 zuschneiden.
+- **Webhooks** (Plugin ab 0.1.18): `list_webhooks`, `send_webhook(name, payload)`; nur auf ausdrücklichen Wunsch (z. B. n8n-Ablauf starten), Adressen kommen aus `webhooks.json` auf dem Mac.
 - **Instagram/MHPhotos**: nur vorschlagen (`instagram_candidates`, `mhphotos_inbox`); nichts geht ohne ausdrückliche Anweisung online.
 
 ## 4. Album für einen Monat oder eine Reise („alles aus 2026/09 Südtirol in ein Album“)

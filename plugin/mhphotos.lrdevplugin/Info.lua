@@ -15,5 +15,5 @@ return {
     { title = 'MHPhotos MCP: Selbsttest (nur lesen)', file = 'SelfTestMenu.lua' },
     { title = 'MHPhotos MCP: Auto-Export einrichten', file = 'AutoExportSetup.lua' },
   },
-  VERSION = { major = 0, minor = 1, revision = 17, build = 0 },
+  VERSION = { major = 0, minor = 1, revision = 18, build = 0 },
 }

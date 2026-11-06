@@ -46,7 +46,7 @@ opt-in (environment variable) and, when your client supports it, **you are asked
 | Look & search | `connection_status`, `lightroom_selftest`, `list_collections` (`name_contains`), `list_photos` (`min_rating`, `year`/dates, `keyword`, `flag`, `location`, GPS circle), `get_photo_metadata`, `get_photo_previews` (images), `get_contact_sheet` (one numbered overview image), `get_develop_settings`, `list_presets`, `backlog_report`, `list_changes`, `catalog_audit_start` / `catalog_audit_status` / `catalog_audit_cancel` / `catalog_audit_results` (wrong date folder, duplicates, storage), `photos_by_date` (fast date queries: unreviewed, best, missing captions/GPS), `suggest_locations` |
 | Organise (`MHPHOTOS_ALLOW_WRITES=1`) | `set_rating`, `set_flag`, `set_color_label`, `set_title_caption`, `add_keywords`, `create_collection` (`parent` = Sammlungsgruppe), `move_collection`, `create_smart_collection`, `create_keyword` (Hierarchie `A > B > C`, Synonyme), `import_photo`, `set_custom_metadata` (eigene Felder „MHPhotos-Status“/„Notiz“), `add_to_collection`, `undo_last_change`, `catalog_audit_collections`, `set_location`, `rotate_photos` (90/180/270° clockwise), `crop_to_aspect` (virtual copies cropped to 4:5, 9:16 …; `angle` also levels a horizon) |
 | Change files (`MHPHOTOS_ALLOW_FILE_EDITS=1`, needs the edit opt-in) | `write_name_dates_to_files` (writes a capture time from the file name into JPEGs with exiftool, backup first) |
-| Edit looks (`MHPHOTOS_ALLOW_WRITES=1`) | `apply_preset`, `apply_develop_settings`, `sync_develop_settings`, `create_preset`, `create_virtual_copies`, `build_smart_previews`, `auto_tone` (Lightrooms Auto-Ton, Foto für Foto) |
+| Edit looks (`MHPHOTOS_ALLOW_WRITES=1`) | `apply_preset`, `apply_develop_settings`, `sync_develop_settings`, `create_preset`, `create_virtual_copies`, `build_smart_previews`, `auto_tone` (Lightrooms Auto-Ton, Foto für Foto), `list_webhooks`/`send_webhook` (n8n u. ä., Adressen nur aus `webhooks.json` auf dem Mac) |
 | Export | `export_photos` (`MHPHOTOS_EXPORT_DIR`) |
 | MHPhotos site | `mhphotos_galleries`, `mhphotos_inbox`, `mhphotos_inbox_images`, `mhphotos_inbox_contact_sheet`, `mhphotos_edit_preview` (basic edit before/after), `mhphotos_analyze_inbox`, `mhphotos_instagram_posts`, `mhphotos_instagram_images`, `send_to_mhphotos_inbox`, `mhphotos_publish` (public site, `MHPHOTOS_ALLOW_PUBLISH=1`), `mhphotos_schedule_instagram` / `mhphotos_instagram_queue` / `mhphotos_cancel_instagram` (social queue, `MHPHOTOS_ALLOW_INSTAGRAM=1`), `instagram_candidates`, `mhphotos_best_times` |
 
@@ -87,3 +87,13 @@ Lightroom Classic catalogs should be stored locally, even if originals live on m
 
 ## Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). MIT licensed.
+
+## Webhooks aus dem Plugin (Plugin ab 0.1.18)
+
+`~/.mhphotos-lightroom-mcp/webhooks.json` auf dem Mac legt fest, welche Webhooks das Plugin aufrufen darf. Ein MCP-Client kann nur einen Namen nennen, nie eine Adresse; erlaubt sind `https://` und `http://localhost`/`127.0.0.1`, Nutzdaten bis 50 KB.
+
+```json
+{ "hooks": { "n8n-import": { "url": "https://n8n.example.com/webhook/abc", "token": "optional" } } }
+```
+
+`list_webhooks` zeigt die Namen, `send_webhook(name, payload)` ruft einen auf (Trockenlauf, dann `confirm=true`). Das Statusfenster im Library-Menü („MHPhotos MCP: Status“) zeigt Version, Verbindung, Zähler, letzte Fehler, Katalog und die Zahl der Webhooks.

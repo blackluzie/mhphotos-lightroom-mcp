@@ -848,6 +848,42 @@ function Commands.auto_tone(args)
   return { updated = done, white_balance = args.white_balance == true }
 end
 
+-- ---------------------------------------------------------------- webhooks (addresses only from webhooks.json)
+local function loadHooks()
+  local Webhook = require 'Webhook'
+  local Json = require 'Json'
+  local LrPathUtils = import 'LrPathUtils'
+  local LrFileUtils = import 'LrFileUtils'
+  local path = LrPathUtils.child(LrPathUtils.child(LrPathUtils.getStandardFilePath('home'), '.mhphotos-lightroom-mcp'), 'webhooks.json')
+  local raw = LrFileUtils.readFile(path)
+  if not raw then return {}, { 'no webhooks.json in ~/.mhphotos-lightroom-mcp' } end
+  local ok, decoded = pcall(Json.decode, raw)
+  if not ok then return {}, { 'webhooks.json is not valid JSON' } end
+  return Webhook.normalize(decoded)
+end
+
+function Commands.webhook_list()
+  local Webhook = require 'Webhook'
+  local hooks, problems = loadHooks()
+  return { hooks = Webhook.names(hooks), problems = problems }
+end
+
+function Commands.webhook_send(args)
+  local Webhook = require 'Webhook'
+  local Json = require 'Json'
+  local LrHttp = import 'LrHttp'
+  local hooks = loadHooks()
+  if type(args.name) ~= 'string' then error('webhook name required', 0) end
+  return Webhook.send(hooks, args.name, args.payload, {
+    encode = Json.encode,
+    -- LrHttp.post returns (body, headersTable); the HTTP status is headersTable.status
+    post = function(url, body, headers, timeout)
+      local response, hdrs = LrHttp.post(url, body, headers, 'POST', timeout)
+      return response, hdrs and hdrs.status
+    end,
+  })
+end
+
 local function validName(v) return type(v) == 'string' and v ~= '' and #v <= 120 end
 
 function Commands.create_review_collections(args)

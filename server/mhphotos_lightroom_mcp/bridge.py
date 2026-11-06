@@ -387,6 +387,12 @@ class BridgeAdapter:
     def photo_paths(self, photo_ids):
         return self._call("photo_paths", {"photo_ids": photo_ids})
 
+    def list_webhooks(self):
+        return self._call("webhook_list")
+
+    def send_webhook(self, name, payload):
+        return self._call("webhook_send", {"name": name, "payload": payload}, timeout=40)
+
     def set_custom_metadata(self, photo_ids, status, note):
         args = {"photo_ids": photo_ids}
         if status is not None:
