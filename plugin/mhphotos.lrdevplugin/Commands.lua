@@ -812,12 +812,19 @@ function Commands.set_custom_metadata(args)
   end
   if note ~= nil and (type(note) ~= 'string' or #note > 1000) then error('note must be text (max 1000 bytes)', 0) end
   local photos = findAll(args.photo_ids)
+  local failure
   writeAccess('MHPhotos: own metadata', function()
     for _, p in ipairs(photos) do
-      if status ~= nil then p:setPropertyForPlugin(_PLUGIN, 'status', status ~= '' and status or nil) end
-      if note ~= nil then p:setPropertyForPlugin(_PLUGIN, 'notiz', note ~= '' and note or nil) end
+      local ok, err = LrTasks.pcall(function()
+        if status ~= nil then p:setPropertyForPlugin(_PLUGIN, 'status', status ~= '' and status or nil) end
+        if note ~= nil then p:setPropertyForPlugin(_PLUGIN, 'notiz', note ~= '' and note or nil) end
+      end)
+      if not ok then failure = tostring(err); return end
     end
   end)
+  if failure then
+    error('own fields are not active in this plug-in version (no metadata provider loaded): ' .. failure, 0)
+  end
   return { updated = #photos }
 end
 
