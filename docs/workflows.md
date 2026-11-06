@@ -65,6 +65,8 @@ After "best 5 of album 09 2026" the result should not live only in the chat:
 
 ## 5. Try an edit safely, compare, repeat
 1. `create_virtual_copies([photo_id], confirm=true)` gives a copy id; the original stays untouched.
+   If it answers `virtual_copy_timeout` or `copy_pending`, make the copy by hand in Lightroom (Cmd+'), find it with
+   `get_photo_metadata`/`list_photos` and go on with that id (`crop_to_aspect(..., virtual_copies=false)` for a crop).
 2. `apply_preset` or `apply_develop_settings` on the **copy**, then `get_photo_previews([original, copy])`.
 3. Not happy? Adjust values and apply again (each is a history step in Lightroom). Happy? Keep the copy.
 4. For a series: `sync_develop_settings(from_photo_id, to_photo_ids)` copies the look (without white balance by

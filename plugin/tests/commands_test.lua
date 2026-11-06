@@ -134,7 +134,7 @@ function import(name)
     return { switchToModule = function(m) viewCalls[#viewCalls + 1] = 'module:' .. m end,
              gridView = function() viewCalls[#viewCalls + 1] = 'grid' end }
   end
-  if name == 'LrTasks' then return { sleep = function() end, pcall = pcall } end
+  if name == 'LrTasks' then return { sleep = function() end, pcall = pcall, startAsyncTask = function(fn) fn() end } end
   if name == 'LrDate' then
     return { currentTime = function() return os.clock() end,
       -- the real one formats in the local time zone; UTC keeps the test deterministic

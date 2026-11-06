@@ -49,8 +49,12 @@ not yet checked, or checked with a note:
 - [x] `set_title_caption`: visible in the Metadata panel; existing text is not overwritten without `overwrite=true`
 - [x] `create_virtual_copies`: copy appears next to the original, original unchanged
 - [ ] 0.1.23: `list_collections` answers at once (0.1.22 answered every command, reads included, with "busy" after 26 s)
-- [ ] 0.1.23: after `create_virtual_copies` (1 photo) the bridge stays connected: the answer comes at once, the next
-      `get_photo_metadata` answers, `connection_status` stays `connected:true` (0.1.21 lost the bridge until Lightroom restarted)
+- [ ] 0.1.23: after `create_virtual_copies` (1 photo) the bridge stays connected (**failed**: the command never came back,
+      `plugin-status.json` stayed on "running create_virtual_copies", the copy was made anyway)
+- [ ] 0.1.24: `create_virtual_copies` (1 photo) answers within about 20 s with the copy id, the copy is in Lightroom, the next
+      `get_photo_metadata` answers, `connection_status` stays `connected:true`
+- [ ] 0.1.24: if Lightroom does not make the copy in time, the answer is `virtual_copy_timeout` (with the manual way: Cmd+',
+      then `crop_to_aspect(virtual_copies=false)` on the copy) and the bridge stays connected
 - [x] `get_contact_sheet` with 6 photos: one numbered image
 - [ ] `list_collections(include_counts=true)` counts match; without it the call is fast
 - [ ] `apply_preset` (dry run, then confirm) on a test photo: preset visible in Develop, one history step "MHPhotos…", undoable
@@ -123,6 +127,12 @@ Known Lightroom behaviours to watch:
   and Adobe's forum reports it works reliably only in the Library grid. The plugin therefore switches to the Library
   grid, sets the source "All Photographs", selects the one photo and creates its copy (named "MHPhotos"). Your
   selection and view change as a side effect.
+- **`createVirtualCopies` does not come back** (Lightroom Classic, 06.11.2026, plug-in 0.1.21 and 0.1.23): the copy is made,
+  but the call never returns to the calling task, inside or outside a write gate; `lrc_app.log` ends with
+  `ag.library.createVirtualCopy`. Since 0.1.24 the plugin starts it in a helper task it never waits for and watches the
+  original's `virtualCopies` for up to 20 s per photo. A hanging call only leaves that helper task behind (one per copy,
+  gone after a Lightroom restart). If no copy shows up, the command answers `virtual_copy_timeout`, and no further copy is
+  started while that call is still open (`copy_pending`), because Lightroom would copy whatever is selected when it runs.
 - **Presets created by `create_preset`** are stored under the plugin's own folder. A 2026 forum thread reports that
   applying a plugin-created preset shifted **white balance** on Lightroom 15.0.1 although the preset had none (not
   reproducible on 15.1). After the first `apply_preset` with such a preset, check the white balance.
@@ -134,6 +144,6 @@ Errors from the plugin show up in the tool result (`code: plugin_error`). Use th
 
 ## Lua tests (no Lightroom needed)
 ```bash
-cd plugin/tests && lua5.1 json_test.lua && lua5.1 commands_test.lua
+cd plugin/tests && lua5.1 json_test.lua && lua5.1 commands_test.lua && lua5.1 loop_test.lua && lua5.1 virtual_copy_test.lua
 ```
 Homebrew no longer ships `lua@5.1`; `luajit` (`brew install luajit`) runs the same tests.
