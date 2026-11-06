@@ -172,6 +172,54 @@ local function matchesFilters(photo, f)
   return true
 end
 
+-- Lightroom's own index (catalog:findPhotos) answers date/rating/keyword/flag filters without
+-- reading all photos. The result is still checked with matchesFilters, and any failure falls back to
+-- the full scan, so a wrong guess about the search syntax can only cost time, never correctness.
+local function dayBefore(day) -- 'YYYY-MM-DD' -> the day before (the index may count by UTC)
+  local y, m, d = day:match('^(%d%d%d%d)-(%d%d)-(%d%d)$')
+  if not y then return day end
+  local t = os.time({ year = tonumber(y), month = tonumber(m), day = tonumber(d) - 1, hour = 12 })
+  return os.date('%Y-%m-%d', t)
+end
+
+local function dayAfter(day)
+  local y, m, d = day:match('^(%d%d%d%d)-(%d%d)-(%d%d)$')
+  if not y then return day end
+  local t = os.time({ year = tonumber(y), month = tonumber(m), day = tonumber(d) + 1, hour = 12 })
+  return os.date('%Y-%m-%d', t)
+end
+
+-- searchDesc for the indexable part of the filters, or nil if nothing is indexable.
+-- widen: dates one day wider on both sides (exact matching is done afterwards).
+local function searchDescFor(f, widen)
+  local crit = {}
+  if f.captured_from or f.captured_to then
+    local from = f.captured_from or '1900-01-01'
+    local to = f.captured_to or '2999-12-31'
+    if widen then from, to = dayBefore(from), dayAfter(to) end
+    crit[#crit + 1] = { criteria = 'captureTime', operation = 'in', value = from, value2 = to }
+  end
+  if f.min_rating and f.min_rating > 0 then
+    crit[#crit + 1] = { criteria = 'rating', operation = '>=', value = f.min_rating }
+  end
+  if f.keyword then crit[#crit + 1] = { criteria = 'keywords', operation = 'words', value = f.keyword } end
+  if f.flag == 'picked' then crit[#crit + 1] = { criteria = 'pick', operation = '==', value = 1 } end
+  if f.flag == 'rejected' then crit[#crit + 1] = { criteria = 'pick', operation = '==', value = -1 } end
+  if #crit == 0 then return nil end
+  crit.combine = 'intersect'
+  return crit
+end
+
+local function fastSearch(filters)
+  local desc = searchDescFor(filters, true)
+  if not desc then return nil end
+  local cat = catalog()
+  if not cat.findPhotos then return nil end
+  local ok, found = LrTasks.pcall(function() return cat:findPhotos({ searchDesc = desc }) end)
+  if not ok or type(found) ~= 'table' then return nil end
+  return found
+end
+
 local function cacheKey(args)
   local parts = { tostring(args.collection_id) }
   local names = {}
@@ -193,7 +241,7 @@ function Commands.list_photos(args)
     if not coll.getPhotos then error('this id is a collection set (it holds collections, not photos)', 0) end
     source = coll:getPhotos()
   else
-    source = catalog():getAllPhotos()
+    source = filters and fastSearch(filters) or catalog():getAllPhotos()
   end
   if filters then
     -- Filtering walks every photo once (fine for thousands, slow for 100k+); cached for paging.
@@ -248,6 +296,24 @@ function Commands.set_flag(args)
   return { updated = #photos }
 end
 
+-- "Orte > Spanien > Barcelona" -> the keyword Barcelona below Spanien below Orte (levels are created).
+local function keywordFromPath(cat, name, synonyms, includeOnExport)
+  local parent, kw = nil, nil
+  local parts = {}
+  for part in string.gmatch(name, '[^>]+') do
+    part = part:match('^%s*(.-)%s*$')
+    if part ~= '' then parts[#parts + 1] = part end
+  end
+  if #parts == 0 then error('empty keyword', 0) end
+  for i, part in ipairs(parts) do
+    local last = i == #parts
+    kw = cat:createKeyword(part, last and synonyms or {}, last and includeOnExport or true, parent, true)
+    if not kw then error('Lightroom did not create the keyword ' .. part, 0) end
+    parent = kw
+  end
+  return kw
+end
+
 function Commands.add_keywords(args)
   local names = args.keywords or {}
   if #names == 0 or #names > 20 then error('1-20 keywords required', 0) end
@@ -255,11 +321,26 @@ function Commands.add_keywords(args)
   writeAccess('MHPhotos: add keywords', function()
     local cat = catalog()
     for _, name in ipairs(names) do
-      local kw = cat:createKeyword(name, {}, true, nil, true)
+      local kw = string.find(name, '>', 1, true) and keywordFromPath(cat, name, {}, true)
+        or cat:createKeyword(name, {}, true, nil, true)
       for _, p in ipairs(photos) do p:addKeyword(kw) end
     end
   end)
   return { updated = #photos }
+end
+
+-- Creates a keyword (or a path like "Orte > Spanien > Barcelona") with synonyms, without tagging any photo.
+function Commands.create_keyword(args)
+  local name = args.name
+  if type(name) ~= 'string' or name == '' or #name > 300 then error('keyword name or path required', 0) end
+  local synonyms = args.synonyms or {}
+  if #synonyms > 20 then error('at most 20 synonyms', 0) end
+  local include = args.include_on_export ~= false
+  local kw
+  writeAccess('MHPhotos: create keyword', function()
+    kw = keywordFromPath(catalog(), name, synonyms, include)
+  end)
+  return { name = kw:getName(), path = name, synonyms = synonyms }
 end
 
 function Commands.export_photos(args)
@@ -642,6 +723,54 @@ end
 -- Write (additive): review collections below one collection set, e.g.
 -- Prüfen / Ordner / "→ 2021-07-14". Photos deleted since the audit are skipped and counted.
 local MAX_REVIEW_PHOTOS, MAX_REVIEW_GROUPS = 5000, 300
+
+-- Smart collection from simple rules (same filters as list_photos; the index does the matching).
+function Commands.create_smart_collection(args)
+  local name = args.name
+  if type(name) ~= 'string' or name == '' or #name > 120 then error('collection name required', 0) end
+  local rules = args.rules or {}
+  local desc = searchDescFor(rules, false)
+  if not desc then error('rules needed: min_rating, keyword, captured_from/captured_to or flag', 0) end
+  local coll
+  writeAccess('MHPhotos: create smart collection', function()
+    local cat = catalog()
+    if not cat.createSmartCollection then error('this Lightroom version cannot create smart collections', 0) end
+    local parent = ensureSet(cat, args.parent)
+    coll = cat:createSmartCollection(name, desc, parent, true)
+  end)
+  if not coll then error('Lightroom did not create the smart collection', 0) end
+  return { id = tostring(coll.localIdentifier), name = name, parent = args.parent }
+end
+
+-- Smart previews keep editing and contact sheets working without the original (NAS offline).
+function Commands.build_smart_previews(args)
+  local photos = findAll(args.photo_ids)
+  local cat = catalog()
+  if not cat.buildSmartPreviews then error('this Lightroom version cannot build smart previews from a plug-in', 0) end
+  local ok, err = LrTasks.pcall(function() cat:buildSmartPreviews(photos) end)
+  if not ok then error('smart previews failed: ' .. tostring(err), 0) end
+  return { requested = #photos }
+end
+
+-- Adds one file to the catalog (like Import without moving it). Optional: into a collection.
+function Commands.add_photo(args)
+  local LrFileUtils = import 'LrFileUtils'
+  local path = args.path
+  if type(path) ~= 'string' or path == '' or #path > 1000 or path:find('..', 1, true) or path:sub(1, 1) ~= '/' then
+    error('absolute file path required', 0)
+  end
+  if LrFileUtils.exists(path) ~= 'file' then error('file not found: ' .. path, 0) end
+  local photo
+  writeAccess('MHPhotos: add photo to catalog', function()
+    photo = catalog():addPhoto(path)
+    if photo and args.collection_id then
+      local coll = catalog():getCollectionByLocalIdentifier(tonumber(args.collection_id))
+      if coll and coll.addPhotos then coll:addPhotos({ photo }) end
+    end
+  end)
+  if not photo then error('Lightroom did not add the file', 0) end
+  return { id = photo:getRawMetadata('uuid'), filename = photo:getFormattedMetadata('fileName') }
+end
 
 local function validName(v) return type(v) == 'string' and v ~= '' and #v <= 120 end
 

@@ -310,6 +310,18 @@ class BridgeAdapter:
     def move_collection(self, collection_id, parent):
         return self._call("move_collection", {"collection_id": collection_id, "parent": parent})
 
+    def create_smart_collection(self, name, parent, rules):
+        return self._call("create_smart_collection", {"name": name, "rules": rules, **({"parent": parent} if parent else {})})
+
+    def create_keyword(self, name, synonyms, include_on_export):
+        return self._call("create_keyword", {"name": name, "synonyms": synonyms, "include_on_export": include_on_export})
+
+    def build_smart_previews(self, photo_ids):
+        return self._call("build_smart_previews", {"photo_ids": photo_ids})
+
+    def import_photo(self, path, collection_id):
+        return self._call("add_photo", {"path": path, **({"collection_id": collection_id} if collection_id else {})})
+
     def add_to_collection(self, collection_id, photo_ids):
         return self._call("add_to_collection", {"collection_id": collection_id, "photo_ids": photo_ids})
 

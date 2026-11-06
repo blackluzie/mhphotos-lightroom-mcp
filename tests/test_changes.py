@@ -269,3 +269,30 @@ async def test_collections_inside_a_set_and_moving(writes):
     assert moved["applied"] is True and moved["moved"] is True
     names = [c.name for c in await server._run(server._adapter.list_collections)]
     assert "2026/Fotobuch Hoffis 2026" in names and "Fotobuch Hoffis 2026" not in names
+
+
+async def test_smart_collection_keyword_previews_and_import(writes):
+    assert "error" in await server.create_smart_collection("Leer")
+    assert "error" in await server.create_smart_collection("Falsch", min_rating=9)
+    dry = await server.create_smart_collection("Top 2026", parent="2026", min_rating=4, captured_from="2026-01-01")
+    assert dry["dry_run"] is True and dry["would_create"] == "2026/Top 2026" and dry["rules"]["min_rating"] == 4
+    done = await server.create_smart_collection("Top 2026", parent="2026", min_rating=4, captured_from="2026-01-01", confirm=True)
+    assert done["applied"] is True and done["name"] == "2026/Top 2026"
+
+    assert "error" in await server.create_keyword(" ")
+    kdry = await server.create_keyword("Orte > Spanien > Barcelona", synonyms=["BCN"])
+    assert kdry["dry_run"] is True and kdry["synonyms"] == ["BCN"]
+    kdone = await server.create_keyword("Orte > Spanien > Barcelona", synonyms=["BCN"], confirm=True)
+    assert kdone["applied"] is True and kdone["name"] == "Barcelona"
+
+    pdry = await server.build_smart_previews(["p1", "p2"])
+    assert pdry["dry_run"] is True
+    pdone = await server.build_smart_previews(["p1", "p2"], confirm=True)
+    assert pdone["applied"] is True and pdone["requested"] == 2
+
+    assert "error" in await server.import_photo("relative.jpg")
+    assert "error" in await server.import_photo("/a/../b.jpg")
+    idry = await server.import_photo("/Users/x/new.jpg")
+    assert idry["dry_run"] is True
+    idone = await server.import_photo("/Users/x/new.jpg", confirm=True)
+    assert idone["applied"] is True and idone["filename"] == "new.jpg"

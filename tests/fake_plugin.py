@@ -79,6 +79,14 @@ class FakePlugin:
             return b.create_preset(a["name"], a["settings"])
         if name == "create_collection":
             return b.create_collection(a["name"], a.get("parent"))
+        if name == "create_smart_collection":
+            return b.create_smart_collection(a["name"], a.get("parent"), a["rules"])
+        if name == "create_keyword":
+            return b.create_keyword(a["name"], a["synonyms"], a["include_on_export"])
+        if name == "build_smart_previews":
+            return b.build_smart_previews(a["photo_ids"])
+        if name == "add_photo":
+            return b.import_photo(a["path"], a.get("collection_id"))
         if name == "move_collection":
             return b.move_collection(a["collection_id"], a["parent"])
         if name == "add_to_collection":
