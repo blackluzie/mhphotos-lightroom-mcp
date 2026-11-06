@@ -65,6 +65,8 @@ After "best 5 of album 09 2026" the result should not live only in the chat:
 
 ## 5. Try an edit safely, compare, repeat
 1. `create_virtual_copies([photo_id], confirm=true)` gives a copy id; the original stays untouched.
+   With `state: running` Lightroom is still at it: ask `virtual_copy_job(job_id)` every 30-60 s until it is done; for a few
+   minutes new copies may answer `photo_busy` (just retry later).
    If it answers `virtual_copy_timeout` or `copy_pending`, make the copy by hand in Lightroom (Cmd+'), find it with
    `get_photo_metadata`/`list_photos` and go on with that id (`crop_to_aspect(..., virtual_copies=false)` for a crop).
 2. `apply_preset` or `apply_develop_settings` on the **copy**, then `get_photo_previews([original, copy])`.

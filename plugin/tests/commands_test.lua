@@ -7,8 +7,10 @@ local function eq(a, b, msg)
 end
 
 -- ---- fakes
+local nextLocalId = 100
 local function newPhoto(uuid, name, rating, pick, kws, t, cam)
-  local p = { raw = { uuid = uuid, rating = rating, pickStatus = pick, keywords = {}, dateTimeOriginal = t },
+  nextLocalId = nextLocalId + 1
+  local p = { localIdentifier = nextLocalId, raw = { uuid = uuid, rating = rating, pickStatus = pick, keywords = {}, dateTimeOriginal = t },
     fmt = { fileName = name, cameraModel = cam } }
   for _, k in ipairs(kws) do p.raw.keywords[#p.raw.keywords + 1] = { getName = function() return k end } end
   function p:getRawMetadata(k) return self.raw[k] end
@@ -129,14 +131,16 @@ local folders = {
   { getName = function() return 'Adobe' end, getDevelopPresets = function() return { presetB } end },
 }
 _PLUGIN = { id = 'plugin' }
+fakeNow = 0
 function import(name)
   if name == 'LrApplicationView' then
     return { switchToModule = function(m) viewCalls[#viewCalls + 1] = 'module:' .. m end,
              gridView = function() viewCalls[#viewCalls + 1] = 'grid' end }
   end
-  if name == 'LrTasks' then return { sleep = function() end, pcall = pcall, startAsyncTask = function(fn) fn() end } end
+  -- tasks run at once, sleep only moves the fake clock (bounded waits end without burning real time)
+  if name == 'LrTasks' then return { sleep = function(s) fakeNow = fakeNow + (s or 0) end, pcall = pcall, startAsyncTask = function(fn) fn() end } end
   if name == 'LrDate' then
-    return { currentTime = function() return os.clock() end,
+    return { currentTime = function() return fakeNow end,
       -- the real one formats in the local time zone; UTC keeps the test deterministic
       timeToUserFormat = function(t, fmt) return os.date('!' .. fmt, t + 978307200) end }
   end
@@ -341,40 +345,50 @@ Commands.run('add_keywords', { photo_ids = { 'u1' }, keywords = { 'zz-added' } }
 Commands.run('remove_keywords', { photo_ids = { 'u1' }, keywords = { 'ZZ-ADDED' } })
 for _, kw in ipairs(p1.raw.keywords) do assert(kw:getName() ~= 'zz-added', 'keyword should be gone') end
 eq(#p1.raw.keywords >= 2, true)  -- the original keywords 'a','b' stay
-local vc = Commands.run('create_virtual_copies', { photo_ids = { 'u1' } }).copies
+-- create_virtual_copies starts a job (here the tasks run at once, so it is finished when the command answers)
+local function copyJob(args)
+  local job = Commands.run('create_virtual_copies', args)
+  return Commands.run('virtual_copy_job', { job_id = job.job_id })
+end
+local vcJob = copyJob({ photo_ids = { 'u1' } })
+eq(vcJob.state, 'done', tostring(vcJob.error))
+local vc = vcJob.copies
 eq(vc[1].source_id, 'u1'); eq(vc[1].id, 'copy-of-u1')
 eq(Commands.run('get_photo', { photo_id = 'copy-of-u1' }).virtual_copy_of, 'u1')
 eq(pcall(Commands.run, 'create_virtual_copies', { photo_ids = {} }), false)
+eq(pcall(Commands.run, 'virtual_copy_job', { job_id = 'nope' }), false)
 -- the copy is made from the Library grid, with 'All Photographs' as source and only that photo selected
 eq(table.concat(viewCalls, ','), 'module:library,grid'); eq(activeSource, 'kAllPhotos')
 eq(selected.raw.uuid, 'u1'); eq(virtualCopyName, 'MHPhotos')
-Commands.run('create_virtual_copies', { photo_ids = { 'u1' }, copy_name = 'Insta 4:5' })
+-- the call never came back in real Lightroom; here it did, so the next job may start at once
+eq(copyJob({ photo_ids = { 'u1' }, copy_name = 'Insta 4:5' }).state, 'done')
 eq(virtualCopyName, 'Insta 4:5', 'the copy gets the requested name')
 -- Lightroom's own "Create Virtual Copy" command runs OUTSIDE our write gate (nesting it stalled the bridge)
 eq(copyInGate, false, 'createVirtualCopies must not run inside withWriteAccessDo')
 -- if Lightroom returns nothing, the new copy is found among the photo's virtual copies
 copyReturnsNothing = true
-local found = Commands.run('create_virtual_copies', { photo_ids = { 'u1' } }).copies
+local found = copyJob({ photo_ids = { 'u1' } }).copies
 copyReturnsNothing = false
 eq(found[1].source_id, 'u1'); eq(found[1].id, 'copy-of-u1-late')
 eq(#found, 1)
 -- a Lightroom that insists on write access gets the call inside the gate
 copyNeedsGate = true
-local gated = Commands.run('create_virtual_copies', { photo_ids = { 'u1' } }).copies
+local gated = copyJob({ photo_ids = { 'u1' } }).copies
 copyNeedsGate = false
 eq(gated[1].source_id, 'u1'); eq(copyInGate, true)
 eq(pcall(Commands.run, 'create_virtual_copies', { photo_ids = { 'u1' }, copy_name = '' }), false)
 -- the selection is proven: if Lightroom keeps another photo selected, no copy is made
 local nBefore = #photos
 ignoreSelection = true
-local okSel, errSel = pcall(Commands.run, 'create_virtual_copies', { photo_ids = { 'u2' } })
+local sel = copyJob({ photo_ids = { 'u2' } })
 ignoreSelection = false
-eq(okSel, false); assert(tostring(errSel):find('did not select'), tostring(errSel)); eq(#photos, nBefore, 'no copy was made')
--- a copy of the wrong photo is reported with both ids
+eq(sel.state, 'failed'); assert(tostring(sel.error):find('did not select'), tostring(sel.error)); eq(#photos, nBefore, 'no copy was made')
+eq(sel.missing[1], 'u2')
+-- the copy is attributed by the original's virtualCopies, whatever Lightroom returns
 wrongMaster = p2
-local okM, errM = pcall(Commands.run, 'create_virtual_copies', { photo_ids = { 'u1' } })
+local wm = copyJob({ photo_ids = { 'u1' } })
 wrongMaster = nil
-eq(okM, false); assert(tostring(errM):find('ANOTHER photo'), tostring(errM)); assert(tostring(errM):find('u2'), tostring(errM))
+eq(wm.state, 'done'); eq(wm.copies[1].source_id, 'u1')
 -- write access never queues: it waits (asynchronous=false) with a timeout
 eq(lastWriteOpts.asynchronous, false); eq(lastWriteOpts.timeout, 15)
 -- a collection SET id (no getPhotos/addPhotos) gets a clear message, not a Lua crash

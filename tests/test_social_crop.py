@@ -71,6 +71,39 @@ async def test_virtual_copies_can_be_named(monkeypatch):
     assert server._adapter._photos[done["copies"][0]["id"]].extra["copy_name"] == "Insta 4:5"
 
 
+async def test_crop_to_aspect_while_lightroom_still_makes_the_copies(monkeypatch):
+    # 0.1.25: the plug-in's job is still running after the wait: nothing is cropped, the job id is handed on
+    monkeypatch.setenv("MHPHOTOS_ALLOW_WRITES", "1")
+    calls = []
+    monkeypatch.setattr(server._adapter, "create_virtual_copies", lambda ids, name=None: {
+        "copies": [], "job_id": "vc4-1789", "state": "running"})
+    monkeypatch.setattr(server._adapter, "apply_develop_settings", lambda *a: calls.append(a))
+    out = await server.crop_to_aspect(["p2"], "9:16", confirm=True)
+    assert out["code"] == "copies_pending" and out["job_id"] == "vc4-1789" and "virtual_copy_job" in out["hint"]
+    assert calls == []
+
+
+async def test_crop_to_aspect_on_copies_lightroom_is_still_finishing(monkeypatch):
+    from mhphotos_lightroom_mcp.bridge import BridgeError
+
+    monkeypatch.setenv("MHPHOTOS_ALLOW_WRITES", "1")
+    monkeypatch.setattr(server._adapter, "create_virtual_copies", lambda ids, name=None: {
+        "copies": [{"source_id": "p2", "id": "p2-copy"}], "job_id": "vc5-1789", "state": "done"})
+
+    def busy(*_):
+        raise BridgeError("photo_busy: Lightroom is still finishing the new virtual copy p2-copy")
+
+    monkeypatch.setattr(server._adapter, "apply_develop_settings", busy)
+    out = await server.crop_to_aspect(["p2"], "9:16", confirm=True)
+    assert out["code"] == "photo_busy" and out["copies"] == [{"source_id": "p2", "id": "p2-copy"}]
+    assert "virtual_copies=false" in out["hint"]
+
+
+async def test_virtual_copy_job_tool():
+    assert "error" in await server.virtual_copy_job("../etc")
+    assert "error" in await server.virtual_copy_job("vc1-100")  # the mock has no Lightroom jobs
+
+
 def test_straighten_keeps_corners_inside():
     import math
     w, h, angle = 6000, 4000, 3.0

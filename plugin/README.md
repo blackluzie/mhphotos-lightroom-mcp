@@ -55,6 +55,13 @@ not yet checked, or checked with a note:
       `get_photo_metadata` answers, `connection_status` stays `connected:true`
 - [ ] 0.1.24: if Lightroom does not make the copy in time, the answer is `virtual_copy_timeout` (with the manual way: Cmd+',
       then `crop_to_aspect(virtual_copies=false)` on the copy) and the bridge stays connected
+      (**failed with 8 photos**: hung > 13 minutes, bridge dropped; one copy worked, then reads of the new copy took
+      about 2 minutes each for about 5 minutes)
+- [ ] 0.1.25: `create_virtual_copies` with 8 photos answers within about 25 s (`state` done, or running with `job_id`);
+      `virtual_copy_job(job_id)` answers at once and ends with 8 copies; `connection_status` stays `connected:true` and
+      `plugin-status.json` never stays on "running …" for more than a few seconds
+- [ ] 0.1.25: `get_photo_metadata` on a brand-new copy answers within about 10 s (data, or `photo_busy`); after a few
+      minutes it answers with data
 - [x] `get_contact_sheet` with 6 photos: one numbered image
 - [ ] `list_collections(include_counts=true)` counts match; without it the call is fast
 - [ ] `apply_preset` (dry run, then confirm) on a test photo: preset visible in Develop, one history step "MHPhotos…", undoable
@@ -125,14 +132,23 @@ Known Lightroom behaviours to watch:
 - Lightroom reports "no colour" as `grey`; the tools map it to `none` (confirmed in Lightroom).
 - **Virtual copies** are only made for the *selected* photos, a selection only holds photos of the *active source*,
   and Adobe's forum reports it works reliably only in the Library grid. The plugin therefore switches to the Library
-  grid, sets the source "All Photographs", selects the one photo and creates its copy (named "MHPhotos"). Your
-  selection and view change as a side effect.
+  grid, sets the source "All Photographs", selects the photos of the call (since 0.1.25 all together, one
+  `createVirtualCopies` per call) and creates their copies (named "MHPhotos" or `copy_name`). Your selection and view
+  change as a side effect.
 - **`createVirtualCopies` does not come back** (Lightroom Classic, 06.11.2026, plug-in 0.1.21 and 0.1.23): the copy is made,
   but the call never returns to the calling task, inside or outside a write gate; `lrc_app.log` ends with
   `ag.library.createVirtualCopy`. Since 0.1.24 the plugin starts it in a helper task it never waits for and watches the
   original's `virtualCopies` for up to 20 s per photo. A hanging call only leaves that helper task behind (one per copy,
   gone after a Lightroom restart). If no copy shows up, the command answers `virtual_copy_timeout`, and no further copy is
   started while that call is still open (`copy_pending`), because Lightroom would copy whatever is selected when it runs.
+- **New virtual copies read slowly** (06.11.2026, 0.1.24): for about 5 minutes after a copy was made, every read of that
+  copy took about 2 minutes (older photos answered at once), and 0.1.24 read the new copies and changed the selection
+  inside the polling task, so 8 photos hung for more than 13 minutes. Since 0.1.25 `create_virtual_copies` only starts a
+  job: a worker task selects the photos, calls `createVirtualCopies` once in a helper task, watches the originals'
+  `virtualCopies` (by `localIdentifier`, against a wall clock) and then reads the new ids. `virtual_copy_job` answers from
+  memory. A command on a new copy first reads it in a helper task for at most 8 s; if Lightroom is still at it the answer
+  is `photo_busy` (nothing changed, retry later). After a call that never came back, the next copy job waits 6 minutes
+  (`copy_pending`). The server waits about 20 s for a job and otherwise answers `state: running` with the `job_id`.
 - **Presets created by `create_preset`** are stored under the plugin's own folder. A 2026 forum thread reports that
   applying a plugin-created preset shifted **white balance** on Lightroom 15.0.1 although the preset had none (not
   reproducible on 15.1). After the first `apply_preset` with such a preset, check the white balance.

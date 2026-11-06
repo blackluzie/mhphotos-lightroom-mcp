@@ -608,107 +608,221 @@ function Commands.remove_keywords(args)
   return { updated = #photos }
 end
 
--- Lightroom only creates virtual copies of the SELECTED photos, and a selection can only contain
--- photos of the active source (and works reliably in the Library grid). So: grid view, source
--- "All Photographs", select exactly one photo, create its copy. One copy per call keeps every
--- copy unambiguously tied to its source. The Lightroom selection/view changes as a side effect.
--- Lightroom copies the SELECTED photo, so the selection must be proven, not assumed: if it silently stays
--- on another photo, the copy would be made of that one.
-local function selectOnly(photo)
+-- ---------------------------------------------------------------- virtual copies (jobs, since 0.1.25)
+-- What Lightroom Classic does (06.11.2026, plug-in 0.1.21 to 0.1.24):
+-- * catalog:createVirtualCopies makes the copy but never comes back to the calling task (lrc_app.log ends with
+--   ag.library.createVirtualCopy, "session pending=true"). 0.1.21/0.1.23 called it in the polling task and lost the
+--   bridge; 0.1.24 called it in a helper task.
+-- * For about 5 minutes afterwards every read of the NEW copy (uuid, metadata, size) takes about 2 minutes; older
+--   photos answer at once. Most likely the copy belongs to the Lightroom session that never closed.
+-- * 0.1.24 waited "20 s" by counting 40 rounds of sleep(0.5), but each round read the new copy (uuid) and the next
+--   photo's selection ran while Lightroom was still busy, so one round could take minutes: 8 photos hung > 13 minutes
+--   in the polling task and the server dropped the bridge.
+-- Since 0.1.25 nothing of that runs in the polling task:
+-- * create_virtual_copies only checks the ids and starts a JOB (a worker task) and answers at once with its id.
+-- * The worker selects ALL photos together and calls createVirtualCopies ONCE (one hanging Lightroom call per batch,
+--   not one per photo), in a helper task of its own, then watches the originals' virtualCopies, matched by
+--   localIdentifier (a plain property, no catalog read of the new copy), against a WALL CLOCK deadline. Only then it
+--   reads the new copies' uuids; slow, but in the worker.
+-- * virtual_copy_job answers from memory only (no catalog call), so it can never block.
+-- * Commands on a copy made in the last minutes first probe it in a helper task for at most PROBE_WAIT seconds; while
+--   Lightroom is still finishing it they answer photo_busy at once instead of blocking the bridge for 2 minutes.
+-- Lightroom only creates virtual copies of the SELECTED photos, and a selection can only contain photos of the active
+-- source (and works reliably in the Library grid): grid view, source "All Photographs", select exactly these photos.
+-- The selection is proven before the copy is made; the Lightroom selection/view changes as a side effect.
+local COPY_WAIT = 20        -- s the worker watches for the copies after starting the call (plus 3 s per extra photo)
+local SELECT_WAIT = 10      -- s for the selection to show the requested photos
+local CALL_SETTLE = 360     -- s after a call that never returned before another one may start
+local FRESH_TTL = 360       -- s a new copy counts as "still being finished" until a probe has read it
+local PROBE_WAIT = 8        -- s the polling task waits for a probe of such a copy
+local JOB_KEEP = 3600       -- s a finished job stays queryable
+
+local function clock() return LrDate.currentTime() end
+
+local jobs, jobSeq, lastJob = {}, 0, nil
+local fresh = {}            -- uuid of a new copy -> time it was made
+local probes = {}           -- uuid -> probe in flight { done, ok, err }
+Commands._vc = { jobs = jobs, fresh = fresh, probes = probes } -- for the tests
+
+local function selectAll(photos)
   local cat = catalog()
   LrTasks.pcall(function() LrApplicationView.switchToModule('library') end)
   LrTasks.pcall(function() LrApplicationView.gridView() end)
   LrTasks.pcall(function() cat:setActiveSources(cat.kAllPhotos) end)
-  local want = photo:getRawMetadata('uuid')
-  for _ = 1, 6 do
-    cat:setSelectedPhotos(photo, {})
-    local target = cat.getTargetPhoto and cat:getTargetPhoto() or nil
-    if target and target:getRawMetadata('uuid') == want then return end
+  local want = {}
+  for _, p in ipairs(photos) do want[p.localIdentifier] = true end
+  local rest = {}
+  for i = 2, #photos do rest[#rest + 1] = photos[i] end
+  local deadline = clock() + SELECT_WAIT
+  repeat
+    cat:setSelectedPhotos(photos[1], rest)
+    local got = cat.getTargetPhotos and cat:getTargetPhotos() or { cat:getTargetPhoto() }
+    local n, ok = 0, true
+    for _, t in ipairs(got or {}) do
+      n = n + 1
+      if not want[t.localIdentifier] then ok = false end
+    end
+    if ok and n == #photos then return true end
     LrTasks.sleep(0.5)
-  end
-  error('Lightroom did not select the photo ' .. tostring(want) .. ' (is it visible in All Photographs?); no copy was made', 0)
+  until clock() >= deadline
+  return false
 end
 
--- uuids of the existing virtual copies of a photo (to find the new one when Lightroom does not return it)
-local function copyIds(photo)
-  local ids = {}
+-- auto_tone works on one selected photo at a time
+local function selectOnly(photo)
+  if not selectAll({ photo }) then
+    error('Lightroom did not select the photo ' .. tostring(photo:getRawMetadata('uuid')) .. ' (is it visible in All Photographs?)', 0)
+  end
+end
+
+-- localIdentifier -> photo of the existing virtual copies of a photo
+local function copiesOf(photo)
+  local out = {}
   local ok, list = LrTasks.pcall(function() return photo:getRawMetadata('virtualCopies') end)
   if ok and type(list) == 'table' then
-    for _, c in ipairs(list) do ids[c:getRawMetadata('uuid')] = c end
+    for _, c in ipairs(list) do out[c.localIdentifier] = c end
   end
-  return ids
+  return out
 end
 
--- createVirtualCopies runs Lightroom's own menu command ("Create Virtual Copy"). In Lightroom Classic the call
--- makes the copy but does not come back to the calling task: 0.1.21 (inside our write gate) and 0.1.23 (outside it)
--- both stopped with "running create_virtual_copies", lrc_app.log ended with ag.library.createVirtualCopy, and the
--- copy was there. As the command ran in the polling task, the whole bridge was gone until Lightroom restarted.
--- So since 0.1.24 the call runs in a task of its own that is never waited for. The polling task only watches the
--- original's virtualCopies (a read, bounded to COPY_WAIT seconds) and answers as soon as the new copy shows up.
--- If the call hangs, only that helper task hangs; the bridge keeps answering.
-local COPY_WAIT = 20 -- seconds per photo
--- A call that has not produced its copy yet. While it is open no further copy is started: if Lightroom ran it
--- later it would copy whatever is selected THEN, possibly another photo.
-local pendingCopy
-
-local function newCopyOf(photo, before)
-  for id, c in pairs(copyIds(photo)) do
-    if not before[id] then return c end
+local function newCopy(photo, before)
+  for lid, c in pairs(copiesOf(photo)) do
+    if not before[lid] then return c end
   end
   return nil
 end
 
-local function copyStillPending()
-  local job = pendingCopy
-  if not job then return false end
-  if job.done or newCopyOf(job.master, job.before) then pendingCopy = nil; return false end
+local function errText(e) return tostring(type(e) == 'table' and e.message or e) end
+
+local function callCreate(job, copyName)
+  job.callStarted = clock()
+  LrTasks.startAsyncTask(function()
+    local ok, made = LrTasks.pcall(function() return catalog():createVirtualCopies(copyName) end)
+    if not ok and errText(made):lower():find('write') then
+      -- only a Lightroom that insists on a gate gets the call inside one (still in this helper task)
+      ok, made = LrTasks.pcall(function()
+        local r
+        writeAccess('MHPhotos: virtual copy', function() r = catalog():createVirtualCopies(copyName) end)
+        return r
+      end)
+    end
+    job.callOk, job.callMade, job.callDone = ok, made, true
+  end, 'MHPhotos: virtual copy call')
+end
+
+local function allFound(job)
+  for i = 1, #job.photos do if not job.found[i] then return false end end
   return true
 end
 
-local function startCopy(photo, copyName)
-  local job = { master = photo, before = copyIds(photo) }
-  pendingCopy = job
-  invalidateCache()
-  LrTasks.startAsyncTask(function()
-    local ok, made = LrTasks.pcall(function() return catalog():createVirtualCopies(copyName) end)
-    if not ok then
-      local msg = tostring(type(made) == 'table' and made.message or made)
-      if msg:lower():find('write') then
-        -- only a Lightroom that insists on a gate gets the call inside one (still in this helper task)
-        ok, made = LrTasks.pcall(function()
-          local r
-          writeAccess('MHPhotos: virtual copy', function() r = catalog():createVirtualCopies(copyName) end)
-          return r
-        end)
+local function lookForCopies(job)
+  for i, p in ipairs(job.photos) do
+    if not job.found[i] then job.found[i] = newCopy(p, job.before[i]) end
+  end
+  -- a Lightroom that returns the copies (as the SDK says): match them to their originals
+  if not allFound(job) and job.callDone and job.callOk and type(job.callMade) == 'table' then
+    for _, c in ipairs(job.callMade) do
+      local okM, master = LrTasks.pcall(function() return c:getRawMetadata('masterPhoto') end)
+      for i, p in ipairs(job.photos) do
+        if okM and master and master.localIdentifier == p.localIdentifier and not job.found[i] then job.found[i] = c end
       end
     end
-    job.ok, job.made, job.done = ok, made, true
-  end, 'MHPhotos: virtual copy')
-  return job
+  end
 end
 
--- Waits (yielding, so the helper task and Lightroom can run) until the new copy is visible. Returns the copy,
--- or nil and a reason.
-local function waitForCopy(job)
-  for _ = 1, COPY_WAIT * 2 do
-    local copy = newCopyOf(job.master, job.before)
-    if not copy and job.done and job.ok and type(job.made) == 'table' then copy = job.made[1] end
-    if copy then
-      pendingCopy = nil
-      return copy
+local function finish(job, state, err)
+  job.state, job.error, job.finished = state, err, clock()
+end
+
+local function readIds(job)
+  job.phase = 'reading ids'
+  for i, c in ipairs(job.found) do
+    if c and not job.ids[i] then
+      local ok, id = LrTasks.pcall(function() return c:getRawMetadata('uuid') end)
+      if ok and id then
+        job.ids[i] = id
+        fresh[id] = clock()
+      end
     end
-    if job.done and not job.ok then
-      pendingCopy = nil
-      return nil, tostring(type(job.made) == 'table' and job.made.message or job.made)
-    end
+  end
+end
+
+local function worker(job, copyName)
+  if job.cancelled then return end
+  job.phase = 'selecting'
+  job.workerStarted = clock()
+  if not selectAll(job.photos) then
+    return finish(job, 'failed', 'Lightroom did not select the photos (are they visible in All Photographs?); no copy was made')
+  end
+  for i, p in ipairs(job.photos) do job.before[i] = copiesOf(p) end
+  job.phase = 'copying'
+  callCreate(job, copyName)
+  local deadline = clock() + COPY_WAIT + 3 * (#job.photos - 1)
+  while clock() < deadline do
+    lookForCopies(job)
+    if allFound(job) then break end
+    if job.callDone and not job.callOk then break end
     LrTasks.sleep(0.5)
   end
-  if job.done then pendingCopy = nil end
-  return nil, 'timeout'
+  readIds(job)
+  if allFound(job) then return finish(job, 'done') end
+  if job.callDone and not job.callOk then
+    return finish(job, 'failed', 'Lightroom created no virtual copy (' .. errText(job.callMade) .. ')')
+  end
+  finish(job, 'timeout', 'Lightroom did not create all virtual copies within '
+    .. math.floor(deadline - job.callStarted) .. ' s (the bridge stays connected)')
+  -- keep watching quietly: a copy that shows up late is still reported, and lifts copy_pending
+  while not allFound(job) and clock() - job.callStarted < CALL_SETTLE do
+    LrTasks.sleep(5)
+    lookForCopies(job)
+  end
+  readIds(job)
+  job.lateDone = true
 end
 
 local MANUAL = "Create the copy by hand in Lightroom (select the photo, Cmd+' / Ctrl+'), then crop it with "
   .. 'crop_to_aspect(virtual_copies=false) on the copy.'
+
+local function snapshot(job)
+  local copies, missing = {}, {}
+  for i, src in ipairs(job.sourceIds) do
+    if job.ids[i] then copies[#copies + 1] = { source_id = src, id = job.ids[i] }
+    else missing[#missing + 1] = src end
+  end
+  local s = {
+    job_id = job.id, state = job.state, phase = job.phase, total = #job.photos, copies = copies,
+    elapsed = math.floor(clock() - job.created),
+  }
+  if #missing > 0 and job.state ~= 'running' then s.missing = missing end
+  if job.error then
+    s.error = job.error .. (#copies > 0 and ' Copies made: ' .. #copies .. '.' or '') .. ' ' .. MANUAL
+  end
+  return s
+end
+
+-- Is an earlier Lightroom call still open in a way that a new one could copy the wrong photos?
+local function pendingReason()
+  local job = lastJob
+  if not job then return nil end
+  if job.phase == 'queued' then
+    if clock() - job.created < COPY_WAIT then return 'an earlier copy job has not started yet' end
+    job.cancelled = true -- the worker never ran; if it runs later it stops at once
+    finish(job, 'failed', 'the copy job never started in Lightroom')
+    return nil
+  end
+  if job.state == 'running' then return 'copy job ' .. job.id .. ' is still running' end
+  if not job.callStarted or job.callDone then return nil end
+  if not allFound(job) then
+    return 'the "Create Virtual Copy" of job ' .. job.id .. ' has not finished in Lightroom (if Lightroom ran it later, it '
+      .. 'would copy whatever is selected then)'
+  end
+  local wait = CALL_SETTLE - (clock() - job.callStarted)
+  if wait > 0 then
+    return 'Lightroom is still finishing the copies of job ' .. job.id .. ' (try again in about '
+      .. math.ceil(wait / 60) .. ' min)'
+  end
+  return nil
+end
 
 function Commands.create_virtual_copies(args)
   local photos = findAll(args.photo_ids)
@@ -716,34 +830,81 @@ function Commands.create_virtual_copies(args)
   local copyName = args.copy_name
   if copyName == nil then copyName = 'MHPhotos' end
   if type(copyName) ~= 'string' or copyName == '' or #copyName > 60 then error('copy_name must be text (max 60 characters)', 0) end
-  if copyStillPending() then
-    error('copy_pending: an earlier "Create Virtual Copy" of photo ' .. tostring(pendingCopy.master:getRawMetadata('uuid'))
-      .. ' has not finished in Lightroom; no new copy is started until it does (or Lightroom is restarted). ' .. MANUAL, 0)
+  local why = pendingReason()
+  if why then error('copy_pending: ' .. why .. '; no new copy was started. ' .. MANUAL, 0) end
+  for id, job in pairs(jobs) do
+    if job.finished and clock() - job.finished > JOB_KEEP then jobs[id] = nil end
   end
-  local copies = {}
-  local function made()
-    local ids = {}
-    for _, c in ipairs(copies) do ids[#ids + 1] = c.id end
-    return #ids > 0 and (' Copies made before: ' .. table.concat(ids, ', ') .. '.') or ''
+  jobSeq = jobSeq + 1
+  local sourceIds = {}
+  for i, id in ipairs(args.photo_ids) do sourceIds[i] = tostring(id) end
+  local job = {
+    id = 'vc' .. jobSeq .. '-' .. tostring(math.floor(clock())), photos = photos, sourceIds = sourceIds,
+    before = {}, found = {}, ids = {}, state = 'running', phase = 'queued', created = clock(),
+  }
+  jobs[job.id], lastJob = job, job
+  invalidateCache()
+  LrTasks.startAsyncTask(function()
+    local ok, err = LrTasks.pcall(worker, job, copyName)
+    if not ok and job.state == 'running' then finish(job, 'failed', errText(err)) end
+  end, 'MHPhotos: virtual copies')
+  return snapshot(job)
+end
+
+-- Read only, from memory: never touches the catalog, so it always answers at once.
+function Commands.virtual_copy_job(args)
+  local job = jobs[tostring(args.job_id)]
+  if not job then notFound('no virtual copy job ' .. tostring(args.job_id) .. ' (Lightroom restarted?)') end
+  return snapshot(job)
+end
+
+-- Reads a new copy in a helper task (the same fields get_photo reads) and waits at most PROBE_WAIT seconds. True when
+-- Lightroom answered, so the command itself will not hang on it.
+local function probeFresh(id)
+  local pr = probes[id]
+  if not pr then
+    pr = {}
+    probes[id] = pr
+    LrTasks.startAsyncTask(function()
+      local ok, err = LrTasks.pcall(function()
+        local p = catalog():findPhotoByUuid(id)
+        if p then
+          photoMetadata(p)
+          p:getRawMetadata('croppedDimensions')
+        end
+      end)
+      pr.ok, pr.err, pr.done = ok, err, true
+    end, 'MHPhotos: probe new copy')
   end
-  for _, p in ipairs(photos) do
-    selectOnly(p)
-    local copy, why = waitForCopy(startCopy(p, copyName))
-    if not copy then
-      if why == 'timeout' then
-        error('virtual_copy_timeout: Lightroom did not create the virtual copy of ' .. tostring(p:getRawMetadata('uuid'))
-          .. ' within ' .. COPY_WAIT .. ' s (the bridge stays connected).' .. made() .. ' ' .. MANUAL, 0)
-      end
-      error('Lightroom created no virtual copy (' .. tostring(why) .. ').' .. made(), 0)
+  local deadline = clock() + PROBE_WAIT
+  while not pr.done and clock() < deadline do LrTasks.sleep(0.2) end
+  if pr.done then probes[id] = nil end
+  return pr.done
+end
+
+local function freshIds(args)
+  local out = {}
+  local function add(id)
+    local t = id ~= nil and fresh[tostring(id)]
+    if t then
+      if clock() - t < FRESH_TTL then out[#out + 1] = tostring(id) else fresh[tostring(id)] = nil end
     end
-    local master = copy:getRawMetadata('masterPhoto')
-    if master and master:getRawMetadata('uuid') ~= p:getRawMetadata('uuid') then
-      error('Lightroom made a virtual copy of ANOTHER photo (copy ' .. tostring(copy:getRawMetadata('uuid'))
-        .. ', master ' .. tostring(master:getRawMetadata('uuid')) .. '). Delete that copy in Lightroom.', 0)
-    end
-    copies[#copies + 1] = { source_id = p:getRawMetadata('uuid'), id = copy:getRawMetadata('uuid') }
   end
-  return { copies = copies }
+  add(args.photo_id)
+  if type(args.photo_ids) == 'table' then for _, id in ipairs(args.photo_ids) do add(id) end end
+  return out
+end
+
+local function guardFresh(name, args)
+  if name == 'virtual_copy_job' or name == 'create_virtual_copies' then return end
+  for _, id in ipairs(freshIds(args)) do
+    if probeFresh(id) then
+      fresh[id] = nil
+    else
+      error('photo_busy: Lightroom is still finishing the new virtual copy ' .. id .. ' (for a few minutes after a copy '
+        .. 'is made, reading it takes minutes). Nothing was changed; try again in a minute.', 0)
+    end
+  end
 end
 
 -- Read only: size of each picture after rotation and crop (croppedDimensions); the server uses it to
@@ -1125,8 +1286,10 @@ end
 
 function Commands.run(name, args)
   local fn = Commands[name]
-  if name == 'run' or type(fn) ~= 'function' then error('unknown command: ' .. tostring(name), 0) end
-  return fn(args or {})
+  if name == 'run' or type(fn) ~= 'function' or name:sub(1, 1) == '_' then error('unknown command: ' .. tostring(name), 0) end
+  args = args or {}
+  guardFresh(name, args)
+  return fn(args)
 end
 
 return Commands
