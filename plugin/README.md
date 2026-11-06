@@ -48,7 +48,8 @@ not yet checked, or checked with a note:
 - [x] `set_color_label` (green) shows in Lightroom; `none` clears it
 - [x] `set_title_caption`: visible in the Metadata panel; existing text is not overwritten without `overwrite=true`
 - [x] `create_virtual_copies`: copy appears next to the original, original unchanged
-- [ ] 0.1.22: after `create_virtual_copies` (1 photo) the bridge stays connected: the answer comes at once, the next
+- [ ] 0.1.23: `list_collections` answers at once (0.1.22 answered every command, reads included, with "busy" after 26 s)
+- [ ] 0.1.23: after `create_virtual_copies` (1 photo) the bridge stays connected: the answer comes at once, the next
       `get_photo_metadata` answers, `connection_status` stays `connected:true` (0.1.21 lost the bridge until Lightroom restarted)
 - [x] `get_contact_sheet` with 6 photos: one numbered image
 - [ ] `list_collections(include_counts=true)` counts match; without it the call is fast

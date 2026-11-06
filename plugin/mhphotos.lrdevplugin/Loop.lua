@@ -61,40 +61,21 @@ local function errorText(res)
   return tostring(res)
 end
 
--- Seconds the loop waits for a command before it answers with an error and goes back to polling.
--- The server sends its own timeout; the answer must arrive a little before it gives up.
-local function deadlineFor(command)
-  local t = tonumber(command.timeout)
-  if not t or t <= 0 then return 600 end
-  return math.max(5, t - 3)
-end
-
--- The command runs in its OWN task, never in the loop task: whatever a command does to its task
--- (Lightroom UI commands such as createVirtualCopies, a catalog call that never comes back), the loop
--- keeps beating, answers within the deadline and goes on polling.
-local function execute(cfg, command, beat)
+-- The command runs INSIDE the loop task, as up to 0.1.21. 0.1.22 started every command in a task of its
+-- own and waited for it; in Lightroom that task never finished (not even list_collections), so every
+-- command came back "busy" after the deadline, while the polling task itself kept running. Why Lightroom
+-- never completes a task started from inside the polling task is not known; plugin/tests/loop_test.lua
+-- models exactly that, so commands must not depend on a second task. Keep the command in the polling task; createVirtualCopies no longer hangs it (Commands.makeCopy runs
+-- it outside the write gate, which was the cause of the lost bridge in 0.1.21).
+local function execute(cfg, command)
   State.lastCommand = command.name
   mark('running ' .. command.name)
-  local job = { done = false }
-  LrTasks.startAsyncTask(function()
-    local ok, res = LrTasks.pcall(Commands.run, command.name, command.args)
-    job.ok, job.res, job.done = ok, res, true
-  end, 'MHPhotos: ' .. tostring(command.name))
-  local started = os.time()
-  local limit = deadlineFor(command)
-  while not job.done and os.time() - started < limit and not State.stop do
-    beat()
-    LrTasks.sleep(0.1)
-  end
+  local ok, res = LrTasks.pcall(Commands.run, command.name, command.args)
   local payload
-  if job.done and job.ok then
-    payload = { id = command.id, ok = true, data = job.res }
-  elseif job.done then
-    payload = { id = command.id, ok = false, error = errorText(job.res) }
+  if ok then
+    payload = { id = command.id, ok = true, data = res }
   else
-    State.stuckCommand = command.name
-    payload = { id = command.id, ok = false, error = 'busy: Lightroom is still working on ' .. tostring(command.name)
-      .. ' after ' .. tostring(limit) .. 's; the bridge stays connected. Check the result in Lightroom before retrying.' }
+    payload = { id = command.id, ok = false, error = errorText(res) }
   end
   Stats.finished(stats, command.name, payload.ok, payload.ok and '' or payload.error, os.time())
   local sent, encoded = pcall(Json.encode, payload)
@@ -105,7 +86,7 @@ local function execute(cfg, command, beat)
   mark('connected (finished ' .. command.name .. ')')
 end
 
-local function step(beat)
+local function step()
   local cfg = readConfig()
   if not cfg then
     mark('no bridge.json (start the MCP server with MHPHOTOS_ADAPTER=bridge)')
@@ -114,13 +95,12 @@ local function step(beat)
   end
   mark('polling')
   local body, hdrs = post(cfg, '/v1/poll', { client = 'lightroom' }, 20)
-  beat()
   local status = hdrs and hdrs.status
   if status == 200 and body then
     mark('connected')
     local ok, msg = pcall(Json.decode, body)
     if ok and type(msg) == 'table' and type(msg.command) == 'table' then
-      execute(cfg, msg.command, beat)
+      execute(cfg, msg.command)
     end
   elseif status == 401 then
     mark('unauthorized (token changed?) - re-reading config')
@@ -131,43 +111,17 @@ local function step(beat)
   end
 end
 
--- generation: Init's watchdog starts a new loop when this one stops beating; an old loop that wakes up
--- again sees a newer generation and ends, so two loops never poll at the same time.
-function Loop.run(generation)
-  generation = generation or 0
-  local function beat() State.beat = os.time() end
-  local function current() return not State.stop and (State.generation or 0) == generation end
-  beat()
+function Loop.run()
   mark('loop started')
-  while current() do
+  while not State.stop do
     -- an error anywhere in one round (config, HTTP, JSON) must not end the bridge
-    local ok, err = LrTasks.pcall(step, beat)
-    beat()
+    local ok, err = LrTasks.pcall(step)
     if not ok then
       mark('loop error (continuing): ' .. errorText(err))
       LrTasks.sleep(2)
     end
   end
-  if State.stop then State.status = 'stopped' end
-end
-
--- Watchdog (own task, started by Init): if the loop has not beaten for STALE seconds (task gone or stuck
--- in a call that never returns), start a fresh loop with a new generation.
-Loop.STALE = 90
-function Loop.watchdog(start)
-  State.generation = State.generation or 0
-  start(State.generation)
-  while not State.stop do
-    LrTasks.sleep(10)
-    if not State.stop and os.time() - (State.beat or os.time()) > Loop.STALE then
-      State.generation = State.generation + 1
-      State.restarts = (State.restarts or 0) + 1
-      stats.restarts = State.restarts
-      mark('loop restarted by watchdog (' .. tostring(State.restarts) .. 'x)')
-      State.beat = os.time()
-      start(State.generation)
-    end
-  end
+  State.status = 'stopped'
 end
 
 return Loop

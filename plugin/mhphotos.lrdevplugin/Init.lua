@@ -18,20 +18,10 @@ local ok, err = pcall(function()
   local Loop = require 'Loop'
   State.stop = false
   trace('init: modules loaded, starting loop task')
-  -- The watchdog starts the polling loop and starts a new one if it stops beating (see Loop.watchdog).
-  local function startLoop(generation)
-    LrTasks.startAsyncTask(function()
-      local ok2, err2 = LrTasks.pcall(Loop.run, generation)
-      if not ok2 then trace('loop crashed: ' .. tostring(type(err2) == 'table' and err2.message or err2)) end
-    end, 'MHPhotos: bridge loop')
-  end
   LrTasks.startAsyncTask(function()
-    local ok4, err4 = LrTasks.pcall(Loop.watchdog, function(generation)
-      if generation > 0 then trace('watchdog: loop stopped beating, starting loop #' .. generation) end
-      startLoop(generation)
-    end)
-    if not ok4 then trace('watchdog crashed: ' .. tostring(type(err4) == 'table' and err4.message or err4)) end
-  end, 'MHPhotos: bridge watchdog')
+    local ok2, err2 = LrTasks.pcall(Loop.run)
+    if not ok2 then trace('loop crashed: ' .. tostring(type(err2) == 'table' and err2.message or err2)) end
+  end)
   -- Optional auto-export; does nothing unless ~/.mhphotos-lightroom-mcp/autoexport.json enables it.
   local AutoExport = require 'AutoExport'
   LrTasks.startAsyncTask(function()
