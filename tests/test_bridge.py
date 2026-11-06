@@ -132,6 +132,28 @@ async def test_timeout_when_plugin_hangs(bridge):
         adapter.list_collections()
 
 
+def test_command_carries_remaining_timeout(bridge):
+    # The plugin answers (with an error if need be) before the server gives up, so it keeps polling
+    # instead of going silent; it learns the deadline from the command.
+    import threading
+
+    _req(bridge, "/v1/poll", token=bridge.token, data={})
+    caller = threading.Thread(target=BridgeAdapter(bridge).create_virtual_copies, args=(["u1"],), daemon=True)
+    caller.start()
+    req = urllib.request.Request(
+        bridge.url + "/v1/poll",
+        data=b"{}",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {bridge.token}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as r:
+        cmd = json.loads(r.read())["command"]
+    assert cmd["name"] == "create_virtual_copies"
+    assert 100 <= cmd["timeout"] <= 120
+    _req(bridge, "/v1/result", token=bridge.token, data={"id": cmd["id"], "ok": True, "data": {"copies": []}})
+    caller.join(5)
+
+
 def test_plugin_config_file_is_private(bridge, tmp_path):
     path = write_plugin_config(bridge)
     cfg = json.loads(path.read_text())
