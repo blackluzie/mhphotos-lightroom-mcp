@@ -66,9 +66,10 @@ end
 -- command came back "busy" after the deadline, while the polling task itself kept running. Why Lightroom
 -- never completes a task started from inside the polling task is not known; plugin/tests/loop_test.lua
 -- models exactly that, so commands must not depend on a second task. Keep the command in the polling task.
--- Lightroom's createVirtualCopies does not come back to its caller (0.1.21 and 0.1.23 lost the bridge on it), so since
--- 0.1.24 Commands.create_virtual_copies starts it in a helper task it never waits for and only watches the original's
--- virtualCopies for a bounded time; plugin/tests/virtual_copy_test.lua checks the loop survives a hanging call.
+-- Lightroom's createVirtualCopies does not come back to its caller, and new copies read slowly for minutes. Since 0.1.25
+-- Commands.create_virtual_copies only starts a job (its own task) and virtual_copy_job answers from memory; commands on
+-- a new copy probe it for at most 8 s first (photo_busy). plugin/tests/virtual_copy_test.lua checks that no command
+-- keeps this task longer than 10 s, whatever Lightroom does.
 local function execute(cfg, command)
   State.lastCommand = command.name
   mark('running ' .. command.name)

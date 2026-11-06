@@ -31,11 +31,13 @@ WRITE_TOOLS = (
     'set_rating', 'set_flag', 'set_color_label', 'set_title_caption', 'add_keywords',
     'create_collection', 'move_collection', 'create_smart_collection', 'create_keyword', 'import_photo',
     'build_smart_previews', 'set_custom_metadata', 'send_webhook', 'auto_tone', 'add_to_collection', 'create_virtual_copies',
-    'undo_last_change',
+    'virtual_copy_job', 'undo_last_change',
     'apply_preset', 'apply_develop_settings', 'sync_develop_settings', 'create_preset', 'crop_to_aspect',
     'catalog_audit_collections', 'set_location', 'rotate_photos',
 )
-ADDITIVE_TOOLS = {'create_collection', 'move_collection', 'create_smart_collection', 'create_keyword', 'import_photo',
+# status of a running create_virtual_copies job: only useful with writes, reads nothing but the plug-in's memory
+STATUS_TOOLS = {'virtual_copy_job'}
+ADDITIVE_TOOLS = STATUS_TOOLS | {'create_collection', 'move_collection', 'create_smart_collection', 'create_keyword', 'import_photo',
     'build_smart_previews', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords',
     'catalog_audit_collections'}
 WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
@@ -185,7 +187,7 @@ def register_tools(app, writes=None):
         function = export_photos if name == 'export_photos' else getattr(server, name)
         overwrites = ((name in WRITE_TOOLS and name not in ADDITIVE_TOOLS) or name == 'mhphotos_cancel_instagram'
             or name in FILES_TOOLS)
-        reads = name in READ_TOOLS or name in MHPHOTOS_TOOLS
+        reads = name in READ_TOOLS or name in MHPHOTOS_TOOLS or name in STATUS_TOOLS
         app.add_tool(function,
             structured_output=False if name in {'get_photo_previews', 'get_contact_sheet', 'mhphotos_instagram_images'} else None,
             annotations=ToolAnnotations(readOnlyHint=reads,

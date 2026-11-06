@@ -715,9 +715,11 @@ async def create_virtual_copies(
     Apply presets/settings to the returned copy ids, compare with get_photo_previews, keep or
     delete the copy in Lightroom. Lightroom only copies the selected photos, so the plugin
     switches to the Library grid and "All Photographs" and changes your selection. copy_name (max 60
-    characters) is the name Lightroom shows for the copies, e.g. "Insta 4:5". The plugin waits up to 20 s per photo for
-    Lightroom's copy; on virtual_copy_timeout or copy_pending let the user make the copy by hand (Cmd+') and go on with
-    that copy's id. Needs opt-in.
+    characters) is the name Lightroom shows for the copies, e.g. "Insta 4:5". Lightroom makes all copies of a call in
+    one go in the background; this waits about 20 s. state "running" (with job_id) means Lightroom is still at it: ask
+    virtual_copy_job(job_id) every 30-60 s. For a few minutes new copies answer photo_busy; just retry later. On
+    virtual_copy_timeout or copy_pending let the user make the copy by hand (Cmd+') and go on with that copy's id.
+    Needs opt-in.
     """
     if len(photo_ids) > 10:
         return {"error": "At most 10 virtual copies per call"}
@@ -730,6 +732,15 @@ async def create_virtual_copies(
         confirm, ctx=ctx, tool="create_virtual_copies",
         summary="Virtuelle Kopien anlegen (Auswahl in Lightroom ändert sich)",
     )
+
+
+@mcp.tool()
+async def virtual_copy_job(job_id: str) -> dict[str, Any]:
+    """Status of a create_virtual_copies (or crop_to_aspect) job that answered state "running": copies made so far
+    ({"source_id", "id"}), state running/done/failed/timeout. Read only; answers at once."""
+    if not re.fullmatch(r"vc\d{1,9}-\d{1,12}", job_id or ""):
+        return {"error": "job_id looks like vc3-1789123456 (from create_virtual_copies)"}
+    return await _run(_adapter.virtual_copy_job, job_id)
 
 
 @mcp.tool()
@@ -765,7 +776,22 @@ async def crop_to_aspect(
         if virtual_copies:
             made = _adapter.create_virtual_copies(photo_ids, f"{label} {aspect}")
             copies = made.get("copies") or []
+            if made.get("state") == "running":
+                return {"error": "Lightroom is still making the virtual copies; nothing was cropped yet.",
+                        "code": "copies_pending", "job_id": made.get("job_id"), "copies": copies,
+                        "hint": f"Ask virtual_copy_job('{made.get('job_id')}') every 30-60 s; when it is done, crop the "
+                        "copy ids with crop_to_aspect(..., virtual_copies=false) (retry on photo_busy)."}
             targets = [c["id"] for c in copies]
+        try:
+            return _crop(targets, copies)
+        except BridgeError as exc:
+            if not copies or not str(exc).startswith("photo_busy"):
+                raise
+            return {"error": "The virtual copies were made, but Lightroom is still finishing them; nothing was cropped "
+                    "yet.", "code": "photo_busy", "copies": copies,
+                    "hint": "In a few minutes crop the copy ids with crop_to_aspect(..., virtual_copies=false)."}
+
+    def _crop(targets: list[str], copies: list[dict[str, Any]]) -> dict[str, Any]:
         _adapter.apply_develop_settings(targets, social_crop.FULL_FRAME)  # a copy inherits the crop of its source
         dims = _adapter.photo_dimensions(targets).get("dimensions") or {}
         cropped, used = [], {}
@@ -2717,7 +2743,7 @@ TOOLSETS: dict[str, set[str]] = {
     },
     "develop": {
         "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",
-        "create_virtual_copies", "crop_to_aspect", "build_smart_previews", "auto_tone",
+        "create_virtual_copies", "virtual_copy_job", "crop_to_aspect", "build_smart_previews", "auto_tone",
     },
     "mhphotos": {
         "send_to_mhphotos_inbox", "mhphotos_galleries", "mhphotos_inbox", "mhphotos_analyze_inbox",

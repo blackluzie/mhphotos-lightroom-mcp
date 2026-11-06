@@ -222,7 +222,11 @@ class CatalogAdapter(Protocol):
         """Only used by undo, to remove keywords this server added."""
 
     def create_virtual_copies(self, photo_ids: list[str], copy_name: str | None = None) -> dict[str, Any]:
-        """{"copies": [{"source_id", "id"}]}; copy_name is the name Lightroom shows for the copies."""
+        """{"copies": [{"source_id", "id"}]}; copy_name is the name Lightroom shows for the copies. With the
+        Lightroom plug-in also "job_id" and "state" (running while Lightroom is still making them)."""
+
+    def virtual_copy_job(self, job_id: str) -> dict[str, Any]:
+        """Status of a create_virtual_copies job: {"copies", "job_id", "state"}."""
 
     def photo_dimensions(self, photo_ids: list[str]) -> dict[str, Any]:
         """{"dimensions": {photo id: {"width", "height"}}} after rotation and crop"""
@@ -470,6 +474,9 @@ class MockAdapter:
             out[p.id] = {"width": cw, "height": ch, "full_width": w, "full_height": h,
                          "orientation": "BC" if p.extra.get("stored_turned") else "AB"}
         return {"dimensions": out}
+
+    def virtual_copy_job(self, job_id):
+        raise NotFoundError(f"No virtual copy job {job_id} (jobs exist only with the Lightroom plug-in)")
 
     def create_virtual_copies(self, photo_ids, copy_name=None):
         copies = []

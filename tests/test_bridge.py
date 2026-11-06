@@ -8,6 +8,7 @@ from mhphotos_lightroom_mcp import server
 from mhphotos_lightroom_mcp.bridge import (
     Bridge,
     BridgeAdapter,
+    BridgeError,
     BridgeUnavailable,
     write_plugin_config,
 )
@@ -138,7 +139,7 @@ def test_command_carries_remaining_timeout(bridge):
     import threading
 
     _req(bridge, "/v1/poll", token=bridge.token, data={})
-    caller = threading.Thread(target=BridgeAdapter(bridge).create_virtual_copies, args=(["u1"],), daemon=True)
+    caller = threading.Thread(target=BridgeAdapter(bridge).list_collections, args=(True,), daemon=True)
     caller.start()
     req = urllib.request.Request(
         bridge.url + "/v1/poll",
@@ -148,32 +149,74 @@ def test_command_carries_remaining_timeout(bridge):
     )
     with urllib.request.urlopen(req, timeout=5) as r:
         cmd = json.loads(r.read())["command"]
-    assert cmd["name"] == "create_virtual_copies"
+    assert cmd["name"] == "list_collections"
     assert 100 <= cmd["timeout"] <= 120
-    _req(bridge, "/v1/result", token=bridge.token, data={"id": cmd["id"], "ok": True, "data": {"copies": []}})
+    _req(bridge, "/v1/result", token=bridge.token, data={"id": cmd["id"], "ok": True, "data": {"collections": []}})
     caller.join(5)
 
 
-def test_virtual_copies_timeout_covers_the_plugins_wait(bridge):
-    # 0.1.24: the plugin waits up to 20 s per photo for Lightroom's copy, then answers itself; the server must not
-    # give up first, or the plugin's clear error (with the manual way out) never reaches the user
-    import threading
+class _JobPlugin:
+    """Stands in for Bridge.call: answers create_virtual_copies with a job and virtual_copy_job with scripted states."""
 
-    _req(bridge, "/v1/poll", token=bridge.token, data={})
-    ids = [f"u{i}" for i in range(10)]
-    caller = threading.Thread(target=BridgeAdapter(bridge).create_virtual_copies, args=(ids,), daemon=True)
-    caller.start()
-    req = urllib.request.Request(
-        bridge.url + "/v1/poll",
-        data=b"{}",
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {bridge.token}"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=5) as r:
-        cmd = json.loads(r.read())["command"]
-    assert cmd["timeout"] >= 10 * 23
-    _req(bridge, "/v1/result", token=bridge.token, data={"id": cmd["id"], "ok": True, "data": {"copies": []}})
-    caller.join(5)
+    def __init__(self, states, start=None):
+        self.states = list(states)
+        self.start = start or {"job_id": "vc1-100", "state": "running", "phase": "queued", "total": 2, "copies": []}
+        self.calls = []
+
+    def call(self, name, args=None, timeout=30.0):
+        self.calls.append((name, args, timeout))
+        if name == "create_virtual_copies":
+            return self.start
+        assert name == "virtual_copy_job" and args == {"job_id": "vc1-100"}
+        return self.states.pop(0) if len(self.states) > 1 else self.states[0]
+
+
+def _job(state, copies=(), **extra):
+    return {"job_id": "vc1-100", "state": state, "total": 2,
+            "copies": [{"source_id": s, "id": f"{s}-copy"} for s in copies], **extra}
+
+
+def _adapter(plugin, wait=2.0):
+    adapter = BridgeAdapter(plugin)
+    adapter.copy_poll_every = 0.01
+    adapter.copy_wait = wait
+    return adapter
+
+
+def test_virtual_copies_start_a_job_and_poll_its_status():
+    # 0.1.25: the plug-in answers at once with a job; no bridge call waits for Lightroom longer than 30 s
+    plugin = _JobPlugin([_job("running", phase="copying"), _job("running", ["u1"], phase="reading ids"),
+                         _job("done", ["u1", "u2"])])
+    out = _adapter(plugin).create_virtual_copies(["u1", "u2"], "Insta 9:16")
+    assert out["state"] == "done" and out["job_id"] == "vc1-100"
+    assert out["copies"] == [{"source_id": "u1", "id": "u1-copy"}, {"source_id": "u2", "id": "u2-copy"}]
+    assert plugin.calls[0] == ("create_virtual_copies", {"photo_ids": ["u1", "u2"], "copy_name": "Insta 9:16"}, 30.0)
+    assert all(timeout <= 30.0 for _, _, timeout in plugin.calls)
+    assert [c[0] for c in plugin.calls].count("virtual_copy_job") == 3
+
+
+def test_virtual_copies_answer_running_after_the_wait():
+    plugin = _JobPlugin([_job("running", ["u1"], phase="reading ids", elapsed=40)])
+    t0 = time.monotonic()
+    out = _adapter(plugin, wait=0.2).create_virtual_copies(["u1", "u2"])
+    assert time.monotonic() - t0 < 2
+    assert out["state"] == "running" and out["job_id"] == "vc1-100" and out["copies"][0]["id"] == "u1-copy"
+    assert "virtual_copy_job" in out["hint"]
+
+
+def test_virtual_copy_job_failures():
+    plugin = _JobPlugin([_job("timeout", ["u1"], error="Lightroom did not create all virtual copies within 23 s")])
+    with pytest.raises(BridgeError, match="virtual_copy_timeout: .*within 23 s.*Copies made: u1-copy"):
+        _adapter(plugin).create_virtual_copies(["u1", "u2"])
+    # the status tool reports the same as a result, not an exception
+    status = _adapter(plugin).virtual_copy_job("vc1-100")
+    assert status["error"].startswith("virtual_copy_timeout") and status["copies"][0]["id"] == "u1-copy"
+
+
+def test_virtual_copies_from_a_plugin_before_0_1_25():
+    plugin = _JobPlugin([], start={"copies": [{"source_id": "u1", "id": "c1"}]})
+    assert _adapter(plugin).create_virtual_copies(["u1"]) == {"copies": [{"source_id": "u1", "id": "c1"}]}
+    assert len(plugin.calls) == 1
 
 
 def test_plugin_config_file_is_private(bridge, tmp_path):
