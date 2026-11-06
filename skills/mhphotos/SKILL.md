@@ -51,6 +51,7 @@ Eigentümer-Rückfragen nur, wo er entscheiden muss. Sonst weiterarbeiten.
 - **Auto-Ton**: `auto_tone(photo_ids, white_balance=false)` (max. 10 Fotos) nutzt Lightrooms „Auto“; das Plugin öffnet dafür Foto für Foto das Entwickeln-Modul, danach wieder das Raster. Nur auf Wunsch und an einem Foto prüfen lassen.
 - **Export mit Format**: `export_photos(photo_ids, preset="instagram" | "story" | "web" | "full")` oder `long_edge`, `quality`, `sharpen`. Vorher mit `crop_to_aspect` auf 4:5 oder 9:16 zuschneiden.
 - **Webhooks** (Plugin ab 0.1.18): `list_webhooks`, `send_webhook(name, payload)`; nur auf ausdrücklichen Wunsch (z. B. n8n-Ablauf starten), Adressen kommen aus `webhooks.json` auf dem Mac.
+- **Veröffentlichungsdienst „MHPhotos (Foto-Inbox)“** (Plugin ab 0.1.19): vom Eigentümer in Lightroom zu bedienen (Fotos in eine veröffentlichte Sammlung ziehen, „Veröffentlichen“); legt JPEGs in den Hot Folder → Foto-Inbox „wartet“. Der Skill selbst veröffentlicht nichts. Als Merker kann `set_custom_metadata(status="insta_kandidat")` dienen.
 - **Instagram/MHPhotos**: nur vorschlagen (`instagram_candidates`, `mhphotos_inbox`); nichts geht ohne ausdrückliche Anweisung online.
 
 ## 4. Album für einen Monat oder eine Reise („alles aus 2026/09 Südtirol in ein Album“)

@@ -97,3 +97,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). MIT licen
 ```
 
 `list_webhooks` zeigt die Namen, `send_webhook(name, payload)` ruft einen auf (Trockenlauf, dann `confirm=true`). Das Statusfenster im Library-Menü („MHPhotos MCP: Status“) zeigt Version, Verbindung, Zähler, letzte Fehler, Katalog und die Zahl der Webhooks.
+
+## Veröffentlichungsdienst „MHPhotos (Foto-Inbox)“ (Plugin ab 0.1.19)
+
+In Lightrooms Bereich „Veröffentlichungsdienste“ (Library, links) erscheint der Dienst **MHPhotos (Foto-Inbox)**. Fotos in eine seiner veröffentlichten Sammlungen ziehen und „Veröffentlichen“ klicken: Lightroom rendert sie als JPEG und legt sie in den Hot Folder (`~/Pictures/MHPhotos-Inbox`, oder `dest_dir` aus `autoexport.json`). Von dort läuft die bekannte Kette: Prüfung, Batch, n8n, MHPhotos-Foto-Inbox mit Status „wartet“. **Online geht nichts ohne Freigabe in MHPhotos**, und nach Instagram wird von hier nichts gesendet.
+
+Lightroom zeigt pro Foto „Neu zu veröffentlichen“, „Veröffentlicht“ und bei Änderungen „Erneut veröffentlichen“. Entfernt man ein Foto aus der Sammlung, verschwindet nur die Lightroom-Markierung; in MHPhotos wird nichts gelöscht. Der Hot Folder und der Auto-Export laufen unverändert daneben. Macht der Dienst in Lightroom Probleme, die Zeile `LrExportServiceProvider` in `plugin/mhphotos.lrdevplugin/Info.lua` entfernen.

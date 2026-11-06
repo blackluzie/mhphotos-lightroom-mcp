@@ -10,10 +10,15 @@ return {
   LrShutdownPlugin = 'Shutdown.lua',
   -- Own searchable fields (status, note); see MetadataDefinition.lua
   LrMetadataProvider = 'MetadataDefinition.lua',
+  -- Publish service "MHPhotos" (published collections hand photos to the hot folder); see PublishServiceProvider.lua
+  LrExportServiceProvider = {
+    title = 'MHPhotos (Foto-Inbox)',
+    file = 'PublishServiceProvider.lua',
+  },
   LrLibraryMenuItems = {
     { title = 'MHPhotos MCP: Status', file = 'Status.lua' },
     { title = 'MHPhotos MCP: Selbsttest (nur lesen)', file = 'SelfTestMenu.lua' },
     { title = 'MHPhotos MCP: Auto-Export einrichten', file = 'AutoExportSetup.lua' },
   },
-  VERSION = { major = 0, minor = 1, revision = 18, build = 0 },
+  VERSION = { major = 0, minor = 1, revision = 19, build = 0 },
 }
