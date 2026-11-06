@@ -136,8 +136,16 @@ function import(name)
              setAutoWhiteBalance = function() autoCalls[#autoCalls + 1] = 'wb' end }
   end
   if name == 'LrFileUtils' then
-    return { exists = function(path) if path == '/Users/x/new.jpg' then return 'file' end return false end,
-             readFile = function(path) return hookFile end }
+    -- like the real one: reading a missing file raises an error, it does not return nil
+    return { exists = function(path)
+               if path == '/Users/x/new.jpg' then return 'file' end
+               if path:find('webhooks.json', 1, true) and hookFile then return 'file' end
+               return false
+             end,
+             readFile = function(path)
+               if path:find('webhooks.json', 1, true) and hookFile then return hookFile end
+               error("Couldn't open file \"" .. path .. "\" for reading")
+             end }
   end
   if name == 'LrPathUtils' then
     return { getStandardFilePath = function() return '/home/u' end, child = function(a, b) return a .. '/' .. b end }

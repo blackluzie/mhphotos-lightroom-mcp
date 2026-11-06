@@ -10,8 +10,11 @@ local Webhook = require 'Webhook'
 local dir = LrPathUtils.child(LrPathUtils.getStandardFilePath('home'), '.mhphotos-lightroom-mcp')
 
 local function readJson(name)
-  local raw = LrFileUtils.readFile(LrPathUtils.child(dir, name))
-  if not raw then return nil end
+  local path = LrPathUtils.child(dir, name)
+  -- readFile raises an error for a missing file instead of returning nil
+  if LrFileUtils.exists(path) ~= 'file' then return nil end
+  local okRead, raw = pcall(LrFileUtils.readFile, path)
+  if not okRead or not raw then return nil end
   local ok, value = pcall(Json.decode, raw)
   return ok and value or nil
 end

@@ -13,8 +13,11 @@ local Json = require 'Json'
 local PublishLogic = require 'PublishLogic'
 
 local function readConfig(home)
-  local raw = LrFileUtils.readFile(LrPathUtils.child(LrPathUtils.child(home, '.mhphotos-lightroom-mcp'), 'autoexport.json'))
-  if not raw then return nil end
+  local path = LrPathUtils.child(LrPathUtils.child(home, '.mhphotos-lightroom-mcp'), 'autoexport.json')
+  -- readFile raises an error for a missing file instead of returning nil
+  if LrFileUtils.exists(path) ~= 'file' then return nil end
+  local okRead, raw = pcall(LrFileUtils.readFile, path)
+  if not okRead or not raw then return nil end
   local ok, cfg = pcall(Json.decode, raw)
   return ok and cfg or nil
 end

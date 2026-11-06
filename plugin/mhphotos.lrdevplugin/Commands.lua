@@ -862,7 +862,12 @@ local function loadHooks()
   local LrPathUtils = import 'LrPathUtils'
   local LrFileUtils = import 'LrFileUtils'
   local path = LrPathUtils.child(LrPathUtils.child(LrPathUtils.getStandardFilePath('home'), '.mhphotos-lightroom-mcp'), 'webhooks.json')
-  local raw = LrFileUtils.readFile(path)
+  -- readFile raises an error for a missing file instead of returning nil
+  local raw
+  if LrFileUtils.exists(path) == 'file' then
+    local okRead, content = pcall(LrFileUtils.readFile, path)
+    if okRead then raw = content end
+  end
   if not raw then return {}, { 'no webhooks.json in ~/.mhphotos-lightroom-mcp' } end
   local ok, decoded = pcall(Json.decode, raw)
   if not ok then return {}, { 'webhooks.json is not valid JSON' } end

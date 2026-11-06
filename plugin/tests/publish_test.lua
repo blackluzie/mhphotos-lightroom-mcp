@@ -34,11 +34,16 @@ print('publish ok')
 
 -- the provider file itself: loads, and processRenderedPhotos hands each rendition to the hot folder
 local copied, recorded, failed, made = {}, {}, {}, {}
+local hasConfig = true
 local FS = {
-  readFile = function(path) if path:find('autoexport.json', 1, true) then return '{"dest_dir": "/hot"}' end end,
+  -- like the real one: reading a missing file raises an error
+  readFile = function(path)
+    if path:find('autoexport.json', 1, true) and hasConfig then return '{"dest_dir": "/hot"}' end
+    error("Couldn't open file \"" .. path .. "\" for reading")
+  end,
   createAllDirectories = function(d) made[#made + 1] = d end,
   copy = function(from, to) copied[#copied + 1] = from .. '>' .. to; return true end,
-  exists = function() return false end,
+  exists = function(path) if path:find('autoexport.json', 1, true) and hasConfig then return 'file' end return false end,
   delete = function() end,
 }
 function import(name)
@@ -76,4 +81,10 @@ provider.deletePhotosFromPublishedCollection({}, { 'a', 'b' }, function(id) dele
 eq(table.concat(deleted, ','), 'a,b')
 local sections = provider.sectionsForTopOfDialog({ row = function(_, t) return t end, static_text = function(t) return t end }, {})
 eq(#sections, 1); eq(sections[1].title, 'MHPhotos')
+-- without an autoexport.json (the file does not exist) the default hot folder is used, no error
+hasConfig = false
+recorded, failed, copied, made = {}, {}, {}, {}
+list = { rendition('IMG_9.DNG', 'u9', true, '/tmp/z.jpg') }
+provider.processRenderedPhotos({}, ctx)
+eq(made[1], '/home/u/Pictures/MHPhotos-Inbox'); eq(recorded[1], 'IMG_9.jpg')
 print('publish provider ok')
