@@ -639,30 +639,76 @@ local function copyIds(photo)
   return ids
 end
 
--- createVirtualCopies runs Lightroom's own menu command ("Create Virtual Copy"), which opens its own
--- catalog transaction. Calling it INSIDE our withWriteAccessDo (up to 0.1.21) nested that transaction in
--- ours; afterwards the plug-in task stopped answering and the bridge was gone until Lightroom restarted.
--- So it is called outside any write gate, like setSelectedPhotos. Only if Lightroom insists on a gate
--- (older versions) is it retried inside one.
-local function makeCopy(photo, copyName)
-  local before = copyIds(photo)
-  invalidateCache()
-  local ok, made = LrTasks.pcall(function() return catalog():createVirtualCopies(copyName) end)
-  if not ok then
-    local msg = tostring(type(made) == 'table' and made.message or made)
-    if not msg:lower():find('write') then error(made, 0) end
-    writeAccess('MHPhotos: virtual copy', function() made = catalog():createVirtualCopies(copyName) end)
-  end
-  if type(made) == 'table' and made[1] then return made[1] end
-  -- the command may finish a moment later: look for a copy of this photo that was not there before
-  for _ = 1, 20 do
-    for id, c in pairs(copyIds(photo)) do
-      if not before[id] then return c end
-    end
-    LrTasks.sleep(0.5)
+-- createVirtualCopies runs Lightroom's own menu command ("Create Virtual Copy"). In Lightroom Classic the call
+-- makes the copy but does not come back to the calling task: 0.1.21 (inside our write gate) and 0.1.23 (outside it)
+-- both stopped with "running create_virtual_copies", lrc_app.log ended with ag.library.createVirtualCopy, and the
+-- copy was there. As the command ran in the polling task, the whole bridge was gone until Lightroom restarted.
+-- So since 0.1.24 the call runs in a task of its own that is never waited for. The polling task only watches the
+-- original's virtualCopies (a read, bounded to COPY_WAIT seconds) and answers as soon as the new copy shows up.
+-- If the call hangs, only that helper task hangs; the bridge keeps answering.
+local COPY_WAIT = 20 -- seconds per photo
+-- A call that has not produced its copy yet. While it is open no further copy is started: if Lightroom ran it
+-- later it would copy whatever is selected THEN, possibly another photo.
+local pendingCopy
+
+local function newCopyOf(photo, before)
+  for id, c in pairs(copyIds(photo)) do
+    if not before[id] then return c end
   end
   return nil
 end
+
+local function copyStillPending()
+  local job = pendingCopy
+  if not job then return false end
+  if job.done or newCopyOf(job.master, job.before) then pendingCopy = nil; return false end
+  return true
+end
+
+local function startCopy(photo, copyName)
+  local job = { master = photo, before = copyIds(photo) }
+  pendingCopy = job
+  invalidateCache()
+  LrTasks.startAsyncTask(function()
+    local ok, made = LrTasks.pcall(function() return catalog():createVirtualCopies(copyName) end)
+    if not ok then
+      local msg = tostring(type(made) == 'table' and made.message or made)
+      if msg:lower():find('write') then
+        -- only a Lightroom that insists on a gate gets the call inside one (still in this helper task)
+        ok, made = LrTasks.pcall(function()
+          local r
+          writeAccess('MHPhotos: virtual copy', function() r = catalog():createVirtualCopies(copyName) end)
+          return r
+        end)
+      end
+    end
+    job.ok, job.made, job.done = ok, made, true
+  end, 'MHPhotos: virtual copy')
+  return job
+end
+
+-- Waits (yielding, so the helper task and Lightroom can run) until the new copy is visible. Returns the copy,
+-- or nil and a reason.
+local function waitForCopy(job)
+  for _ = 1, COPY_WAIT * 2 do
+    local copy = newCopyOf(job.master, job.before)
+    if not copy and job.done and job.ok and type(job.made) == 'table' then copy = job.made[1] end
+    if copy then
+      pendingCopy = nil
+      return copy
+    end
+    if job.done and not job.ok then
+      pendingCopy = nil
+      return nil, tostring(type(job.made) == 'table' and job.made.message or job.made)
+    end
+    LrTasks.sleep(0.5)
+  end
+  if job.done then pendingCopy = nil end
+  return nil, 'timeout'
+end
+
+local MANUAL = "Create the copy by hand in Lightroom (select the photo, Cmd+' / Ctrl+'), then crop it with "
+  .. 'crop_to_aspect(virtual_copies=false) on the copy.'
 
 function Commands.create_virtual_copies(args)
   local photos = findAll(args.photo_ids)
@@ -670,12 +716,25 @@ function Commands.create_virtual_copies(args)
   local copyName = args.copy_name
   if copyName == nil then copyName = 'MHPhotos' end
   if type(copyName) ~= 'string' or copyName == '' or #copyName > 60 then error('copy_name must be text (max 60 characters)', 0) end
+  if copyStillPending() then
+    error('copy_pending: an earlier "Create Virtual Copy" of photo ' .. tostring(pendingCopy.master:getRawMetadata('uuid'))
+      .. ' has not finished in Lightroom; no new copy is started until it does (or Lightroom is restarted). ' .. MANUAL, 0)
+  end
   local copies = {}
+  local function made()
+    local ids = {}
+    for _, c in ipairs(copies) do ids[#ids + 1] = c.id end
+    return #ids > 0 and (' Copies made before: ' .. table.concat(ids, ', ') .. '.') or ''
+  end
   for _, p in ipairs(photos) do
     selectOnly(p)
-    local copy = makeCopy(p, copyName)
+    local copy, why = waitForCopy(startCopy(p, copyName))
     if not copy then
-      error('Lightroom created no virtual copy (is the Library module in grid view?)', 0)
+      if why == 'timeout' then
+        error('virtual_copy_timeout: Lightroom did not create the virtual copy of ' .. tostring(p:getRawMetadata('uuid'))
+          .. ' within ' .. COPY_WAIT .. ' s (the bridge stays connected).' .. made() .. ' ' .. MANUAL, 0)
+      end
+      error('Lightroom created no virtual copy (' .. tostring(why) .. ').' .. made(), 0)
     end
     local master = copy:getRawMetadata('masterPhoto')
     if master and master:getRawMetadata('uuid') ~= p:getRawMetadata('uuid') then

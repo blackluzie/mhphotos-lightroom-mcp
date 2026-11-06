@@ -154,6 +154,28 @@ def test_command_carries_remaining_timeout(bridge):
     caller.join(5)
 
 
+def test_virtual_copies_timeout_covers_the_plugins_wait(bridge):
+    # 0.1.24: the plugin waits up to 20 s per photo for Lightroom's copy, then answers itself; the server must not
+    # give up first, or the plugin's clear error (with the manual way out) never reaches the user
+    import threading
+
+    _req(bridge, "/v1/poll", token=bridge.token, data={})
+    ids = [f"u{i}" for i in range(10)]
+    caller = threading.Thread(target=BridgeAdapter(bridge).create_virtual_copies, args=(ids,), daemon=True)
+    caller.start()
+    req = urllib.request.Request(
+        bridge.url + "/v1/poll",
+        data=b"{}",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {bridge.token}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as r:
+        cmd = json.loads(r.read())["command"]
+    assert cmd["timeout"] >= 10 * 23
+    _req(bridge, "/v1/result", token=bridge.token, data={"id": cmd["id"], "ok": True, "data": {"copies": []}})
+    caller.join(5)
+
+
 def test_plugin_config_file_is_private(bridge, tmp_path):
     path = write_plugin_config(bridge)
     cfg = json.loads(path.read_text())

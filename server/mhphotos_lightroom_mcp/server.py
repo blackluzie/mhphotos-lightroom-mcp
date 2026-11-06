@@ -715,7 +715,9 @@ async def create_virtual_copies(
     Apply presets/settings to the returned copy ids, compare with get_photo_previews, keep or
     delete the copy in Lightroom. Lightroom only copies the selected photos, so the plugin
     switches to the Library grid and "All Photographs" and changes your selection. copy_name (max 60
-    characters) is the name Lightroom shows for the copies, e.g. "Insta 4:5". Needs opt-in.
+    characters) is the name Lightroom shows for the copies, e.g. "Insta 4:5". The plugin waits up to 20 s per photo for
+    Lightroom's copy; on virtual_copy_timeout or copy_pending let the user make the copy by hand (Cmd+') and go on with
+    that copy's id. Needs opt-in.
     """
     if len(photo_ids) > 10:
         return {"error": "At most 10 virtual copies per call"}
@@ -744,7 +746,9 @@ async def crop_to_aspect(
     replaces an existing crop. aspect="original" keeps the shape (use it just to level a horizon). angle (degrees, -45..45)
     also straightens the horizon: the crop is then centred and as large as fits without empty corners (focus is ignored);
     the sign is Lightroom's CropAngle, so check the first photo with get_photo_previews and flip the sign if it got worse.
-    Check the result with get_photo_previews. Dry run unless confirm=true; needs operator opt-in.
+    Check the result with get_photo_previews. If making the virtual copy fails (virtual_copy_timeout, copy_pending), let
+    the user make the copy by hand in Lightroom (Cmd+') and crop that copy with virtual_copies=false.
+    Dry run unless confirm=true; needs operator opt-in.
     """
     if aspect not in social_crop.ASPECTS and aspect != social_crop.ORIGINAL:
         return {"error": f"aspect must be one of: {', '.join([*social_crop.ASPECTS, social_crop.ORIGINAL])}"}

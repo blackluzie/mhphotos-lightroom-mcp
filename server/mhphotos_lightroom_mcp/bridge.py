@@ -346,7 +346,9 @@ class BridgeAdapter:
 
     def create_virtual_copies(self, photo_ids, copy_name=None):
         args = {"photo_ids": photo_ids, **({"copy_name": copy_name} if copy_name else {})}
-        return self._call("create_virtual_copies", args, timeout=120.0)
+        # the plugin waits up to 20 s per photo for Lightroom's copy (plus selecting it) and then answers with an
+        # error itself, so the server must wait at least that long; 120 s stays the floor
+        return self._call("create_virtual_copies", args, timeout=max(120.0, 30.0 + 25.0 * len(photo_ids)))
 
     def photo_dimensions(self, photo_ids):
         return self._call("photo_dimensions", {"photo_ids": photo_ids})

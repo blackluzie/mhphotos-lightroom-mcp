@@ -65,8 +65,10 @@ end
 -- own and waited for it; in Lightroom that task never finished (not even list_collections), so every
 -- command came back "busy" after the deadline, while the polling task itself kept running. Why Lightroom
 -- never completes a task started from inside the polling task is not known; plugin/tests/loop_test.lua
--- models exactly that, so commands must not depend on a second task. Keep the command in the polling task; createVirtualCopies no longer hangs it (Commands.makeCopy runs
--- it outside the write gate, which was the cause of the lost bridge in 0.1.21).
+-- models exactly that, so commands must not depend on a second task. Keep the command in the polling task.
+-- Lightroom's createVirtualCopies does not come back to its caller (0.1.21 and 0.1.23 lost the bridge on it), so since
+-- 0.1.24 Commands.create_virtual_copies starts it in a helper task it never waits for and only watches the original's
+-- virtualCopies for a bounded time; plugin/tests/virtual_copy_test.lua checks the loop survives a hanging call.
 local function execute(cfg, command)
   State.lastCommand = command.name
   mark('running ' .. command.name)
