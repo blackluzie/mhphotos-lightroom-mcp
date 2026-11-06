@@ -78,7 +78,9 @@ class FakePlugin:
         if name == "create_preset":
             return b.create_preset(a["name"], a["settings"])
         if name == "create_collection":
-            return b.create_collection(a["name"])
+            return b.create_collection(a["name"], a.get("parent"))
+        if name == "move_collection":
+            return b.move_collection(a["collection_id"], a["parent"])
         if name == "add_to_collection":
             return b.add_to_collection(a["collection_id"], a["photo_ids"])
         if name == "set_color_label":

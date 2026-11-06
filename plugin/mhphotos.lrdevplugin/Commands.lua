@@ -402,15 +402,46 @@ end
 -- ---------------------------------------------------------------- organising (writes)
 local LABELS = { none = true, red = true, yellow = true, green = true, blue = true, purple = true }
 
+-- Collection set for a path like "2026" or "2026/Reisen": created level by level when missing.
+local function ensureSet(cat, path)
+  if path == nil or path == '' then return nil end
+  if type(path) ~= 'string' or #path > 240 then error('parent must be a text path like "2026" or "2026/Reisen"', 0) end
+  local set = nil
+  for part in string.gmatch(path, '[^/]+') do
+    if #part > 120 then error('collection set name too long', 0) end
+    set = cat:createCollectionSet(part, set, true) -- true: reuse the existing set of that name
+    if not set then error('Lightroom did not create the collection set ' .. part, 0) end
+  end
+  return set
+end
+
 function Commands.create_collection(args)
   local name = args.name
   if type(name) ~= 'string' or name == '' or #name > 120 then error('collection name required', 0) end
   local coll
   writeAccess('MHPhotos: create collection', function()
-    coll = catalog():createCollection(name, nil, true) -- true: return the existing one of that name
+    local cat = catalog()
+    local parent = ensureSet(cat, args.parent)
+    coll = cat:createCollection(name, parent, true) -- true: return the existing one of that name
   end)
   if not coll then error('Lightroom did not create the collection', 0) end
-  return { id = tostring(coll.localIdentifier), name = name }
+  return { id = tostring(coll.localIdentifier), name = name, parent = args.parent }
+end
+
+-- Moves an existing collection (or collection set) into the set at path "parent" ('' = top level).
+function Commands.move_collection(args)
+  local cat = catalog()
+  local coll = cat:getCollectionByLocalIdentifier(tonumber(args.collection_id))
+  if not coll then notFound('Collection not found: ' .. tostring(args.collection_id)) end
+  if not coll.setParent then error('this Lightroom version cannot move collections; drag it by hand', 0) end
+  local moved
+  writeAccess('MHPhotos: move collection', function()
+    local parent = ensureSet(cat, args.parent)
+    local ok, err = LrTasks.pcall(function() coll:setParent(parent) end)
+    if not ok then error('Lightroom could not move the collection: ' .. tostring(err), 0) end
+    moved = true
+  end)
+  return { id = tostring(coll.localIdentifier), parent = args.parent or '', moved = moved == true }
 end
 
 function Commands.add_to_collection(args)

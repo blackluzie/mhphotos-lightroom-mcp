@@ -13,6 +13,7 @@ Antworte auf Deutsch. Nichts wird gelöscht oder veröffentlicht; das entscheide
 2. `list_collections` (mit `name_contains`). **IDs nie fest verdrahten**, immer hier nachschlagen.
    Die Sammlungen „Fotobuch Hoffis <Jahr>“ und „<Sammlung> – Aussortieren (Vorschlag)“ gibt es oder sie werden mit `create_collection` angelegt (oberste Ebene).
    Der Haken „Mit Lightroom synchronisieren“ lässt sich nur von Hand setzen; dem Eigentümer sagen.
+   **Sammlungsgruppen (Plugin ab 0.1.15):** `create_collection(name, parent="2026")` legt eine Sammlung unter der Gruppe „2026“ an (fehlende Gruppen entstehen, Pfade wie „2026/Reisen“ gehen), `move_collection(collection_id, parent="2026")` verschiebt eine vorhandene Sammlung hinein (etwa „Fotobuch Hoffis 2026“). Beides als Trockenlauf, dann `confirm=true`. Ältere Plugin-Version: der Aufruf mit `parent` schlägt fehl, dann den Eigentümer das Plugin aktualisieren lassen.
 3. **Fotos holen über die Ordner-Sammlung, nie über eine Suche im ganzen Katalog.** Der Katalog hat über 260.000 Fotos; `photos_by_date` und `list_photos` mit Datumsfilter über alles laufen in die Zeitüberschreitung (30 s).
    Monatssammlungen heißen z. B. „Aus Lightroom/09/2026“ oder „Aus Lightroom/<Reise>“. `list_photos(collection_id=…, captured_from=…, captured_to=…, limit=100)` in Seiten von 100 abrufen. Die Reihenfolge ist zufällig, Serien liegen verstreut.
    Ist keine passende Sammlung da: den Eigentümer fragen oder `list_photos` mit engem Datum (ein Tag) versuchen.
@@ -53,6 +54,12 @@ Eigentümer-Rückfragen nur, wo er entscheiden muss. Sonst weiterarbeiten.
 3. Danach wie oben: Durchsicht, Sterne, Aussortieren, Veredeln.
 4. „Optimieren“ heißt hier: Vorschläge und Presets auf **virtuellen Kopien** oder mit `apply_develop_settings` (Belichtung, Kontrast, Dunst usw.), mit Vorher/Nachher-Kontrolle. Originale nicht überschreiben, wenn der Eigentümer nichts anderes sagt. Jede Änderung ist mit `undo_last_change` rückgängig zu machen.
 5. Grenzen: Lightroom kann über das SDK keine Fotos verschieben oder löschen und keine automatische Tonwertkorrektur („Auto“) auslösen; das bleibt Handarbeit des Eigentümers.
+
+## 5. Das ganze Jahr („/mhphotos 2026“)
+1. `list_collections` lesen: Reise- und Monatssammlungen des Jahres finden (z. B. „Aus Lightroom/Kreuzfahrt 2026“, „…/Spanien 2026“, „…/09/2026“).
+2. Gruppe „2026“ anlegen und die Sammlungen „Fotobuch Hoffis 2026“ und „<Reise> – Aussortieren (Vorschlag)“ sowie die Reise-Alben per `move_collection` hineinlegen; für jede Reise ein eigenes Album `create_collection(name, parent="2026")`.
+3. **Eine Reise nach der anderen** durchgehen (Abschnitte 1 bis 3), jeweils mit eigenem Aussortieren-Album; das Fotobuch ist eines für das ganze Jahr. Pro Reise ein kurzer Bericht; bei sehr vielen Fotos die Reisen auf getrennte Chats verteilen.
+4. Titel, Stichwörter, S/W und Formate erst nach Freigabe der Sterne.
 
 ## Eisenregeln
 - Alles Schreibende zuerst als Trockenlauf, `confirm=true` erst nach der Freigabe oder wenn der Block dem Vereinbarten entspricht.

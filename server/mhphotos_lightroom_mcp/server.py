@@ -406,32 +406,82 @@ async def set_title_caption(
 
 @mcp.tool()
 async def create_collection(
-    name: str, confirm: bool = False, ctx: Context | None = None
+    name: str, parent: str | None = None, confirm: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Create a collection (album), e.g. for picked photos. Returns the existing one if the name exists.
 
-    Dry run unless confirm=true; needs operator opt-in. Not undoable (delete it in Lightroom).
+    parent: a collection-set path like "2026" or "2026/Reisen" (missing sets are created), so the album
+    lands under it; omitted = top level. Dry run unless confirm=true; needs operator opt-in.
+    Not undoable (delete it in Lightroom).
     """
     name = name.strip()
-    if not name or len(name) > 120:
-        return {"error": "name required (max 120 characters)"}
+    if not name or len(name) > 120 or "/" in name:
+        return {"error": "name required (max 120 characters, no '/')"}
+    parent = _clean_set_path(parent)
+    if isinstance(parent, dict):
+        return parent
     if not permissions.writes_enabled():
         return {"error": permissions.writes_disabled_message(), "code": "disabled"}
     existing = await _run(_adapter.list_collections)
     if _is_error(existing):
         return existing
-    same = [c for c in existing if c.name == name]
+    full = f"{parent}/{name}" if parent else name
+    same = [c for c in existing if c.name == full]
     if same:
-        return {"exists": True, "id": same[0].id, "name": name, "hint": "Nothing to create; use this id."}
+        return {"exists": True, "id": same[0].id, "name": full, "hint": "Nothing to create; use this id."}
     if not confirm:
-        return {"dry_run": True, "would_create": name, "hint": "Call again with confirm=true."}
-    approved, how = await gate.approve(ctx, f"Sammlung '{name}' in Lightroom anlegen")
+        return {"dry_run": True, "would_create": full, "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Sammlung '{full}' in Lightroom anlegen")
     if not approved:
         return gate.refusal(how)
-    result = await _run(_adapter.create_collection, name)
+    result = await _run(_adapter.create_collection, name, parent)
     if _is_error(result):
         return result
-    change_id = audit.record("create_collection", [], {"name": name}, approved_by=how, result=result)
+    change_id = audit.record("create_collection", [], {"name": full}, approved_by=how, result=result)
+    return {"applied": True, "change_id": change_id, **result}
+
+
+def _clean_set_path(parent: str | None) -> str | None | dict[str, Any]:
+    """"2026/ Reisen " -> "2026/Reisen"; None/empty -> None; an error dict for a bad path."""
+    if parent is None or not parent.strip():
+        return None
+    parts = [p.strip() for p in parent.strip().strip("/").split("/")]
+    if not parts or any(not p or len(p) > 120 for p in parts) or len(parts) > 6:
+        return {"error": "parent must be a path like '2026' or '2026/Reisen' (max 6 levels, 120 characters each)"}
+    return "/".join(parts)
+
+
+@mcp.tool()
+async def move_collection(
+    collection_id: str, parent: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Move an existing collection into a collection set, e.g. "Fotobuch Hoffis 2026" into "2026".
+
+    parent: set path like "2026" or "2026/Reisen" (missing sets are created); empty = top level. The photos
+    stay as they are, only the place in the tree changes; move it back the same way. Dry run unless
+    confirm=true; needs operator opt-in.
+    """
+    parent_path = _clean_set_path(parent)
+    if isinstance(parent_path, dict):
+        return parent_path
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    existing = await _run(_adapter.list_collections)
+    if _is_error(existing):
+        return existing
+    target = next((c for c in existing if c.id == collection_id), None)
+    if target is None:
+        return {"error": f"Collection not found: {collection_id}. Use list_collections."}
+    if not confirm:
+        return {"dry_run": True, "would_move": target.name, "into": parent_path or "(top level)",
+                "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Sammlung '{target.name}' nach '{parent_path or 'oberste Ebene'}' verschieben")
+    if not approved:
+        return gate.refusal(how)
+    result = await _run(_adapter.move_collection, collection_id, parent_path or "")
+    if _is_error(result):
+        return result
+    change_id = audit.record("move_collection", [], {"collection": target.name, "parent": parent_path}, approved_by=how, result=result)
     return {"applied": True, "change_id": change_id, **result}
 
 
@@ -2418,7 +2468,7 @@ TOOLSETS: dict[str, set[str]] = {
     },
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
-        "create_collection", "add_to_collection", "export_photos", "undo_last_change",
+        "create_collection", "move_collection", "add_to_collection", "export_photos", "undo_last_change",
         "catalog_audit_collections", "set_location", "rotate_photos", "write_name_dates_to_files",
     },
     "develop": {

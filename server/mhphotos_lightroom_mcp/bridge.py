@@ -304,8 +304,11 @@ class BridgeAdapter:
     def create_preset(self, name, settings):
         return self._call("create_preset", {"name": name, "settings": settings})
 
-    def create_collection(self, name):
-        return self._call("create_collection", {"name": name})
+    def create_collection(self, name, parent=None):
+        return self._call("create_collection", {"name": name, **({"parent": parent} if parent else {})})
+
+    def move_collection(self, collection_id, parent):
+        return self._call("move_collection", {"collection_id": collection_id, "parent": parent})
 
     def add_to_collection(self, collection_id, photo_ids):
         return self._call("add_to_collection", {"collection_id": collection_id, "photo_ids": photo_ids})

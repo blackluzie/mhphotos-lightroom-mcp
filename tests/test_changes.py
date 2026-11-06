@@ -249,3 +249,23 @@ def test_audit_entry_is_valid_json_lines(tmp_path):
     audit.record("u", [], {}, approved_by="user", undoes="zzz")
     lines = audit.log_path().read_text().splitlines()
     assert all(isinstance(json.loads(line), dict) for line in lines) and len(lines) == 2
+
+
+async def test_collections_inside_a_set_and_moving(writes):
+    dry = await server.create_collection("Spanien 2026", parent="2026 / Reisen")
+    assert dry["dry_run"] is True and dry["would_create"] == "2026/Reisen/Spanien 2026"
+    made = await server.create_collection("Spanien 2026", parent="2026/Reisen", confirm=True)
+    assert made["applied"] is True and made["name"] == "2026/Reisen/Spanien 2026"
+    again = await server.create_collection("Spanien 2026", parent="2026/Reisen")
+    assert again["exists"] is True and again["id"] == made["id"]
+    assert "error" in await server.create_collection("A/B")
+    assert "error" in await server.create_collection("X", parent="a//b")
+
+    flat = await server.create_collection("Fotobuch Hoffis 2026", confirm=True)
+    assert "error" in await server.move_collection("nope", "2026")
+    dry_move = await server.move_collection(flat["id"], "2026")
+    assert dry_move["dry_run"] is True and dry_move["into"] == "2026"
+    moved = await server.move_collection(flat["id"], "2026", confirm=True)
+    assert moved["applied"] is True and moved["moved"] is True
+    names = [c.name for c in await server._run(server._adapter.list_collections)]
+    assert "2026/Fotobuch Hoffis 2026" in names and "Fotobuch Hoffis 2026" not in names
