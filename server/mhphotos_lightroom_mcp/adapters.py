@@ -174,7 +174,8 @@ class CatalogAdapter(Protocol):
 
     def add_keywords(self, photo_ids: list[str], keywords: list[str]) -> dict[str, Any]: ...
 
-    def export_photos(self, photo_ids: list[str], dest_dir: str) -> dict[str, Any]: ...
+    def export_photos(self, photo_ids: list[str], dest_dir: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        """JPEG export; options: long_edge (px), quality (1-100), sharpen (screen|off)."""
 
     def apply_preset(self, photo_ids: list[str], preset: str) -> dict[str, Any]: ...
 
@@ -183,6 +184,12 @@ class CatalogAdapter(Protocol):
 
     def move_collection(self, collection_id: str, parent: str) -> dict[str, Any]:
         """Move a collection into the set path ``parent`` ('' = top level): {"id", "parent", "moved"}."""
+
+    def set_custom_metadata(self, photo_ids: list[str], status: str | None, note: str | None) -> dict[str, Any]:
+        """Set the plug-in's own fields (status, note): {"updated": n}."""
+
+    def auto_tone(self, photo_ids: list[str], white_balance: bool) -> dict[str, Any]:
+        """Lightroom's Auto tone (and white balance) one photo after the other: {"updated": n}."""
 
     def create_smart_collection(self, name: str, parent: str | None, rules: dict[str, Any]) -> dict[str, Any]:
         """Smart collection from filter rules (like PhotoFilter.to_args): {"id", "name"}."""
@@ -565,11 +572,27 @@ class MockAdapter:
             self._photos[p.id] = dataclasses.replace(p, keywords=merged)
         return {"updated": len(photo_ids)}
 
-    def export_photos(self, photo_ids, dest_dir):
+    def set_custom_metadata(self, photo_ids, status, note):
+        values = {}
+        if status is not None:
+            values["mhphotos_status"] = status
+        if note is not None:
+            values["mhphotos_note"] = note
+        return self._set_extra(photo_ids, **values)
+
+    def auto_tone(self, photo_ids, white_balance):
+        photos = self._all(photo_ids)
+        for p in photos:
+            self._develop[p.id]["_auto_tone"] = True
+            if white_balance:
+                self._develop[p.id]["_auto_wb"] = True
+        return {"updated": len(photos), "white_balance": white_balance}
+
+    def export_photos(self, photo_ids, dest_dir, options=None):
         photos = self._all(photo_ids)
         names = [p.filename.rsplit(".", 1)[0] + ".jpg" for p in photos]
         dest = Path(dest_dir)
         dest.mkdir(parents=True, exist_ok=True)
         for photo, name in zip(photos, names, strict=True):  # a real (flat colour) JPEG
             (dest / name).write_bytes(_mock_preview(photo.id, 640))
-        return {"exported": names, "destination": dest_dir, "mock": True}
+        return {"exported": names, "destination": dest_dir, "mock": True, "options": options or {}}

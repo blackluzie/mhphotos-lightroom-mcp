@@ -88,6 +88,10 @@ local function photoMetadata(photo)
     local master = photo:getRawMetadata('masterPhoto')
     if master then s.virtual_copy_of = master:getRawMetadata('uuid') end
   end
+  local okS, status = LrTasks.pcall(function() return photo:getPropertyForPlugin(_PLUGIN, 'status') end)
+  if okS and type(status) == 'string' and status ~= '' then s.mhphotos_status = status end
+  local okN, own = LrTasks.pcall(function() return photo:getPropertyForPlugin(_PLUGIN, 'notiz') end)
+  if okN and type(own) == 'string' and own ~= '' then s.mhphotos_note = own end
   local place = locationString(photo)
   if place ~= '' then s.location = place end
   local lat, lon = gpsOf(photo)
@@ -352,23 +356,47 @@ function Commands.export_photos(args)
   for i, p in ipairs(photos) do
     names[i] = (p:getFormattedMetadata('fileName') or 'photo'):gsub('%.[^.]*$', '') .. '.jpg'
   end
-  local session = LrExportSession({
-    photosToExport = photos,
-    exportSettings = {
-      LR_format = 'JPEG',
-      LR_jpeg_quality = 0.9,
-      LR_export_destinationType = 'specificFolder',
-      LR_export_destinationPathPrefix = dest,
-      LR_export_useSubfolder = false,
-      LR_collisionHandling = 'rename',
-      LR_size_doConstrain = false,
-      LR_reimportExportedPhoto = false,
-      LR_renamingTokensOn = false,
-    },
-  })
+  local settings = {
+    LR_format = 'JPEG',
+    LR_jpeg_quality = 0.9,
+    LR_export_destinationType = 'specificFolder',
+    LR_export_destinationPathPrefix = dest,
+    LR_export_useSubfolder = false,
+    LR_collisionHandling = 'rename',
+    LR_size_doConstrain = false,
+    LR_reimportExportedPhoto = false,
+    LR_renamingTokensOn = false,
+  }
+  -- optional: size, quality, sharpening (the MCP server turns presets like "instagram" into these)
+  local longEdge = tonumber(args.long_edge)
+  if longEdge then
+    if longEdge < 200 or longEdge > 10000 or longEdge ~= math.floor(longEdge) then
+      error('long_edge must be a whole number of pixels between 200 and 10000', 0)
+    end
+    settings.LR_size_doConstrain = true
+    settings.LR_size_resizeType = 'longEdge'
+    settings.LR_size_maxWidth = longEdge
+    settings.LR_size_maxHeight = longEdge
+    settings.LR_size_units = 'pixels'
+    settings.LR_size_doNotEnlarge = true
+  end
+  local quality = tonumber(args.quality)
+  if quality then
+    if quality < 1 or quality > 100 then error('quality must be between 1 and 100', 0) end
+    settings.LR_jpeg_quality = quality / 100
+  end
+  if args.sharpen == 'screen' then
+    settings.LR_outputSharpeningOn = true
+    settings.LR_outputSharpeningMedia = 'screen'
+    settings.LR_outputSharpeningLevel = 2
+  elseif args.sharpen ~= nil and args.sharpen ~= 'off' then
+    error('sharpen must be screen or off', 0)
+  end
+  settings.LR_export_colorSpace = 'sRGB'
+  local session = LrExportSession({ photosToExport = photos, exportSettings = settings })
   session:doExportOnCurrentTask()
   -- Names are the expected output names; Lightroom renames on collision.
-  return { exported = names, destination = dest }
+  return { exported = names, destination = dest, long_edge = longEdge, quality = quality, sharpen = args.sharpen }
 end
 
 -- ---------------------------------------------------------------- editing advice
@@ -770,6 +798,54 @@ function Commands.add_photo(args)
   end)
   if not photo then error('Lightroom did not add the file', 0) end
   return { id = photo:getRawMetadata('uuid'), filename = photo:getFormattedMetadata('fileName') }
+end
+
+-- ---------------------------------------------------------------- own metadata fields (MetadataDefinition.lua)
+local STATUS_VALUES = { insta_kandidat = true, fotobuch = true, veroeffentlicht = true, aussortiert = true }
+
+-- Sets the plug-in's own fields: status (one of STATUS_VALUES, or '' to clear) and/or note (text).
+function Commands.set_custom_metadata(args)
+  local status, note = args.status, args.note
+  if status == nil and note == nil then error('status or note required', 0) end
+  if status ~= nil and status ~= '' and not STATUS_VALUES[status] then
+    error('status must be insta_kandidat, fotobuch, veroeffentlicht, aussortiert or empty', 0)
+  end
+  if note ~= nil and (type(note) ~= 'string' or #note > 1000) then error('note must be text (max 1000 bytes)', 0) end
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: own metadata', function()
+    for _, p in ipairs(photos) do
+      if status ~= nil then p:setPropertyForPlugin(_PLUGIN, 'status', status ~= '' and status or nil) end
+      if note ~= nil then p:setPropertyForPlugin(_PLUGIN, 'notiz', note ~= '' and note or nil) end
+    end
+  end)
+  return { updated = #photos }
+end
+
+-- Lightroom's own "Auto" for tone and (optionally) white balance. Only works on the photo shown in the
+-- Develop module, so one photo after the other; returns to the Library grid at the end.
+function Commands.auto_tone(args)
+  local LrDevelopController = import 'LrDevelopController'
+  if not LrDevelopController.setAutoTone then error('this Lightroom version has no auto tone for plug-ins', 0) end
+  local photos = findAll(args.photo_ids)
+  if #photos > 10 then error('at most 10 photos per call', 0) end
+  local done = 0
+  for _, photo in ipairs(photos) do
+    selectOnly(photo)
+    LrTasks.pcall(function() LrApplicationView.switchToModule('develop') end)
+    LrTasks.sleep(0.5)
+    local ok, err = LrTasks.pcall(function()
+      LrDevelopController.setAutoTone()
+      if args.white_balance and LrDevelopController.setAutoWhiteBalance then LrDevelopController.setAutoWhiteBalance() end
+    end)
+    LrTasks.sleep(0.5)
+    if not ok then
+      LrTasks.pcall(function() LrApplicationView.switchToModule('library') end)
+      error('auto tone failed on ' .. tostring(photo:getRawMetadata('uuid')) .. ': ' .. tostring(err), 0)
+    end
+    done = done + 1
+  end
+  LrTasks.pcall(function() LrApplicationView.switchToModule('library') end)
+  return { updated = done, white_balance = args.white_balance == true }
 end
 
 local function validName(v) return type(v) == 'string' and v ~= '' and #v <= 120 end
