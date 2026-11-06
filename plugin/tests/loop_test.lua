@@ -1,4 +1,11 @@
 -- Tests Loop.lua (bridge polling loop) against fake LrHttp/LrTasks with a fake clock.
+--
+-- The fake LrTasks schedules cooperatively, like Lightroom: every task is a coroutine,
+-- startAsyncTask only queues it (it runs once the current task gives up control), and only
+-- LrTasks.sleep/yield and yielding SDK calls (LrHttp.post) hand control to the next task that is due.
+-- The earlier fake ran each task synchronously inside startAsyncTask, which hid the 0.1.22 regression:
+-- in Lightroom a command task started from the polling task never finished, so every command,
+-- reads included, came back "busy".
 package.path = '../mhphotos.lrdevplugin/?.lua;' .. package.path
 
 local function eq(a, b, msg)
@@ -8,31 +15,76 @@ end
 local now = 1000
 os.time = function() return now end -- luacheck: ignore
 
+-- ------------------------------------------------------------ cooperative LrTasks
+local tasks = {}  -- queued/sleeping tasks: { co, wake, name }
+local current     -- the task running right now (nil = test code outside any task)
+-- Models what 0.1.22 ran into in Lightroom: a task started from inside another task is queued but
+-- never runs to the end.
+local nestedTasksStall = false
+
+-- pcall that lets the protected function yield (Lua 5.1's pcall cannot; Lightroom's LrTasks.pcall can)
+local function copcall(f, ...)
+  local n, args = select('#', ...), { ... }
+  local co = coroutine.create(function() return f(unpack(args, 1, n)) end)
+  local function resumed(ok, ...)
+    if not ok then return false, (...) end
+    if coroutine.status(co) == 'dead' then return true, ... end
+    return resumed(coroutine.resume(co, coroutine.yield(...)))
+  end
+  return resumed(coroutine.resume(co))
+end
+
+local Tasks = {}
+function Tasks.startAsyncTask(fn, name)
+  local wake = now
+  if current and nestedTasksStall then wake = math.huge end
+  tasks[#tasks + 1] = { co = coroutine.create(fn), wake = wake, name = name }
+end
+function Tasks.sleep(s)
+  assert(current, 'LrTasks.sleep called outside a task')
+  coroutine.yield(s or 0)
+end
+function Tasks.yield() Tasks.sleep(0) end
+Tasks.pcall = copcall
+
+-- Runs the due task with the earliest wake time (the resumed one goes to the back of the queue, so
+-- tasks waking at the same moment take turns) until no task is due before `untilTime`.
+local function runTasks(untilTime)
+  while true do
+    local best
+    for i, t in ipairs(tasks) do
+      if not best or t.wake < tasks[best].wake then best = i end
+    end
+    if not best or tasks[best].wake == math.huge or tasks[best].wake > untilTime then return end
+    local t = table.remove(tasks, best)
+    if t.wake > now then now = t.wake end
+    current = t
+    local ok, s = coroutine.resume(t.co)
+    current = nil
+    if not ok then error('task ' .. tostring(t.name) .. ' crashed: ' .. tostring(s), 0) end
+    if coroutine.status(t.co) ~= 'dead' then
+      t.wake = now + (tonumber(s) or 0)
+      tasks[#tasks + 1] = t
+    end
+  end
+end
+
+-- ------------------------------------------------------------ fake HTTP server
 local posts, script = {}, {}
-local hangTasks = false
-local sleepHook
-local pending = {}
 local State
 
 function import(name)
   if name == 'LrHttp' then
     return { post = function(url, body, _, _, timeout)
-      posts[#posts + 1] = { path = url:match('/v1/.*'), body = body, timeout = timeout }
+      Tasks.yield() -- LrHttp.post yields in Lightroom
+      posts[#posts + 1] = { path = url:match('/v1/.*'), body = body, timeout = timeout, at = now }
       if url:find('/v1/result') then return '{"ok":true}', { status = 200 } end
       local nextStep = table.remove(script, 1)
       if not nextStep then State.stop = true; return '{"command":null}', { status = 200 } end
       return nextStep()
     end }
   end
-  if name == 'LrTasks' then
-    return {
-      sleep = function(s) now = now + s; if sleepHook then sleepHook() end end,
-      pcall = pcall,
-      startAsyncTask = function(fn)
-        if hangTasks then pending[#pending + 1] = fn else fn() end
-      end,
-    }
-  end
+  if name == 'LrTasks' then return Tasks end
   if name == 'LrFileUtils' then
     return { exists = function() return true end, readFile = function() return '{"url":"http://x","token":"t"}' end }
   end
@@ -60,63 +112,79 @@ end
 local function results()
   local out = {}
   for _, p in ipairs(posts) do
-    if p.path == '/v1/result' then out[#out + 1] = Json.decode(p.body) end
+    if p.path == '/v1/result' then
+      local r = Json.decode(p.body); r.at = p.at; out[#out + 1] = r
+    end
   end
   return out
+end
+
+-- start the loop as Init does (in its own task) and let the scheduler run for up to an hour of fake time
+local function runLoop(steps)
+  posts, script, State.stop, tasks = {}, steps, false, {}
+  Tasks.startAsyncTask(function()
+    local ok, err = Tasks.pcall(Loop.run)
+    if not ok then error('loop crashed: ' .. tostring(err), 0) end
+  end, 'MHPhotos: bridge loop')
+  local started = now
+  runTasks(now + 3600)
+  return started
 end
 
 -- 1) a normal command answers ok, an erroring command answers with its error, the loop goes on
 Commands.fine = function() return { yes = true } end
 Commands.broken = function() error('boom', 0) end
-script = { command('fine', 30), command('broken', 30) }
-Loop.run(0)
+runLoop({ command('fine', 30), command('broken', 30) })
 local r = results()
 eq(#r, 2); eq(r[1].ok, true); eq(r[2].ok, false); eq(r[2].error, 'boom')
+eq(State.status, 'stopped')
 
--- 2) a command that never comes back: answered as busy before the server's timeout, then polling goes on
-posts, now, State.stop = {}, 1000, false
-hangTasks = true
-Commands.hangs = function() end
-script = { command('hangs', 30), command('hangs', 120) }
-Loop.run(0)
+-- 2) REGRESSION 0.1.22: in Lightroom a task started from the polling task never finished, so even
+-- list_collections came back "busy" after 26 s. A read must answer at once, without needing a second task.
+nestedTasksStall = true
+Commands.list_collections = function() return { collections = { { id = 7, name = 'Kreuzfahrt 2026' } } } end
+Commands.get_photo = function() return { id = 'u1' } end
+local t0 = runLoop({ command('list_collections', 29), command('get_photo', 29) })
 r = results()
-eq(#r, 2, 'both hanging commands get an answer')
-eq(r[1].ok, false); assert(r[1].error:find('^busy:'), r[1].error)
-assert(r[2].error:find('117s'), r[2].error) -- answers 3 s before the server's 120 s
-eq(posts[#posts].path, '/v1/poll', 'the loop polls again after a hanging command')
-hangTasks, pending = false, {}
+eq(#r, 2, 'both reads get an answer')
+eq(r[1].ok, true, 'list_collections answers ok, not busy: ' .. tostring(r[1].error))
+eq(r[1].data.collections[1].name, 'Kreuzfahrt 2026')
+eq(r[2].ok, true, 'get_photo answers ok, not busy: ' .. tostring(r[2].error))
+assert(r[2].at - t0 < 1, 'reads answer at once, took ' .. tostring(r[2].at - t0) .. 's')
+nestedTasksStall = false
 
--- 3) an HTTP layer error does not end the loop
-posts, State.stop = {}, false
-script = { function() error('socket closed') end, command('fine', 30) }
-Loop.run(0)
+-- 3) a command that yields (sleeps, like makeCopy waiting for the new copy) still answers, and other
+-- plug-in tasks (auto-export, publish) keep running meanwhile
+local ticks = 0
+Commands.slow = function() Tasks.sleep(2); Tasks.sleep(2); return { done = true } end
+posts, script, State.stop, tasks = {}, { command('slow', 30), command('fine', 30) }, false, {}
+Tasks.startAsyncTask(function() while not State.stop do ticks = ticks + 1; Tasks.sleep(1) end end, 'other')
+Tasks.startAsyncTask(function() Tasks.pcall(Loop.run) end, 'MHPhotos: bridge loop')
+runTasks(now + 3600)
+r = results()
+eq(#r, 2); eq(r[1].ok, true); eq(r[1].data.done, true); eq(r[2].ok, true)
+assert(ticks >= 3, 'other tasks run while a command sleeps (ticks ' .. ticks .. ')')
+
+-- 4) an HTTP layer error does not end the loop
+runLoop({ function() error('socket closed') end, command('fine', 30) })
 r = results()
 eq(#r, 1); eq(r[1].ok, true)
 
--- 4) a loop of an older generation ends by itself
-posts, State.stop = {}, false
-State.generation = 3
-script = { command('fine', 30) }
-Loop.run(2)
-eq(#posts, 0, 'an outdated loop does not poll')
-State.generation = 0
+-- 5) a result that cannot be encoded still gets an answer (the server would otherwise wait in vain)
+Commands.weird = function() return { f = function() end } end
+runLoop({ command('weird', 30) })
+r = results()
+eq(#r, 1); eq(r[1].ok, false); assert(r[1].error:find('could not encode'), r[1].error)
 
--- 5) watchdog: a loop that stops beating is replaced by one of a new generation
-State.stop, State.generation = false, 0
-local started = {}
-sleepHook = function() if now > 5000 then State.stop = true end end
-Loop.watchdog(function(gen)
-  started[#started + 1] = gen
-  if gen == 0 then State.beat = now end -- the first loop beats once, then goes silent
-end)
-sleepHook = nil
-eq(started[1], 0); eq(started[2], 1, 'a silent loop is replaced')
-eq(State.generation, #started - 1)
--- a loop that keeps beating is left alone
-State.stop, State.generation, now = false, 0, 1000
-started = {}
-sleepHook = function() State.beat = now; if now > 5000 then State.stop = true end end
-Loop.watchdog(function(gen) started[#started + 1] = gen end)
-sleepHook = nil
-eq(#started, 1, 'a beating loop is not restarted')
+-- 6) the fake itself: a nested task really stalls when nestedTasksStall is set (so test 2 means something)
+nestedTasksStall, tasks = true, {}
+local childDone = false
+Tasks.startAsyncTask(function() Tasks.startAsyncTask(function() childDone = true end) end, 'parent')
+runTasks(now + 3600)
+eq(childDone, false, 'nested task stalls in the fake')
+nestedTasksStall, tasks = false, {}
+Tasks.startAsyncTask(function() Tasks.startAsyncTask(function() childDone = true end) end, 'parent')
+runTasks(now + 3600)
+eq(childDone, true, 'nested task runs normally otherwise')
+
 print('loop ok')
