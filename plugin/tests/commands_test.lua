@@ -526,6 +526,12 @@ for i = before + 1, #viewCalls do if viewCalls[i] == 'module:develop' then sawDe
 assert(sawDevelop, 'Develop module must be opened')
 autoCalls = {}
 Commands.run('auto_tone', { photo_ids = { 'u1' } }); eq(table.concat(autoCalls, ','), 'tone')
+-- without a metadata provider (Lightroom rejected it) the call fails with a clear message, nothing else breaks
+local origSet = p1.setPropertyForPlugin
+p1.setPropertyForPlugin = function() error('unknown plug-in field') end
+local okNoProvider, errNoProvider = pcall(Commands.run, 'set_custom_metadata', { photo_ids = { 'u1' }, status = 'fotobuch' })
+eq(okNoProvider, false); assert(tostring(errNoProvider):find('not active'), tostring(errNoProvider))
+p1.setPropertyForPlugin = origSet
 -- the field definition file is valid Lua with the ids the plug-in code uses
 local def = dofile('../mhphotos.lrdevplugin/MetadataDefinition.lua')
 eq(def.schemaVersion, 1); eq(def.metadataFieldsForPhotos[1].id, 'status'); eq(def.metadataFieldsForPhotos[2].id, 'notiz')

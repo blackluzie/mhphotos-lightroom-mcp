@@ -8,8 +8,8 @@ return {
   -- polling loop in Init.lua would not start by itself after launching or reloading.
   LrForceInitPlugin = true,
   LrShutdownPlugin = 'Shutdown.lua',
-  -- Own searchable fields (status, note); see MetadataDefinition.lua
-  LrMetadataProvider = 'MetadataDefinition.lua',
+  -- Own searchable fields (status, note) are switched off: with LrMetadataProvider = 'MetadataDefinition.lua'
+  -- Lightroom 15 reported "No script by the name MetadataDefinition.lua" and deactivated the whole plug-in.
   -- Publish service "MHPhotos" (published collections hand photos to the hot folder); see PublishServiceProvider.lua
   LrExportServiceProvider = {
     title = 'MHPhotos (Foto-Inbox)',
@@ -20,5 +20,5 @@ return {
     { title = 'MHPhotos MCP: Selbsttest (nur lesen)', file = 'SelfTestMenu.lua' },
     { title = 'MHPhotos MCP: Auto-Export einrichten', file = 'AutoExportSetup.lua' },
   },
-  VERSION = { major = 0, minor = 1, revision = 19, build = 0 },
+  VERSION = { major = 0, minor = 1, revision = 20, build = 0 },
 }
