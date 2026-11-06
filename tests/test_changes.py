@@ -296,3 +296,35 @@ async def test_smart_collection_keyword_previews_and_import(writes):
     assert idry["dry_run"] is True
     idone = await server.import_photo("/Users/x/new.jpg", confirm=True)
     assert idone["applied"] is True and idone["filename"] == "new.jpg"
+
+
+async def test_custom_metadata_and_auto_tone(writes):
+    assert "error" in await server.set_custom_metadata(["p1"])
+    assert "error" in await server.set_custom_metadata(["p1"], status="unbekannt")
+    assert "error" in await server.set_custom_metadata(["p1"], note="x" * 1001)
+    dry = await server.set_custom_metadata(["p1", "p2"], status="insta_kandidat", note="Gasse, 4:5")
+    assert dry["dry_run"] is True
+    done = await server.set_custom_metadata(["p1", "p2"], status="insta_kandidat", note="Gasse, 4:5", confirm=True)
+    assert done["applied"] is True
+    meta = (await server.get_photo_metadata("p1"))
+    assert meta["mhphotos_status"] == "insta_kandidat" and meta["mhphotos_note"] == "Gasse, 4:5"
+
+    assert "error" in await server.auto_tone([f"p{i}" for i in range(11)])
+    adry = await server.auto_tone(["p1"], white_balance=True)
+    assert adry["dry_run"] is True
+    adone = await server.auto_tone(["p1"], white_balance=True, confirm=True)
+    assert adone["applied"] is True and adone["white_balance"] is True
+
+
+async def test_export_presets_and_options(monkeypatch, tmp_path):
+    monkeypatch.setenv("MHPHOTOS_EXPORT_DIR", str(tmp_path))
+    assert "error" in await server.export_photos(["p1"], preset="unbekannt")
+    assert "error" in await server.export_photos(["p1"], long_edge=50)
+    assert "error" in await server.export_photos(["p1"], quality=0)
+    assert "error" in await server.export_photos(["p1"], sharpen="stark")
+    dry = await server.export_photos(["p1"], preset="instagram", quality=80)
+    assert dry["dry_run"] is True and dry["options"] == {"long_edge": 1350, "quality": 80, "sharpen": "screen"}
+    done = await server.export_photos(["p1"], preset="story", confirm=True)
+    assert done["applied"] is True and done["options"]["long_edge"] == 1920
+    plain = await server.export_photos(["p1"], confirm=True)
+    assert plain["applied"] is True and plain["options"] == {}

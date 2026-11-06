@@ -8,10 +8,12 @@ return {
   -- polling loop in Init.lua would not start by itself after launching or reloading.
   LrForceInitPlugin = true,
   LrShutdownPlugin = 'Shutdown.lua',
+  -- Own searchable fields (status, note); see MetadataDefinition.lua
+  LrMetadataProvider = 'MetadataDefinition.lua',
   LrLibraryMenuItems = {
     { title = 'MHPhotos MCP: Status', file = 'Status.lua' },
     { title = 'MHPhotos MCP: Selbsttest (nur lesen)', file = 'SelfTestMenu.lua' },
     { title = 'MHPhotos MCP: Auto-Export einrichten', file = 'AutoExportSetup.lua' },
   },
-  VERSION = { major = 0, minor = 1, revision = 16, build = 0 },
+  VERSION = { major = 0, minor = 1, revision = 17, build = 0 },
 }

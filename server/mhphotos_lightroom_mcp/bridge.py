@@ -387,9 +387,20 @@ class BridgeAdapter:
     def photo_paths(self, photo_ids):
         return self._call("photo_paths", {"photo_ids": photo_ids})
 
-    def export_photos(self, photo_ids, dest_dir):
+    def set_custom_metadata(self, photo_ids, status, note):
+        args = {"photo_ids": photo_ids}
+        if status is not None:
+            args["status"] = status
+        if note is not None:
+            args["note"] = note
+        return self._call("set_custom_metadata", args)
+
+    def auto_tone(self, photo_ids, white_balance):
+        return self._call("auto_tone", {"photo_ids": photo_ids, "white_balance": white_balance}, timeout=120)
+
+    def export_photos(self, photo_ids, dest_dir, options=None):
         return self._call(
             "export_photos",
-            {"photo_ids": photo_ids, "dest_dir": dest_dir},
+            {"photo_ids": photo_ids, "dest_dir": dest_dir, **(options or {})},
             timeout=self._export_timeout,
         )

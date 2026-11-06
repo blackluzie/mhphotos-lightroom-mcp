@@ -12,6 +12,8 @@ local function newPhoto(uuid, name, rating, pick, kws, t, cam)
     fmt = { fileName = name, cameraModel = cam } }
   for _, k in ipairs(kws) do p.raw.keywords[#p.raw.keywords + 1] = { getName = function() return k end } end
   function p:getRawMetadata(k) return self.raw[k] end
+  function p:setPropertyForPlugin(_, k, v) self.props = self.props or {}; self.props[k] = v end
+  function p:getPropertyForPlugin(_, k) return self.props and self.props[k] end
   function p:getFormattedMetadata(k) return self.fmt[k] end
   function p:setRawMetadata(k, v)
     if k == 'title' or k == 'caption' then self.fmt[k] = v else self.raw[k] = v end
@@ -53,6 +55,7 @@ local createdSets = {}
 local lastWriteOpts
 local createdCollection, selected, activeSource, virtualCopyName, ignoreSelection, wrongMaster
 local viewCalls = {}
+local autoCalls = {}
 local fakeCatalog = {
   getChildCollections = function() return { coll } end,
   getChildCollectionSets = function() return { set } end,
@@ -126,6 +129,10 @@ function import(name)
     return { currentTime = function() return os.clock() end,
       -- the real one formats in the local time zone; UTC keeps the test deterministic
       timeToUserFormat = function(t, fmt) return os.date('!' .. fmt, t + 978307200) end }
+  end
+  if name == 'LrDevelopController' then
+    return { setAutoTone = function() autoCalls[#autoCalls + 1] = 'tone' end,
+             setAutoWhiteBalance = function() autoCalls[#autoCalls + 1] = 'wb' end }
   end
   if name == 'LrFileUtils' then return { exists = function(path) if path == '/Users/x/new.jpg' then return 'file' end return false end } end
   if name == 'LrStringUtils' then return { encodeBase64 = function(d) return 'B64(' .. d .. ')' end } end
@@ -477,6 +484,42 @@ eq(pcall(Commands.run, 'add_photo', { path = 'relative.jpg' }), false)
 eq(pcall(Commands.run, 'add_photo', { path = '/Users/x/../etc/x.jpg' }), false)
 eq(pcall(Commands.run, 'add_photo', { path = '/Users/x/missing.jpg' }), false)
 fakeCatalog.addPhoto = nil
+
+-- export with size, quality and sharpening
+Commands.run('export_photos', { photo_ids = { 'u1' }, dest_dir = '/tmp/out', long_edge = 1350, quality = 85, sharpen = 'screen' })
+local es = exported.exportSettings
+eq(es.LR_size_doConstrain, true); eq(es.LR_size_resizeType, 'longEdge'); eq(es.LR_size_maxWidth, 1350)
+eq(es.LR_size_maxHeight, 1350); eq(es.LR_size_doNotEnlarge, true); eq(es.LR_jpeg_quality, 0.85)
+eq(es.LR_outputSharpeningOn, true); eq(es.LR_outputSharpeningMedia, 'screen'); eq(es.LR_export_colorSpace, 'sRGB')
+Commands.run('export_photos', { photo_ids = { 'u1' }, dest_dir = '/tmp/out' })
+eq(exported.exportSettings.LR_size_doConstrain, false); eq(exported.exportSettings.LR_jpeg_quality, 0.9)
+eq(pcall(Commands.run, 'export_photos', { photo_ids = { 'u1' }, dest_dir = '/x', long_edge = 50 }), false)
+eq(pcall(Commands.run, 'export_photos', { photo_ids = { 'u1' }, dest_dir = '/x', quality = 0 }), false)
+eq(pcall(Commands.run, 'export_photos', { photo_ids = { 'u1' }, dest_dir = '/x', sharpen = 'hart' }), false)
+-- own metadata fields
+Commands.run('set_custom_metadata', { photo_ids = { 'u1' }, status = 'insta_kandidat', note = 'Gasse' })
+eq(p1.props.status, 'insta_kandidat'); eq(p1.props.notiz, 'Gasse')
+local md = Commands.run('get_photo', { photo_id = 'u1' })
+eq(md.mhphotos_status, 'insta_kandidat'); eq(md.mhphotos_note, 'Gasse')
+Commands.run('set_custom_metadata', { photo_ids = { 'u1' }, status = '' })
+eq(p1.props.status, nil)
+eq(pcall(Commands.run, 'set_custom_metadata', { photo_ids = { 'u1' } }), false)
+eq(pcall(Commands.run, 'set_custom_metadata', { photo_ids = { 'u1' }, status = 'blau' }), false)
+p1.props = nil
+-- auto tone: select, open Develop, auto, back to the Library
+local before = #viewCalls
+local at = Commands.run('auto_tone', { photo_ids = { 'u1', 'u2' }, white_balance = true })
+eq(at.updated, 2); eq(table.concat(autoCalls, ','), 'tone,wb,tone,wb')
+eq(viewCalls[#viewCalls], 'module:library')
+local sawDevelop = false
+for i = before + 1, #viewCalls do if viewCalls[i] == 'module:develop' then sawDevelop = true end end
+assert(sawDevelop, 'Develop module must be opened')
+autoCalls = {}
+Commands.run('auto_tone', { photo_ids = { 'u1' } }); eq(table.concat(autoCalls, ','), 'tone')
+-- the field definition file is valid Lua with the ids the plug-in code uses
+local def = dofile('../mhphotos.lrdevplugin/MetadataDefinition.lua')
+eq(def.schemaVersion, 1); eq(def.metadataFieldsForPhotos[1].id, 'status'); eq(def.metadataFieldsForPhotos[2].id, 'notiz')
+eq(#def.metadataFieldsForPhotos[1].values, 4)
 
 -- photo_dimensions: read only, size after crop per photo id
 p1.raw.croppedDimensions = { width = 4032, height = 3024 }

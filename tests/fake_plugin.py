@@ -87,6 +87,10 @@ class FakePlugin:
             return b.build_smart_previews(a["photo_ids"])
         if name == "add_photo":
             return b.import_photo(a["path"], a.get("collection_id"))
+        if name == "set_custom_metadata":
+            return b.set_custom_metadata(a["photo_ids"], a.get("status"), a.get("note"))
+        if name == "auto_tone":
+            return b.auto_tone(a["photo_ids"], a.get("white_balance", False))
         if name == "move_collection":
             return b.move_collection(a["collection_id"], a["parent"])
         if name == "add_to_collection":
@@ -106,6 +110,7 @@ class FakePlugin:
         if name == "add_keywords":
             return b.add_keywords(a["photo_ids"], a["keywords"])
         if name == "export_photos":
-            return b.export_photos(a["photo_ids"], a["dest_dir"])
+            opts = {k: a[k] for k in ("long_edge", "quality", "sharpen") if k in a}
+            return b.export_photos(a["photo_ids"], a["dest_dir"], opts or None)
         raise AssertionError(name)
 

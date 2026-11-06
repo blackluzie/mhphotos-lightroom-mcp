@@ -593,6 +593,53 @@ async def import_photo(
     return {"applied": True, "change_id": change_id, **result}
 
 
+CUSTOM_STATUS = ("insta_kandidat", "fotobuch", "veroeffentlicht", "aussortiert")
+
+
+@mcp.tool()
+async def set_custom_metadata(
+    photo_ids: list[str], status: str | None = None, note: str | None = None,
+    confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Set the plug-in's own Lightroom fields "MHPhotos-Status" and "MHPhotos-Notiz" (searchable, usable in smart collections).
+
+    status: insta_kandidat | fotobuch | veroeffentlicht | aussortiert, or "" to clear. note: free text (max 1000
+    characters), "" clears it. Needs plugin 0.1.17 or newer. Dry run unless confirm=true; needs operator opt-in.
+    """
+    if status is None and note is None:
+        return {"error": "Give status and/or note"}
+    if status not in (None, "", *CUSTOM_STATUS):
+        return {"error": f"status must be one of: {', '.join(CUSTOM_STATUS)} or empty"}
+    if note is not None and len(note) > 1000:
+        return {"error": "note must be at most 1000 characters"}
+    change = {k: v for k, v in (("mhphotos_status", status), ("mhphotos_note", note)) if v is not None}
+    return await _edit(
+        photo_ids, change, lambda: _adapter.set_custom_metadata(photo_ids, status, note), confirm,
+        ctx=ctx, tool="set_custom_metadata",
+        summary="Eigene Felder setzen: " + ", ".join(f"{k}={v[:40]}" for k, v in change.items()),
+    )
+
+
+@mcp.tool()
+async def auto_tone(
+    photo_ids: list[str], white_balance: bool = False, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Lightroom's own "Auto" tone (and optionally white balance) for up to 10 photos, one after the other.
+
+    Lightroom only does this for the photo shown in the Develop module, so the plugin selects each photo, opens
+    Develop and returns to the Library grid at the end; the selection changes and it takes a few seconds per
+    photo. A develop step in Lightroom's history (undo there). Needs plugin 0.1.17 or newer. Dry run unless
+    confirm=true; needs operator opt-in.
+    """
+    if len(photo_ids) > 10:
+        return {"error": "At most 10 photos per call"}
+    return await _edit(
+        photo_ids, {"auto_tone": True, "white_balance": white_balance},
+        lambda: _adapter.auto_tone(photo_ids, white_balance), confirm, ctx=ctx, tool="auto_tone",
+        summary="Auto-Ton" + (" und Auto-Weißabgleich" if white_balance else "") + " anwenden",
+    )
+
+
 @mcp.tool()
 async def add_to_collection(
     collection_id: str, photo_ids: list[str], confirm: bool = False, ctx: Context | None = None
@@ -1344,16 +1391,55 @@ async def undo_last_change(confirm: bool = False, ctx: Context | None = None) ->
             "skipped": [p for p in plan if "skip" in p]}
 
 
+EXPORT_PRESETS: dict[str, dict[str, Any]] = {
+    "instagram": {"long_edge": 1350, "quality": 90, "sharpen": "screen"},  # feed 4:5 after crop_to_aspect
+    "story": {"long_edge": 1920, "quality": 90, "sharpen": "screen"},  # 9:16
+    "web": {"long_edge": 2400, "quality": 85, "sharpen": "screen"},
+    "full": {},
+}
+
+
+def _export_options(
+    preset: str | None, long_edge: int | None, quality: int | None, sharpen: str | None
+) -> dict[str, Any]:
+    """Export options from a preset plus explicit values (explicit wins); an error dict for bad input."""
+    if preset is not None and preset not in EXPORT_PRESETS:
+        return {"error": f"preset must be one of: {', '.join(EXPORT_PRESETS)}"}
+    options = dict(EXPORT_PRESETS.get(preset or "", {}))
+    if long_edge is not None:
+        if not 200 <= long_edge <= 10000:
+            return {"error": "long_edge must be between 200 and 10000 pixels"}
+        options["long_edge"] = long_edge
+    if quality is not None:
+        if not 1 <= quality <= 100:
+            return {"error": "quality must be between 1 and 100"}
+        options["quality"] = quality
+    if sharpen is not None:
+        if sharpen not in ("screen", "off"):
+            return {"error": "sharpen must be screen or off"}
+        options["sharpen"] = sharpen
+    return {"options": options}
+
+
 @mcp.tool()
 async def export_photos(
-    photo_ids: list[str], confirm: bool = False, ctx: Context | None = None
+    photo_ids: list[str], preset: str | None = None, long_edge: int | None = None,
+    quality: int | None = None, sharpen: str | None = None,
+    confirm: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Export photos as JPEG into the operator-configured folder. Dry run unless confirm=true.
 
-    The destination cannot be chosen by the client; it comes from MHPHOTOS_EXPORT_DIR.
+    The destination cannot be chosen by the client; it comes from MHPHOTOS_EXPORT_DIR. Optional format:
+    preset "instagram" (long edge 1350 px), "story" (1920), "web" (2400) or "full" (no resize), or
+    long_edge (200-10000 px), quality (1-100), sharpen (screen|off); explicit values win over the preset.
+    Photos are never enlarged. Crop first (crop_to_aspect) if the picture should be 4:5 or 9:16.
     """
     if bad := _check_ids(photo_ids):
         return bad
+    opts = _export_options(preset, long_edge, quality, sharpen)
+    if "error" in opts:
+        return opts
+    options = opts["options"]
     dest = permissions.export_dir()
     if dest is None:
         return {"error": permissions.export_disabled_message(), "code": "disabled"}
@@ -1368,16 +1454,17 @@ async def export_photos(
             "dry_run": True,
             "destination": dest,
             "files": [n["filename"] for n in names],
+            "options": options,
             "hint": "Nothing was exported. Call again with confirm=true to export.",
         }
     approved, how = await gate.approve(ctx, f"{len(names)} Foto(s) als JPEG nach {dest} exportieren: {_names(names)}")
     if not approved:
         return gate.refusal(how)
     Path(dest).mkdir(parents=True, exist_ok=True)
-    result = await _run(_adapter.export_photos, photo_ids, dest)
+    result = await _run(_adapter.export_photos, photo_ids, dest, options or None)
     if _is_error(result):
         return result
-    change_id = audit.record("export_photos", photo_ids, {"destination": dest}, approved_by=how)
+    change_id = audit.record("export_photos", photo_ids, {"destination": dest, **options}, approved_by=how)
     return {"applied": True, "change_id": change_id, **result}
 
 
@@ -2577,12 +2664,12 @@ TOOLSETS: dict[str, set[str]] = {
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
         "create_collection", "move_collection", "create_smart_collection", "create_keyword", "import_photo",
-        "add_to_collection", "export_photos", "undo_last_change",
+        "set_custom_metadata", "add_to_collection", "export_photos", "undo_last_change",
         "catalog_audit_collections", "set_location", "rotate_photos", "write_name_dates_to_files",
     },
     "develop": {
         "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",
-        "create_virtual_copies", "crop_to_aspect", "build_smart_previews",
+        "create_virtual_copies", "crop_to_aspect", "build_smart_previews", "auto_tone",
     },
     "mhphotos": {
         "send_to_mhphotos_inbox", "mhphotos_galleries", "mhphotos_inbox", "mhphotos_analyze_inbox",
