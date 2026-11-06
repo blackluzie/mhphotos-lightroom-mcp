@@ -266,6 +266,22 @@ assert(third >= 3, 'cache must be rebuilt after a write, reads=' .. third)
 local made = Commands.run('create_collection', { name = 'Südtirol 09 2026' })
 eq(made.id, '99'); eq(createdCollection.name, 'Südtirol 09 2026'); eq(createdCollection.prior, true)
 eq(pcall(Commands.run, 'create_collection', { name = '' }), false)
+-- a collection inside a set path: sets are created level by level, the collection goes into the last one
+local setsBefore = #createdSets
+local nested = Commands.run('create_collection', { name = 'Spanien', parent = '2026/Reisen' })
+eq(nested.parent, '2026/Reisen'); eq(#createdSets, setsBefore + 2)
+eq(createdSets[setsBefore + 1].name, '2026'); eq(createdSets[setsBefore + 2].name, 'Reisen')
+eq(createdSets[setsBefore + 2].parent, createdSets[setsBefore + 1]); eq(createdCollection.parent, createdSets[setsBefore + 2])
+eq(pcall(Commands.run, 'create_collection', { name = 'X', parent = string.rep('a', 300) }), false)
+-- moving an existing collection into a set
+coll.setParent = function(self, set) self.parentSet = set end
+local movedRes = Commands.run('move_collection', { collection_id = '7', parent = '2026' })
+eq(movedRes.moved, true); eq(coll.parentSet.name, '2026')
+Commands.run('move_collection', { collection_id = '7', parent = '' }); eq(coll.parentSet, nil)
+eq(select(2, pcall(Commands.run, 'move_collection', { collection_id = '55', parent = '2026' })).code, 'not_found')
+coll.setParent = nil
+eq(pcall(Commands.run, 'move_collection', { collection_id = '7', parent = '2026' }), false)
+for i = #createdSets, setsBefore + 1, -1 do table.remove(createdSets, i) end -- later tests count the sets
 coll.addPhotos = function(self, ps) self.added = ps end
 coll.isSmartCollection = function() return false end
 Commands.run('add_to_collection', { collection_id = '7', photo_ids = { 'u1', 'u2' } })

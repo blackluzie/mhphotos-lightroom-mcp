@@ -178,8 +178,11 @@ class CatalogAdapter(Protocol):
 
     def apply_preset(self, photo_ids: list[str], preset: str) -> dict[str, Any]: ...
 
-    def create_collection(self, name: str) -> dict[str, Any]:
-        """Create (or return the existing) collection of that name: {"id", "name"}."""
+    def create_collection(self, name: str, parent: str | None = None) -> dict[str, Any]:
+        """Create (or return the existing) collection of that name, inside the set path ``parent``: {"id", "name"}."""
+
+    def move_collection(self, collection_id: str, parent: str) -> dict[str, Any]:
+        """Move a collection into the set path ``parent`` ('' = top level): {"id", "parent", "moved"}."""
 
     def add_to_collection(self, collection_id: str, photo_ids: list[str]) -> dict[str, Any]: ...
 
@@ -362,13 +365,22 @@ class MockAdapter:
         self._presets.append({"folder": "MHPhotos MCP Bridge", "name": name})
         return {"created": name, "folder": "MHPhotos MCP Bridge", "parameters": len(settings)}
 
-    def create_collection(self, name):
+    def create_collection(self, name, parent=None):
+        full = f"{parent}/{name}" if parent else name
         for c in self._collections:
-            if c.name == name:
+            if c.name == full:
                 return {"id": c.id, "name": c.name, "existed": True}
         cid = f"c{len(self._collections) + 1}"
-        self._collections.append(Collection(cid, name, ()))
-        return {"id": cid, "name": name, "existed": False}
+        self._collections.append(Collection(cid, full, ()))
+        return {"id": cid, "name": full, "existed": False, "parent": parent}
+
+    def move_collection(self, collection_id, parent):
+        for i, c in enumerate(self._collections):
+            if c.id == collection_id:
+                leaf = c.name.rsplit("/", 1)[-1]
+                self._collections[i] = dataclasses.replace(c, name=f"{parent}/{leaf}" if parent else leaf)
+                return {"id": c.id, "parent": parent, "moved": True}
+        raise NotFoundError(f"Collection not found: {collection_id}")
 
     def add_to_collection(self, collection_id, photo_ids):
         photos = self._all(photo_ids)
