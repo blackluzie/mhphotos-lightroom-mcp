@@ -29,11 +29,13 @@ READ_TOOLS = (
 # develop changes are history steps in Lightroom. "Abgelehnt" is set_flag(flag="rejected").
 WRITE_TOOLS = (
     'set_rating', 'set_flag', 'set_color_label', 'set_title_caption', 'add_keywords',
-    'create_collection', 'move_collection', 'add_to_collection', 'create_virtual_copies', 'undo_last_change',
+    'create_collection', 'move_collection', 'create_smart_collection', 'create_keyword', 'import_photo',
+    'build_smart_previews', 'add_to_collection', 'create_virtual_copies', 'undo_last_change',
     'apply_preset', 'apply_develop_settings', 'sync_develop_settings', 'create_preset', 'crop_to_aspect',
     'catalog_audit_collections', 'set_location', 'rotate_photos',
 )
-ADDITIVE_TOOLS = {'create_collection', 'move_collection', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords',
+ADDITIVE_TOOLS = {'create_collection', 'move_collection', 'create_smart_collection', 'create_keyword', 'import_photo',
+    'build_smart_previews', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords',
     'catalog_audit_collections'}
 WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
 # Read-only views of the MHPhotos app (Instagram library, inbox), offered when desktop.json

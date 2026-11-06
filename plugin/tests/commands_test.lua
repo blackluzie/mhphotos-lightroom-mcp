@@ -127,6 +127,7 @@ function import(name)
       -- the real one formats in the local time zone; UTC keeps the test deterministic
       timeToUserFormat = function(t, fmt) return os.date('!' .. fmt, t + 978307200) end }
   end
+  if name == 'LrFileUtils' then return { exists = function(path) if path == '/Users/x/new.jpg' then return 'file' end return false end } end
   if name == 'LrStringUtils' then return { encodeBase64 = function(d) return 'B64(' .. d .. ')' end } end
   if name == 'LrApplication' then
     return {
@@ -423,6 +424,59 @@ eq(pcall(Commands.run, 'rotate_photos', { photo_ids = { 'u1' }, degrees = 45 }),
 eq(pcall(Commands.run, 'rotate_photos', { photo_ids = { 'gone' }, degrees = 90 }), false)
 eq(writes, 0, 'nothing changed after bad input')
 p1.turns, p2.turns = 0, 0
+
+-- fast search through Lightroom's index, checked again and with a safe fallback
+local lastSearch
+fakeCatalog.findPhotos = function(_, spec) lastSearch = spec.searchDesc; return { p1, p2 } end
+local fastRes = Commands.run('list_photos', { filters = { min_rating = 5, captured_from = '2001-01-01', captured_to = '2001-01-01' } })
+eq(fastRes.total, 1); eq(fastRes.photos[1].id, 'u1')  -- p2 came back from the index but fails the exact check
+eq(lastSearch.combine, 'intersect'); eq(#lastSearch, 2)
+eq(lastSearch[1].criteria, 'captureTime'); eq(lastSearch[1].value, '2000-12-31'); eq(lastSearch[1].value2, '2001-01-02')  -- one day wider
+eq(lastSearch[2].criteria, 'rating'); eq(lastSearch[2].value, 5)
+fakeCatalog.findPhotos = function() error('search syntax not understood') end
+eq(Commands.run('list_photos', { filters = { min_rating = 5 } }).total, 1)  -- falls back to the full scan
+fakeCatalog.findPhotos = nil
+-- smart collection from rules
+local smart
+fakeCatalog.createSmartCollection = function(_, name, desc, parent, prior)
+  smart = { name = name, desc = desc, parent = parent, prior = prior, localIdentifier = 123 }; return smart
+end
+local sm = Commands.run('create_smart_collection', { name = 'Top 2026', parent = '2026', rules = { min_rating = 4, captured_from = '2026-01-01', captured_to = '2026-12-31' } })
+eq(sm.id, '123'); eq(smart.desc[1].criteria, 'captureTime'); eq(smart.desc[1].value, '2026-01-01'); eq(smart.parent.name, '2026')
+for i = #createdSets, 1, -1 do if createdSets[i].name == '2026' then table.remove(createdSets, i) end end
+eq(pcall(Commands.run, 'create_smart_collection', { name = 'X', rules = {} }), false)
+fakeCatalog.createSmartCollection = nil
+eq(pcall(Commands.run, 'create_smart_collection', { name = 'X', rules = { min_rating = 3 } }), false)
+-- smart previews
+local built
+fakeCatalog.buildSmartPreviews = function(_, ps) built = #ps end
+eq(Commands.run('build_smart_previews', { photo_ids = { 'u1', 'u2' } }).requested, 2); eq(built, 2)
+fakeCatalog.buildSmartPreviews = nil
+eq(pcall(Commands.run, 'build_smart_previews', { photo_ids = { 'u1' } }), false)
+-- keyword paths and create_keyword with synonyms
+local kwCalls = {}
+local origCreateKeyword = fakeCatalog.createKeyword
+fakeCatalog.createKeyword = function(_, name, syn, include, parent, prior)
+  kwCalls[#kwCalls + 1] = { name = name, syn = syn, include = include, parent = parent, prior = prior }
+  return { getName = function() return name end, parentName = parent and parent.getName() or nil }
+end
+local ck = Commands.run('create_keyword', { name = 'Orte > Spanien > Barcelona', synonyms = { 'BCN' } })
+eq(ck.name, 'Barcelona'); eq(#kwCalls, 3); eq(kwCalls[1].name, 'Orte'); eq(kwCalls[1].parent, nil)
+eq(kwCalls[3].name, 'Barcelona'); eq(kwCalls[3].syn[1], 'BCN'); eq(kwCalls[2].syn[1], nil)
+kwCalls = {}
+Commands.run('add_keywords', { photo_ids = { 'u2' }, keywords = { 'Orte > Italien', 'Strand' } })
+eq(#kwCalls, 3)
+eq(pcall(Commands.run, 'create_keyword', { name = '' }), false)
+fakeCatalog.createKeyword = origCreateKeyword
+-- add a file to the catalog
+local addedPath
+fakeCatalog.addPhoto = function(_, path) addedPath = path; return newPhoto('u9', 'new.jpg', 0, 0, {}, 0, 'Canon') end
+local ap = Commands.run('add_photo', { path = '/Users/x/new.jpg', collection_id = '7' })
+eq(ap.id, 'u9'); eq(addedPath, '/Users/x/new.jpg'); eq(#coll.added, 1)
+eq(pcall(Commands.run, 'add_photo', { path = 'relative.jpg' }), false)
+eq(pcall(Commands.run, 'add_photo', { path = '/Users/x/../etc/x.jpg' }), false)
+eq(pcall(Commands.run, 'add_photo', { path = '/Users/x/missing.jpg' }), false)
+fakeCatalog.addPhoto = nil
 
 -- photo_dimensions: read only, size after crop per photo id
 p1.raw.croppedDimensions = { width = 4032, height = 3024 }

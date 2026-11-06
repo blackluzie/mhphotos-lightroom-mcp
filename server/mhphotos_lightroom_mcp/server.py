@@ -486,6 +486,114 @@ async def move_collection(
 
 
 @mcp.tool()
+async def create_smart_collection(
+    name: str, parent: str | None = None, min_rating: int | None = None, keyword: str | None = None,
+    captured_from: str | None = None, captured_to: str | None = None, flag: str | None = None,
+    confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Create a smart collection that fills itself, e.g. "Top 2026": min_rating=4, captured_from=2026-01-01, captured_to=2026-12-31.
+
+    Rules (all must match, at least one needed): min_rating 1-5, keyword, captured_from/captured_to (YYYY-MM-DD),
+    flag (picked|rejected). parent: collection-set path like "2026" (created if missing). Dry run unless
+    confirm=true; needs operator opt-in. Not undoable (delete it in Lightroom).
+    """
+    name = name.strip()
+    if not name or len(name) > 120 or "/" in name:
+        return {"error": "name required (max 120 characters, no '/')"}
+    parent = _clean_set_path(parent)
+    if isinstance(parent, dict):
+        return parent
+    rules = _build_filter(min_rating, None, captured_from, captured_to, keyword, flag, None, None, None, None)
+    if isinstance(rules, dict):
+        return rules
+    rule_args = rules.to_args()
+    if not rule_args:
+        return {"error": "Give at least one rule: min_rating, keyword, captured_from/captured_to or flag"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    full = f"{parent}/{name}" if parent else name
+    if not confirm:
+        return {"dry_run": True, "would_create": full, "rules": rule_args, "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Intelligente Sammlung '{full}' anlegen")
+    if not approved:
+        return gate.refusal(how)
+    result = await _run(_adapter.create_smart_collection, name, parent, rule_args)
+    if _is_error(result):
+        return result
+    change_id = audit.record("create_smart_collection", [], {"name": full, "rules": rule_args}, approved_by=how, result=result)
+    return {"applied": True, "change_id": change_id, **result}
+
+
+@mcp.tool()
+async def create_keyword(
+    name: str, synonyms: list[str] | None = None, include_on_export: bool = True,
+    confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Create a keyword, also as a hierarchy: "Orte > Spanien > Barcelona" (levels are created), with synonyms.
+
+    Photos are not tagged; use add_keywords with the same path for that. Dry run unless confirm=true;
+    needs operator opt-in.
+    """
+    name = name.strip()
+    if not name or len(name) > 300:
+        return {"error": "name required (max 300 characters); a hierarchy is written 'A > B > C'"}
+    syn = [x.strip() for x in (synonyms or []) if x and x.strip()]
+    if len(syn) > 20 or any(len(x) > 100 for x in syn):
+        return {"error": "at most 20 synonyms of up to 100 characters"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    if not confirm:
+        return {"dry_run": True, "would_create": name, "synonyms": syn, "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Stichwort '{name}' anlegen")
+    if not approved:
+        return gate.refusal(how)
+    result = await _run(_adapter.create_keyword, name, syn, include_on_export)
+    if _is_error(result):
+        return result
+    change_id = audit.record("create_keyword", [], {"name": name, "synonyms": syn}, approved_by=how, result=result)
+    return {"applied": True, "change_id": change_id, **result}
+
+
+@mcp.tool()
+async def build_smart_previews(
+    photo_ids: list[str], confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Build smart previews (up to 100 photos): editing and contact sheets then also work without the originals (NAS offline).
+
+    Takes time and disk space (about 1-2 MB per photo). Dry run unless confirm=true; needs operator opt-in.
+    """
+    return await _edit(
+        photo_ids, {"smart_previews": len(photo_ids)}, lambda: _adapter.build_smart_previews(photo_ids),
+        confirm, ctx=ctx, tool="build_smart_previews",
+        summary=f"Smart-Vorschauen für {len(photo_ids)} Fotos erzeugen",
+    )
+
+
+@mcp.tool()
+async def import_photo(
+    path: str, collection_id: str | None = None, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Add one file to the Lightroom catalog (absolute path on the Mac; the file stays where it is), optionally into a collection.
+
+    Dry run unless confirm=true; needs operator opt-in. Not undoable here (remove it in Lightroom).
+    """
+    if not path.startswith("/") or ".." in path or len(path) > 1000:
+        return {"error": "absolute file path required (no '..')"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    if not confirm:
+        return {"dry_run": True, "would_add": path, "collection_id": collection_id, "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Datei '{path}' in den Katalog aufnehmen")
+    if not approved:
+        return gate.refusal(how)
+    result = await _run(_adapter.import_photo, path, collection_id)
+    if _is_error(result):
+        return result
+    change_id = audit.record("import_photo", [result.get("id", "")], {"path": path}, approved_by=how, result=result)
+    return {"applied": True, "change_id": change_id, **result}
+
+
+@mcp.tool()
 async def add_to_collection(
     collection_id: str, photo_ids: list[str], confirm: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
@@ -2468,12 +2576,13 @@ TOOLSETS: dict[str, set[str]] = {
     },
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
-        "create_collection", "move_collection", "add_to_collection", "export_photos", "undo_last_change",
+        "create_collection", "move_collection", "create_smart_collection", "create_keyword", "import_photo",
+        "add_to_collection", "export_photos", "undo_last_change",
         "catalog_audit_collections", "set_location", "rotate_photos", "write_name_dates_to_files",
     },
     "develop": {
         "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",
-        "create_virtual_copies", "crop_to_aspect",
+        "create_virtual_copies", "crop_to_aspect", "build_smart_previews",
     },
     "mhphotos": {
         "send_to_mhphotos_inbox", "mhphotos_galleries", "mhphotos_inbox", "mhphotos_analyze_inbox",

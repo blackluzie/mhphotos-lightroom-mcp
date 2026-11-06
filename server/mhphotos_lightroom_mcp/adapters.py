@@ -184,6 +184,18 @@ class CatalogAdapter(Protocol):
     def move_collection(self, collection_id: str, parent: str) -> dict[str, Any]:
         """Move a collection into the set path ``parent`` ('' = top level): {"id", "parent", "moved"}."""
 
+    def create_smart_collection(self, name: str, parent: str | None, rules: dict[str, Any]) -> dict[str, Any]:
+        """Smart collection from filter rules (like PhotoFilter.to_args): {"id", "name"}."""
+
+    def create_keyword(self, name: str, synonyms: list[str], include_on_export: bool) -> dict[str, Any]:
+        """Keyword or "A > B > C" path with synonyms on the last level: {"name", "path", "synonyms"}."""
+
+    def build_smart_previews(self, photo_ids: list[str]) -> dict[str, Any]:
+        """Ask Lightroom for smart previews: {"requested": n}."""
+
+    def import_photo(self, path: str, collection_id: str | None) -> dict[str, Any]:
+        """Add a file to the catalog: {"id", "filename"}."""
+
     def add_to_collection(self, collection_id: str, photo_ids: list[str]) -> dict[str, Any]: ...
 
     def set_color_label(self, photo_ids: list[str], label: str) -> dict[str, Any]: ...
@@ -373,6 +385,26 @@ class MockAdapter:
         cid = f"c{len(self._collections) + 1}"
         self._collections.append(Collection(cid, full, ()))
         return {"id": cid, "name": full, "existed": False, "parent": parent}
+
+    def create_smart_collection(self, name, parent, rules):
+        full = f"{parent}/{name}" if parent else name
+        cid = f"c{len(self._collections) + 1}"
+        self._collections.append(Collection(cid, full, ()))
+        self._smart = {**getattr(self, "_smart", {}), cid: rules}
+        return {"id": cid, "name": full, "parent": parent}
+
+    def create_keyword(self, name, synonyms, include_on_export):
+        self._keywords = [*getattr(self, "_keywords", []), (name, tuple(synonyms))]
+        return {"name": name.split(">")[-1].strip(), "path": name, "synonyms": synonyms}
+
+    def build_smart_previews(self, photo_ids):
+        return {"requested": len(self._all(photo_ids))}
+
+    def import_photo(self, path, collection_id):
+        n = len(self._photos) + 1
+        pid = f"imp{n}"
+        self._photos[pid] = Photo(pid, path.rsplit("/", 1)[-1])
+        return {"id": pid, "filename": path.rsplit("/", 1)[-1]}
 
     def move_collection(self, collection_id, parent):
         for i, c in enumerate(self._collections):
