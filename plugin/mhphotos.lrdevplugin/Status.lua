@@ -1,16 +1,27 @@
 local LrDialogs = import 'LrDialogs'
-local State = require 'State'
-local Version = require 'Version'
-
+local LrApplication = import 'LrApplication'
 local LrPathUtils = import 'LrPathUtils'
-local fileText
-do
-  local f = io.open(LrPathUtils.child(LrPathUtils.child(LrPathUtils.getStandardFilePath('home'), '.mhphotos-lightroom-mcp'), 'plugin-status.txt'), 'r')
-  if f then fileText = f:read('*a'); f:close() end
+local LrFileUtils = import 'LrFileUtils'
+local Json = require 'Json'
+local Version = require 'Version'
+local StatusText = require 'StatusText'
+local Webhook = require 'Webhook'
+
+local dir = LrPathUtils.child(LrPathUtils.getStandardFilePath('home'), '.mhphotos-lightroom-mcp')
+
+local function readJson(name)
+  local raw = LrFileUtils.readFile(LrPathUtils.child(dir, name))
+  if not raw then return nil end
+  local ok, value = pcall(Json.decode, raw)
+  return ok and value or nil
 end
 
+local info = readJson('plugin-status.json')
+local hookCount
+local raw = readJson('webhooks.json')
+if raw then hookCount = #Webhook.names((Webhook.normalize(raw))) end
+local catalogPath
+pcall(function() catalogPath = LrApplication.activeCatalog():getPath() end)
+
 LrDialogs.message('MHPhotos MCP Bridge ' .. Version,
-  'Plugin-Version: ' .. Version .. '\n' ..
-  'Loop: ' .. (fileText or '(no status file yet)') .. '\n' ..
-  'Status: ' .. tostring(State.status) ..
-  '\nLast command: ' .. tostring(State.lastCommand or '-'), 'info')
+  StatusText.format(info, { catalog = catalogPath, hooks = hookCount, now = os.time() }), 'info')

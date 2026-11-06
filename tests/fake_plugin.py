@@ -87,6 +87,10 @@ class FakePlugin:
             return b.build_smart_previews(a["photo_ids"])
         if name == "add_photo":
             return b.import_photo(a["path"], a.get("collection_id"))
+        if name == "webhook_list":
+            return b.list_webhooks()
+        if name == "webhook_send":
+            return b.send_webhook(a["name"], a.get("payload", {}))
         if name == "set_custom_metadata":
             return b.set_custom_metadata(a["photo_ids"], a.get("status"), a.get("note"))
         if name == "auto_tone":

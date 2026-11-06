@@ -641,6 +641,50 @@ async def auto_tone(
 
 
 @mcp.tool()
+async def list_webhooks() -> dict[str, Any]:
+    """Names of the webhooks set up on the Mac (for example n8n), usable with send_webhook. Read-only.
+
+    The addresses live only in ~/.mhphotos-lightroom-mcp/webhooks.json and are never shown or chosen here.
+    Needs plugin 0.1.18 or newer.
+    """
+    return await _run(_adapter.list_webhooks)
+
+
+@mcp.tool()
+async def send_webhook(
+    name: str, payload: dict[str, Any] | None = None, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Call one of the webhooks from list_webhooks (POST, JSON payload up to 50 KB), e.g. to start an n8n flow.
+
+    Only configured names work, never free addresses. Dry run unless confirm=true; needs operator opt-in.
+    The call goes out from Lightroom's plug-in and cannot be taken back. Needs plugin 0.1.18 or newer.
+    """
+    name = name.strip()
+    if not name or len(name) > 40:
+        return {"error": "name required (see list_webhooks)"}
+    if payload is not None and len(json.dumps(payload)) > 50000:
+        return {"error": "payload too large (max 50 KB)"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    known = await _run(_adapter.list_webhooks)
+    if _is_error(known):
+        return known
+    if name not in known.get("hooks", []):
+        return {"error": f"Unknown webhook '{name}'. Known: {', '.join(known.get('hooks', [])) or 'none'}. Set them up in webhooks.json."}
+    if not confirm:
+        return {"dry_run": True, "would_call": name, "payload_keys": sorted((payload or {}).keys()),
+                "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Webhook '{name}' aufrufen")
+    if not approved:
+        return gate.refusal(how)
+    result = await _run(_adapter.send_webhook, name, payload or {})
+    if _is_error(result):
+        return result
+    change_id = audit.record("send_webhook", [], {"name": name, "keys": sorted((payload or {}).keys())}, approved_by=how, result=result)
+    return {"applied": True, "change_id": change_id, **result}
+
+
+@mcp.tool()
 async def add_to_collection(
     collection_id: str, photo_ids: list[str], confirm: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
@@ -2659,12 +2703,12 @@ TOOLSETS: dict[str, set[str]] = {
         "get_photo_metadata", "get_photo_previews", "get_contact_sheet", "get_develop_settings",
         "list_presets", "backlog_report", "list_changes",
         "catalog_audit_start", "catalog_audit_status", "catalog_audit_results", "catalog_audit_cancel",
-        "photos_by_date", "suggest_locations",
+        "photos_by_date", "suggest_locations", "list_webhooks",
     },
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
         "create_collection", "move_collection", "create_smart_collection", "create_keyword", "import_photo",
-        "set_custom_metadata", "add_to_collection", "export_photos", "undo_last_change",
+        "set_custom_metadata", "send_webhook", "add_to_collection", "export_photos", "undo_last_change",
         "catalog_audit_collections", "set_location", "rotate_photos", "write_name_dates_to_files",
     },
     "develop": {

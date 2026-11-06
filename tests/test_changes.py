@@ -328,3 +328,16 @@ async def test_export_presets_and_options(monkeypatch, tmp_path):
     assert done["applied"] is True and done["options"]["long_edge"] == 1920
     plain = await server.export_photos(["p1"], confirm=True)
     assert plain["applied"] is True and plain["options"] == {}
+
+
+async def test_webhooks_only_by_configured_name(writes):
+    listed = await server.list_webhooks()
+    assert listed["hooks"] == ["n8n-import"]
+    assert "error" in await server.send_webhook(" ")
+    assert "error" in await server.send_webhook("https://evil.example.com/x")
+    assert "error" in await server.send_webhook("n8n-import", {"x": "y" * 60000})
+    dry = await server.send_webhook("n8n-import", {"photo": "p1"})
+    assert dry["dry_run"] is True and dry["payload_keys"] == ["photo"]
+    done = await server.send_webhook("n8n-import", {"photo": "p1"}, confirm=True)
+    assert done["applied"] is True and done["ok"] is True and done["http_status"] == 200
+    assert server._adapter._sent_hooks == [("n8n-import", {"photo": "p1"})]
