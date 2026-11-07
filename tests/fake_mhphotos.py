@@ -67,10 +67,12 @@ class FakeMHPhotos:
             {"id": "ig3", "timestamp": "2025-04-01T08:00:00+0000", "mediaType": "IMAGE", "syncedAt": "2026-10-01T00:00:00Z"},
         ]
         self.gear = [
-            {"id": "g-r5", "name": "Canon EOS R5", "category": "camera", "brand": "Canon", "model": "EOS R5", "status": "active"},
-            {"id": "g-2470", "name": "RF 24-70mm F2.8", "category": "lens", "brand": "Canon", "model": "24-70mm F2.8",
+            # shape of apps/mhphotos lib/gear.ts: German category, optional sharedCategory/brand/model
+            {"id": "g-r5", "name": "Canon EOS R5", "category": "kamera", "sharedCategory": "camera"},
+            {"id": "g-2470", "name": "RF 24-70mm F2.8", "category": "objektiv", "brand": "Canon", "model": "24-70mm F2.8",
              "status": "active"},
-            {"id": "g-old", "name": "Fuji X100", "category": "camera", "brand": "Fujifilm", "model": "X100", "status": "active"},
+            {"id": "g-old", "name": "Fuji X100", "category": "kamera", "brand": "Fujifilm", "model": "X100"},
+            {"id": "g-tripod", "name": "Gitzo", "category": "stativ"},
         ]
         self.spots = [
             {"id": "s-seiser", "name": "Seiser Alm", "lat": 46.5401, "lon": 11.6201},

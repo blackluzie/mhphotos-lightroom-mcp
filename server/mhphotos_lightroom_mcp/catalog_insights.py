@@ -210,12 +210,20 @@ def gear_usage(photos: list[dict[str, Any]], year: int | None = None) -> dict[st
     return {"year": year, "photos_considered": considered, "cameras": finish(cams), "lenses": finish(lenses)}
 
 
+_CATEGORY = {"kamera": "camera", "objektiv": "lens", "camera": "camera", "lens": "lens"}
+
+
+def gear_category(item: dict[str, Any]) -> str | None:
+    """camera / lens / None; the MHPhotos app stores "kamera"/"objektiv" (sharedCategory "camera"/"lens")."""
+    return _CATEGORY.get(str(item.get("sharedCategory") or item.get("category") or "").lower())
+
+
 def _gear_match(name: str, gear: list[dict[str, Any]], category: str) -> dict[str, Any] | None:
     """Best gear item for an EXIF camera/lens name: the model (or brand + model) inside the name, or vice versa."""
     n = _norm(name)
     best, best_len = None, 0
     for item in gear:
-        if item.get("category") != category:
+        if gear_category(item) != category:
             continue
         for cand in {_norm(item.get("model")), _norm(f"{item.get('brand', '')}{item.get('model', '')}"),
                      _norm(item.get("name"))}:
@@ -249,8 +257,8 @@ def match_gear(usage: dict[str, Any], gear: list[dict[str, Any]]) -> dict[str, A
     for cur in items.values():
         cur["top_focal_lengths"] = dict(cur["top_focal_lengths"].most_common(5))
     used = set(items)
-    unused = [{"gear_id": g["id"], "name": g.get("name"), "category": g.get("category")} for g in gear
-              if g.get("category") in ("camera", "lens") and g.get("status", "active") == "active" and g["id"] not in used]
+    unused = [{"gear_id": g["id"], "name": g.get("name"), "category": gear_category(g)} for g in gear
+              if gear_category(g) and (g.get("status") or "active") == "active" and g["id"] not in used]
     return {"matched": sorted(items.values(), key=lambda i: -i["photos"]), "unmatched": unmatched,
             "active_gear_without_photos": unused}
 
