@@ -147,6 +147,9 @@ def upload(cfg: InboxConfig, path: Path, meta: dict[str, Any], timeout: float = 
     if size > MAX_FILE_BYTES:
         return {"status": "error", "error": "file larger than 24 MB inbox limit"}
     fields = {"source": "lightroom-classic-plugin", "rating": str(meta.get("rating", 0) or 0)}
+    if meta.get("id"):
+        # lets the app point back to the Lightroom photo (mark_online_in_lightroom), since 0.1.26
+        fields["lightroomId"] = str(meta["id"])
     if meta.get("keywords"):
         fields["keywords"] = ",".join(meta["keywords"])
     body, ctype = _multipart(fields, path.name, path.read_bytes())
@@ -229,6 +232,27 @@ def _quote(item_id: str) -> str:
 
 def galleries(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
     return api(cfg, "GET", "/api/admin/galleries")
+
+
+def site_gear(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", "/api/admin/gear")
+
+
+def put_gear_usage(cfg: InboxConfig, usage: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "PUT", "/api/admin/gear/usage", usage)
+
+
+def site_spots(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", "/api/admin/spots", timeout=120.0)
+
+
+def put_spot_photos(cfg: InboxConfig, matches: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "PUT", "/api/admin/spots/lightroom-photos", matches, timeout=120.0)
+
+
+def create_blog_draft(cfg: InboxConfig, post: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """A blog post that is NOT published (published=false); it shows up in the admin blog list."""
+    return api(cfg, "POST", "/api/admin/blog", {**post, "published": False})
 
 
 def inbox_items(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:

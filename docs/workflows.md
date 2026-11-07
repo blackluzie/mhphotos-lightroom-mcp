@@ -225,3 +225,66 @@ Needs `--allow-instagram` and the reel renderer on the Hetzner host (`apps-platf
    Copies are created in about a minute; if the call times out, the copy usually exists anyway: drag it into a
    collection and find it there by its file name (a search over the whole catalog is too slow).
 4. Virtual copies can also get a look: `apply_preset` or `apply_develop_settings` (for black and white: `ConvertToGrayscale`).
+
+## 20. Catalog overview per year and the move list at folder level (plugin 0.1.26)
+1. `catalog_audit_start()` without year: the whole catalog (several minutes). Since 0.1.26 the run also keeps a compact
+   snapshot of every photo on the Mac (`~/.mhphotos-lightroom-mcp/audit/snapshot.json.gz`: capture time, stars, flag,
+   keywords count, size, camera, lens, focal length, GPS, folder). Archive candidates, gear statistics, spots and the
+   pre-sorting backlog are computed from it, without asking Lightroom again.
+2. `catalog_audit_overview()`: one row per year with photos, GB and the open points (wrong folder, duplicates to remove,
+   non-photos, JPEG next to RAW, no date …), plus when each scope was last checked (`history`).
+3. `catalog_folder_moves(year=…, level=…)`: wrong folders grouped by the folder they are in. `whole_folder=true` = the whole
+   folder belongs into one target: drag it in Lightroom's Folders panel (or rename it) in one step. The rest still goes
+   through `catalog_audit_collections(kind="wrong_folder")`.
+
+## 21. Archive candidates (free space)
+1. `archive_candidates(min_age_years=5)`: untouched photos (no stars, flag, keywords, edits, colour label, virtual copies)
+   older than 5 years, per year and per folder (biggest first, `whole_folder`), plus rejected photos of any age.
+2. `archive_candidates_collections(confirm=true)` puts them into "Archiv-Kandidaten › <year> › unberührt"
+   (`include_rejected=true`: also "Abgelehnt › alle Jahre"). Moving to an archive drive is done in Lightroom
+   (Folders panel: drag the folder onto the archive volume), never in Finder.
+
+## 22. Pre-sorting at night
+Claude looks at the photos, the server only prepares and records. Nothing changes stars, flags or files.
+1. `presort_status()`: months done, the month in progress, the next months with unreviewed photos (no stars, no flag).
+2. `presort_month("2024-05")`: unreviewed photos of the month in series (same camera, ≤ 5 s apart) and contact-sheet
+   batches of 6 (a series stays together).
+3. Per batch: `get_contact_sheet(batch.photo_ids, columns=6, cell=200)`, judge each photo with the owner's rules (5★ = could
+   go online, family at most 4★, per series only the best), then
+   `presort_apply(month, top=[…], good=[…], reject=[…], series_rest=[…], batch=N, confirm=true)`.
+4. Last batch: `finished=true`. The owner sees "Vorsortieren › 2024-05 › Kandidat 5★ / Kandidat 4★ / Aussortieren
+   (Vorschlag) / Serie – Rest (Vorschlag)" in Lightroom and decides there (stars, removing).
+A nightly run is a scheduled Claude task with the MHPhotos Lightroom connector (writes allowed): "Run /mhphotos-vorsortieren:
+take presort_status().next[0] and work through up to 40 batches". Lightroom must be running on the Mac.
+
+## 23. Keyword clean-up
+1. `keyword_check_start()`, then `keyword_check_status()` until done (photo counts per keyword take a while).
+2. `keyword_check_results("duplicates")`: same name at the same place, or a loose keyword next to the same one inside a
+   hierarchy (keep + merge). `merge_keywords(source_ids=[merge ids], target_id=keep id, confirm=true)` moves the photos.
+   Afterwards in Lightroom: *Metadata > Purge Unused Keywords*.
+3. `variants` (singular/plural, spelling) only after a look; `same_name_elsewhere` is usually right (two towns of the same
+   name); `unused` goes with the purge; `loose` lists top-level keywords with photos to drag into a hierarchy.
+
+## 24. Mark in Lightroom what is online
+`mark_online_in_lightroom()` (dry run), then `confirm=true`: photos on mhphotos.de get the keyword "MHPhotos-Online", photos of
+Instagram posts "Instagram", and the smart collections "MHPhotos › Online auf mhphotos.de" / "MHPhotos › Auf Instagram" fill
+themselves. Matching uses the Lightroom id (uploads since 0.1.26), else capture time + file name or camera. Safe to repeat
+(e.g. weekly); `backlog_report` and `instagram_candidates` then skip what is already online.
+
+## 25. Own photos at the MHPhotos spots
+1. `spot_photos(radius_m=300, min_rating=4)`: per spot the own photos nearby (best ones with ids) and the spots without a
+   good own photo (ideas for the photo planner).
+2. `spot_photos_collections(spot_ids, confirm=true)`: "MHPhotos-Spots › Spots › <name>" with the good photos, e.g. to send the
+   best one to the inbox for the spot page.
+3. `mhphotos_sync_spot_photos(confirm=true)`: the counts per spot go to the MHPhotos admin (no images, nothing public).
+
+## 26. Gear statistics
+`gear_usage(year=None)`: photos per camera and lens (rated 4+, 5★, first/last use, focal lengths), matched to the Ausrüstung
+list of mhphotos.de (unmatched EXIF names, active gear without photos). `mhphotos_sync_gear_usage(confirm=true)` shows the
+numbers on the Ausrüstung admin page.
+
+## 27. Trip → blog draft
+1. `trip_outline("2026-10-19", "2026-11-02", collection_id=<"Kreuzfahrt 2026">, title="Kreuzfahrt 2026")`: per day places,
+   km from GPS, map link, best photos, and a Markdown draft with placeholders.
+2. Write the text with the owner (what happened each day), send the best photos to the inbox (`send_to_mhphotos_inbox`).
+3. `mhphotos_create_blog_draft(title, content=…, tags=[…], confirm=true)` saves it unpublished in Admin › Blog.

@@ -1185,6 +1185,96 @@ function Commands.create_review_collections(args)
   return { collections = made, missing = missing }
 end
 
+-- ---------------------------------------------------------------- keywords (since 0.1.26)
+-- keyword_tree lists every keyword (flat, with parent and path) page by page, optionally with the number of photos;
+-- merge_keywords moves the photos of duplicate keywords onto one target keyword. The SDK cannot delete a keyword:
+-- an emptied keyword is removed in Lightroom with Metadata > Purge Unused Keywords.
+local KEYWORD_PAGE = 500
+local KEYWORD_TTL = 300
+local MERGE_MAX = 5000
+local keywordCache
+
+local function keywordId(kw) return tostring(kw.localIdentifier) end
+
+local function flattenKeywords(refresh)
+  local now = os.time()
+  if not refresh and keywordCache and now - keywordCache.at < KEYWORD_TTL then return keywordCache.list end
+  local list, byId = {}, {}
+  local function walk(kws, parent, prefix, depth)
+    for _, kw in ipairs(kws or {}) do
+      local name = kw:getName()
+      local path = prefix and (prefix .. ' > ' .. name) or name
+      local okC, children = LrTasks.pcall(function() return kw:getChildren() end)
+      children = okC and type(children) == 'table' and children or {}
+      local entry = { kw = kw, id = keywordId(kw), name = name, path = path, depth = depth,
+        parent = parent and keywordId(parent) or nil, children = #children }
+      list[#list + 1] = entry
+      byId[entry.id] = entry
+      walk(children, kw, path, depth + 1)
+    end
+  end
+  walk(catalog():getKeywords(), nil, nil, 0)
+  keywordCache = { at = now, list = list, byId = byId }
+  return list
+end
+
+-- args: offset (default 0; 0 re-reads the keyword list), limit (max 500), counts (true: number of photos per keyword)
+function Commands.keyword_tree(args)
+  local offset = math.max(0, math.floor(tonumber(args.offset) or 0))
+  local limit = math.max(1, math.min(math.floor(tonumber(args.limit) or KEYWORD_PAGE), KEYWORD_PAGE))
+  local list = flattenKeywords(offset == 0 or args.refresh == true)
+  local out = { total = #list, offset = offset, next_offset = offset, keywords = {} }
+  for i = offset + 1, math.min(offset + limit, #list) do
+    local e = list[i]
+    local okS, syn = LrTasks.pcall(function() return e.kw:getSynonyms() end)
+    local item = { id = e.id, name = e.name, path = e.path, depth = e.depth, parent = e.parent, children = e.children,
+      synonyms = okS and type(syn) == 'table' and #syn > 0 and syn or nil }
+    if args.counts == true then
+      local okP, ps = LrTasks.pcall(function() return e.kw:getPhotos() end)
+      item.photos = okP and type(ps) == 'table' and #ps or nil
+    end
+    out.keywords[#out.keywords + 1] = item
+    out.next_offset = i
+  end
+  return out
+end
+
+-- args: source_ids (keyword ids from keyword_tree), target_id, max_photos (default and max 5000 per call).
+-- Each photo of a source keyword gets the target keyword and loses the source keyword. Returns moved and remaining
+-- (photos still on the sources; call again until remaining is 0).
+function Commands.merge_keywords(args)
+  local sources = args.source_ids
+  if type(sources) ~= 'table' or #sources == 0 or #sources > 50 then error('1-50 source_ids required', 0) end
+  flattenKeywords(true)
+  local target = keywordCache.byId[tostring(args.target_id)]
+  if not target then notFound('Keyword not found: ' .. tostring(args.target_id)) end
+  local resolved = {}
+  for _, id in ipairs(sources) do
+    local e = keywordCache.byId[tostring(id)]
+    if not e then notFound('Keyword not found: ' .. tostring(id)) end
+    if e.id == target.id then error('the target keyword must not be a source', 0) end
+    resolved[#resolved + 1] = e
+  end
+  local budget = math.max(1, math.min(math.floor(tonumber(args.max_photos) or MERGE_MAX), MERGE_MAX))
+  local work, remaining = {}, 0
+  for _, e in ipairs(resolved) do
+    local photos = e.kw:getPhotos() or {}
+    for _, p in ipairs(photos) do
+      if budget > 0 then work[#work + 1] = { p, e.kw }; budget = budget - 1 else remaining = remaining + 1 end
+    end
+  end
+  if #work > 0 then
+    writeAccess('MHPhotos: Stichwörter zusammenführen', function()
+      for _, w in ipairs(work) do
+        w[1]:addKeyword(target.kw)
+        w[1]:removeKeyword(w[2])
+      end
+    end)
+  end
+  keywordCache = nil
+  return { moved = #work, remaining = remaining, target = target.path }
+end
+
 -- ---------------------------------------------------------------- self test (read only)
 -- Exercises every read command on a few photos and reports each result, so API mismatches
 -- show up as exact messages instead of guesswork. Never changes anything.

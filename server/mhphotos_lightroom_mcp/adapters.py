@@ -249,6 +249,14 @@ class CatalogAdapter(Protocol):
     def photo_paths(self, photo_ids: list[str]) -> dict[str, Any]:
         """{"paths": {photo id: absolute file path}}"""
 
+    def keyword_tree(self, offset: int, limit: int, counts: bool = False) -> dict[str, Any]:
+        """Every keyword (flat: id, name, path, depth, parent, children, synonyms, photos), page by page."""
+        ...
+
+    def merge_keywords(self, source_ids: list[str], target_id: str, max_photos: int = 5000) -> dict[str, Any]:
+        """Move the photos of the source keywords onto the target keyword: {moved, remaining, target}."""
+        ...
+
     def create_review_collections(self, root: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
         """{"collections": [{"set", "name", "added"}], "missing"}"""
 
@@ -527,6 +535,41 @@ class MockAdapter:
             made.append({"set": g["set"], "name": g["name"], "added": len(found)})
             self.review_collections.append({"root": root, **g, "photo_ids": found})
         return {"collections": made, "missing": missing}
+
+    def _keyword_list(self) -> list[dict[str, Any]]:
+        if not hasattr(self, "_keywords"):
+            self._keywords = [
+                {"id": "k1", "name": "Orte", "path": "Orte", "depth": 0, "children": 1},
+                {"id": "k2", "name": "Südtirol", "path": "Orte > Südtirol", "depth": 1, "parent": "k1", "children": 0},
+                {"id": "k3", "name": "südtirol", "path": "südtirol", "depth": 0, "children": 0},
+                {"id": "k4", "name": "landscape", "path": "landscape", "depth": 0, "children": 0},
+                {"id": "k5", "name": "Leer", "path": "Leer", "depth": 0, "children": 0},
+            ]
+            self._keyword_photos = {"k2": {"p4"}, "k3": {"p5"}, "k4": {"p4", "p5"}, "k5": set()}
+        return self._keywords
+
+    def keyword_tree(self, offset, limit, counts=False):
+        kws = self._keyword_list()
+        part = kws[offset : offset + limit]
+        out = []
+        for k in part:
+            item = dict(k)
+            if counts:
+                item["photos"] = len(self._keyword_photos.get(k["id"], set()))
+            out.append(item)
+        return {"total": len(kws), "offset": offset, "next_offset": offset + len(part), "keywords": out}
+
+    def merge_keywords(self, source_ids, target_id, max_photos=5000):
+        kws = {k["id"]: k for k in self._keyword_list()}
+        if target_id not in kws or any(s not in kws for s in source_ids):
+            raise NotFoundError("Keyword not found")
+        moved = 0
+        for sid in source_ids:
+            photos = self._keyword_photos.setdefault(sid, set())
+            self._keyword_photos.setdefault(target_id, set()).update(photos)
+            moved += len(photos)
+            photos.clear()
+        return {"moved": moved, "remaining": 0, "target": kws[target_id]["path"]}
 
     def photos_by_date(self, captured_from, captured_to, offset, limit, refresh=False):
         hits = sorted((p for p in self._photos.values() if captured_from <= p.capture_time[:10] <= captured_to),

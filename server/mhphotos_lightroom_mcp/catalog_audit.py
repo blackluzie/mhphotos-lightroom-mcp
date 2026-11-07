@@ -10,6 +10,7 @@ moved or deleted: Lightroom's SDK cannot do either, so findings become review co
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -274,6 +275,7 @@ class Analysis:
         self.unreadable = 0
         self._dupes: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
         self._moments: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
+        self.rows: list[list[Any]] = []  # compact catalog snapshot (SNAPSHOT_FIELDS), see save_snapshot
 
     def in_scope(self, rec: dict[str, Any]) -> bool:
         if not self.year:
@@ -288,6 +290,7 @@ class Analysis:
             self.virtual_copies += 1  # moves with its master; not a file of its own
             return
         self.considered += 1
+        self.rows.append(snapshot_row(rec))
         size = int(rec.get("size") or 0)
         self.bytes_total += size
         self.bytes_by_year[(rec.get("t") or "")[:4] or folder_dates(rec.get("path") or "")[0] or "ohne Datum"] += size
@@ -428,6 +431,46 @@ class Analysis:
                 **({"duplicate_files_unreadable": self.unreadable} if self.unreadable else {})}
 
 
+# ---------------------------------------------------------------- catalog snapshot
+# One compact row per photo of the last run (virtual copies left out), so archive candidates, gear statistics,
+# spots and the folder move list can be computed later without asking Lightroom again. Stays on the Mac.
+SNAPSHOT_FIELDS = ("id", "t", "r", "pick", "kw", "edited", "label", "copies", "size", "fmt", "cam", "lens", "fl",
+                   "lat", "lon", "folder", "file")
+
+
+def snapshot_row(rec: dict[str, Any]) -> list[Any]:
+    path = PurePosixPath(rec.get("path") or "")
+    values = {**rec, "folder": str(path.parent) if rec.get("path") else None, "file": path.name or None}
+    return [values.get(k) for k in SNAPSHOT_FIELDS]
+
+
+def snapshot_path():
+    return config_dir() / "audit" / "snapshot.json.gz"
+
+
+def save_snapshot(rows: list[list[Any]], meta: dict[str, Any]) -> None:
+    path = snapshot_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=6) as fh:
+        fh.write(json.dumps({**meta, "fields": list(SNAPSHOT_FIELDS), "rows": rows},
+                            ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    os.replace(tmp, path)
+
+
+def load_snapshot() -> dict[str, Any] | None:
+    """{"finished_at", "year", "fields", "photos": [dict per photo]} of the last run, None when there is none."""
+    try:
+        with gzip.open(snapshot_path(), "rb") as fh:
+            data = json.loads(fh.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    fields = data.get("fields") or list(SNAPSHOT_FIELDS)
+    data["photos"] = [dict(zip(fields, row, strict=False)) for row in data.pop("rows", [])]
+    return data
+
+
 def result_path():
     return config_dir() / "audit" / "latest.json"
 
@@ -439,13 +482,33 @@ def load_result() -> dict[str, Any] | None:
         return None
 
 
+def history_path():
+    return config_dir() / "audit" / "history.json"
+
+
+def load_history() -> dict[str, Any]:
+    """Summary of the last run per scope: "all" (whole catalog) or a year ("2020")."""
+    try:
+        data = json.loads(history_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def save_result(result: dict[str, Any]) -> None:
-    path = result_path()
+    history = load_history()
+    history[str(result.get("year") or "all")] = {"finished_at": result.get("finished_at"),
+                                                 "summary": result.get("summary")}
+    _write_json(history_path(), history)
+    _write_json(result_path(), result)
+
+
+def _write_json(path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(result, fh, ensure_ascii=False)
+        json.dump(data, fh, ensure_ascii=False)
     os.replace(tmp, path)
 
 
@@ -553,6 +616,9 @@ class Job:
                 "summary": self.analysis.summary(), "findings": self.analysis.findings,
             }
             save_result(result)
+            if not result["year"]:  # a one-year run must not replace the snapshot of the whole catalog
+                save_snapshot(self.analysis.rows, {"finished_at": result["finished_at"], "year": None})
+            self.analysis.rows = []
             self.state.update(status="done", phase="done", seconds=result["seconds"])
         except Cancelled:
             self.state.update(status="cancelled", phase="cancelled")

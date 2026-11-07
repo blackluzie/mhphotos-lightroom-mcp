@@ -16,8 +16,15 @@ local BASE_RAW = { 'uuid', 'path', 'fileSize', 'fileFormat', 'dimensions', 'date
   'isVirtualCopy', 'rating', 'pickStatus' }
 -- Keys that may not exist in every Lightroom version: asked one by one, failures are reported.
 local OPTIONAL_RAW = { 'dateTimeOriginalISO8601', 'keywords', 'colorNameForLabel', 'lastEditTime',
-  'countVirtualCopies', 'isoSpeedRating', 'aperture' }
+  'countVirtualCopies', 'isoSpeedRating', 'aperture', 'gps', 'focalLength' }
 local FORMATTED = { 'cameraModel', 'cameraSerialNumber' }
+-- asked on their own, so a Lightroom without them still reports camera and serial number (since 0.1.26)
+local OPTIONAL_FORMATTED = { 'lens' }
+
+local function round5(v)
+  if type(v) ~= 'number' then return nil end
+  return math.floor(v * 100000 + 0.5) / 100000
+end
 
 local function catalog() return LrApplication.activeCatalog() end
 
@@ -158,6 +165,11 @@ function Audit.page(args)
     fmt = {}
     out.unsupported[#out.unsupported + 1] = 'formatted'
   end
+  local extraFmt = {}
+  for _, key in ipairs(OPTIONAL_FORMATTED) do
+    local ok, res = LrTasks.pcall(batch, cat, slice, { key }, true)
+    if ok and type(res) == 'table' then extraFmt[key] = res else out.unsupported[#out.unsupported + 1] = key end
+  end
 
   for _, photo in ipairs(slice) do
     local r = raw[photo] or {}
@@ -169,6 +181,10 @@ function Audit.page(args)
     local dims = type(r.dimensions) == 'table' and r.dimensions or {}
     local kws = opt('keywords')
     local edited = opt('lastEditTime')
+    local gps = opt('gps')
+    if type(gps) ~= 'table' or type(gps.latitude) ~= 'number' then gps = nil end
+    local lensRow = extraFmt.lens and extraFmt.lens[photo]
+    local fl = tonumber(opt('focalLength'))
     out.photos[#out.photos + 1] = {
       id = r.uuid,
       path = r.path,
@@ -188,6 +204,11 @@ function Audit.page(args)
       exif = (opt('isoSpeedRating') ~= nil or opt('aperture') ~= nil) or nil,
       cam = nonEmpty(f.cameraModel),
       serial = nonEmpty(f.cameraSerialNumber),
+      -- since 0.1.26: place, lens and focal length for the catalog snapshot (spots, gear statistics)
+      lat = gps and round5(gps.latitude) or nil,
+      lon = gps and round5(gps.longitude) or nil,
+      lens = nonEmpty(lensRow and lensRow.lens),
+      fl = fl and fl > 0 and math.floor(fl + 0.5) or nil,
     }
   end
   return out

@@ -412,6 +412,14 @@ class BridgeAdapter:
     def create_review_collections(self, root, groups):
         return self._call("create_review_collections", {"root": root, "groups": groups}, timeout=600.0)
 
+    def keyword_tree(self, offset, limit, counts=False):
+        # counting the photos of every keyword can take a while on a big catalog
+        return self._call("keyword_tree", {"offset": offset, "limit": limit, "counts": counts}, timeout=300.0)
+
+    def merge_keywords(self, source_ids, target_id, max_photos=5000):
+        return self._call("merge_keywords", {"source_ids": source_ids, "target_id": target_id,
+                                             "max_photos": max_photos}, timeout=300.0)
+
     def photos_by_date(self, captured_from, captured_to, offset, limit, refresh=False):
         # the first query builds a capture-date index of the whole catalog (can take a while)
         return self._call("photos_by_date", {"captured_from": captured_from, "captured_to": captured_to,

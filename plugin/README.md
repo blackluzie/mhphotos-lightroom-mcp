@@ -62,6 +62,10 @@ not yet checked, or checked with a note:
       `plugin-status.json` never stays on "running …" for more than a few seconds
 - [ ] 0.1.25: `get_photo_metadata` on a brand-new copy answers within about 10 s (data, or `photo_busy`); after a few
       minutes it answers with data
+- [ ] 0.1.26: `catalog_audit_start()` (whole catalog) finishes; `catalog_audit_overview` shows every year, `gear_usage` lists
+      lenses (the `lens`/`gps`/`focalLength` keys are not in `unsupported_keys`)
+- [ ] 0.1.26: `keyword_check_start` finishes; `merge_keywords` on a test keyword moves its photos, the emptied keyword goes
+      with *Metadata > Purge Unused Keywords*
 - [x] `get_contact_sheet` with 6 photos: one numbered image
 - [ ] `list_collections(include_counts=true)` counts match; without it the call is fast
 - [ ] `apply_preset` (dry run, then confirm) on a test photo: preset visible in Develop, one history step "MHPhotos…", undoable
