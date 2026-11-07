@@ -66,6 +66,20 @@ class FakeMHPhotos:
              "permalink": "https://instagram.com/p/2", "syncedAt": "2026-10-01T00:00:00Z"},
             {"id": "ig3", "timestamp": "2025-04-01T08:00:00+0000", "mediaType": "IMAGE", "syncedAt": "2026-10-01T00:00:00Z"},
         ]
+        self.gear = [
+            {"id": "g-r5", "name": "Canon EOS R5", "category": "camera", "brand": "Canon", "model": "EOS R5", "status": "active"},
+            {"id": "g-2470", "name": "RF 24-70mm F2.8", "category": "lens", "brand": "Canon", "model": "24-70mm F2.8",
+             "status": "active"},
+            {"id": "g-old", "name": "Fuji X100", "category": "camera", "brand": "Fujifilm", "model": "X100", "status": "active"},
+        ]
+        self.spots = [
+            {"id": "s-seiser", "name": "Seiser Alm", "lat": 46.5401, "lon": 11.6201},
+            {"id": "s-dom", "name": "Dom Münster", "lat": 51.9625, "lon": 7.6256},
+            {"id": "s-none", "name": "Ohne Position"},
+        ]
+        self.gear_usage: dict | None = None
+        self.spot_photos: dict | None = None
+        self.blog_posts: list[dict] = []
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -154,6 +168,20 @@ class FakeMHPhotos:
                     self.end_headers()
                     self.wfile.write(data)
                     return
+                if path == "/api/admin/gear" and method == "GET":
+                    return self._reply(200, {"gear": outer.gear})
+                if path == "/api/admin/gear/usage" and method == "PUT":
+                    outer.gear_usage = body
+                    return self._reply(200, {"ok": True})
+                if path == "/api/admin/spots" and method == "GET":
+                    return self._reply(200, {"spots": outer.spots})
+                if path == "/api/admin/spots/lightroom-photos" and method == "PUT":
+                    outer.spot_photos = body
+                    return self._reply(200, {"ok": True})
+                if path == "/api/admin/blog" and method == "POST":
+                    post = {"id": f"post-{len(outer.blog_posts) + 1}", "slug": "reise", **body}
+                    outer.blog_posts.append(post)
+                    return self._reply(201, {"post": post})
                 if method == "GET" and path == "/api/admin/galleries":
                     return self._reply(200, {"galleries": outer.galleries})
                 if method == "GET" and path == "/api/admin/lightroom-import":
@@ -179,6 +207,9 @@ class FakeMHPhotos:
 
             def do_DELETE(self):
                 self._handle("DELETE")
+
+            def do_PUT(self):
+                self._handle("PUT")
 
         self.httpd = HTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()

@@ -440,9 +440,11 @@ eq(a1.id, 'u1'); eq(a1.path, p1.raw.path); eq(a1.size, 1234); eq(a1.fmt, 'DNG');
 eq(a1.t, '2001-01-01T00:00:00'); eq(a1.r, 5); eq(a1.pick, 1); eq(a1.kw, 2); eq(a1.label, nil); eq(a1.edited, true)
 eq(a1.cam, 'Canon'); eq(a1.serial, 'SN1'); eq(a1.vc, nil); eq(a1.exif, true, 'p1 has ISO')
 eq(ap.unsupported[1], 'countVirtualCopies')
+eq(a1.lat, 46.6); eq(a1.lon, 11.5); eq(a1.fl, 35); eq(a1.lens, '24-70', 'place, focal length and lens since 0.1.26')
 local a2 = Commands.run('audit_page', { offset = 1, limit = 1 }).photos[1]
 eq(a2.id, 'u2'); eq(a2.t, '2026-10-14T00:30:00', 'wall clock from the ISO string, not UTC'); eq(a2.r, nil)
 eq(a2.label, 'red'); eq(a2.edited, nil); eq(a2.pick, nil); eq(a2.exif, nil, 'no exposure data')
+eq(a2.lat, nil); eq(a2.lens, nil); eq(a2.fl, nil)
 local past = Commands.run('audit_page', { offset = 50, limit = 10 })
 eq(#past.photos, 0); eq(past.next_offset, 50)
 eq(#Commands.run('audit_page', { limit = 99999 }).photos, #photos, 'limit is capped, not rejected')
