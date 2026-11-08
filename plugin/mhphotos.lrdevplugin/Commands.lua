@@ -273,6 +273,20 @@ function Commands.get_photo(args)
   return photoMetadata(findPhoto(args.photo_id))
 end
 
+-- Since 0.1.28: metadata of many photos in ONE bridge round (the server's edit preview and contact sheet asked
+-- photo by photo, 100 round trips for a 100-photo batch, which ran into the client's time limit).
+-- Unknown ids come back as { id, error = 'not_found' } instead of failing the whole call.
+function Commands.get_photos(args)
+  local ids = args.photo_ids or {}
+  if #ids == 0 or #ids > MAX_PAGE then error('1-' .. MAX_PAGE .. ' photo_ids required', 0) end
+  local cat, out = catalog(), {}
+  for i, id in ipairs(ids) do
+    local photo = cat:findPhotoByUuid(id)
+    out[i] = photo and photoMetadata(photo) or { id = id, error = 'not_found' }
+  end
+  return { photos = out }
+end
+
 -- ---------------------------------------------------------------- writes
 -- The MCP server enforces the permission gate; these still validate inputs.
 function Commands.set_rating(args)
@@ -397,6 +411,49 @@ function Commands.export_photos(args)
   session:doExportOnCurrentTask()
   -- Names are the expected output names; Lightroom renames on collision.
   return { exported = names, destination = dest, long_edge = longEdge, quality = quality, sharpen = args.sharpen }
+end
+
+-- Since 0.1.28: thumbnails of up to 30 photos requested TOGETHER and awaited against one wall-clock deadline
+-- (get_preview waits up to 30 s per photo, one after the other: a contact sheet of 20 uncached photos took
+-- minutes and the bridge looked dead meanwhile). Photos Lightroom does not render in time come back with an
+-- error, the rest is delivered; the call never keeps the polling task longer than `wait` seconds.
+local PREVIEWS_MAX, PREVIEWS_WAIT = 30, 25
+function Commands.get_previews(args)
+  local ids = args.photo_ids or {}
+  if #ids == 0 or #ids > PREVIEWS_MAX then error('1-' .. PREVIEWS_MAX .. ' photo_ids required', 0) end
+  local size = math.max(256, math.min(tonumber(args.size) or 768, 1280))
+  local wait = math.max(5, math.min(tonumber(args.wait) or PREVIEWS_WAIT, 50))
+  local cat, slots, requests = catalog(), {}, {}
+  for i, id in ipairs(ids) do
+    local slot = { id = id }
+    slots[i] = slot
+    local photo = cat:findPhotoByUuid(id)
+    if not photo then
+      slot.error, slot.done = 'not_found', true
+    else
+      -- keep every request referenced until we are done, or Lightroom may drop the callback
+      local ok, req = LrTasks.pcall(function()
+        return photo:requestJpegThumbnail(size, size, function(d, e) slot.data, slot.err, slot.done = d, e, true end)
+      end)
+      if ok then requests[i] = req else slot.error, slot.done = 'preview failed: ' .. tostring(req), true end
+    end
+  end
+  local deadline = LrDate.currentTime() + wait
+  local function pending()
+    for _, slot in ipairs(slots) do if not slot.done then return true end end
+    return false
+  end
+  while pending() and LrDate.currentTime() < deadline do LrTasks.sleep(0.1) end
+  local out = {}
+  for i, slot in ipairs(slots) do
+    if slot.data then
+      out[i] = { id = slot.id, image_base64 = LrStringUtils.encodeBase64(slot.data) }
+    else
+      out[i] = { id = slot.id, error = slot.error or ('preview failed: ' .. tostring(slot.err or 'timeout')) }
+    end
+  end
+  requests = nil -- luacheck: ignore
+  return { previews = out }
 end
 
 -- ---------------------------------------------------------------- editing advice

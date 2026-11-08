@@ -25,7 +25,7 @@ def main():
     stopped = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stopped.set())
-    bridge = Bridge(token=token, port=47831)
+    bridge = Bridge(token=token, port=47831, reconnect_wait=60.0)
     bridge.start()
     print('Classic heartbeat bridge listening on loopback:47831; no command producer', flush=True)
     try:

@@ -3,6 +3,7 @@ import re
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import pytest
 from mcp.server.auth.settings import (
     AuthSettings,
     ClientRegistrationOptions,
@@ -359,9 +360,65 @@ async def persist_clients(tmp_path):
     tokens = first.issue(client.client_id, [SCOPE], first.resource, OWNER_ID)
     second = Provider(ORIGIN, "synthetic", [REDIRECT], path, github=GITHUB)
     assert (await second.get_client("saved-client")).client_secret is None
-    assert await second.load_access_token(tokens.access_token) is None
-    assert await second.load_refresh_token(client, tokens.refresh_token) is None
+    # 0.1.28: a server restart no longer logs the connector out
+    assert await second.load_access_token(tokens.access_token) is not None
+    refresh = await second.load_refresh_token(client, tokens.refresh_token)
+    assert refresh is not None
+    # only digests are on disk, never a raw token
+    raw = path.read_bytes()
+    assert tokens.access_token.encode() not in raw and tokens.refresh_token.encode() not in raw
+    # rotation is persisted too: the old refresh token is spent (and replaying it revokes the family) after a restart
+    newer = await second.exchange_refresh_token(client, refresh, [SCOPE])
+    third = Provider(ORIGIN, "synthetic", [REDIRECT], path, github=GITHUB)
+    assert await third.load_access_token(newer.access_token) is not None
+    assert await third.load_refresh_token(client, tokens.refresh_token) is None  # replay
+    fourth = Provider(ORIGIN, "synthetic", [REDIRECT], path, github=GITHUB)
+    assert await fourth.load_access_token(newer.access_token) is None  # family revoked by the replay
+    assert await fourth.load_refresh_token(client, newer.refresh_token) is None
+    # revocation survives a restart
+    again = fourth.issue(client.client_id, [SCOPE], fourth.resource, OWNER_ID)
+    await fourth.revoke_token(await fourth.load_access_token(again.access_token))
+    fifth = Provider(ORIGIN, "synthetic", [REDIRECT], path, github=GITHUB)
+    assert await fifth.load_refresh_token(client, again.refresh_token) is None
+    kept = fifth.issue(client.client_id, [SCOPE], fifth.resource, OWNER_ID)
     removed = Provider(ORIGIN, "synthetic", [], path, github=GITHUB)
     assert await removed.get_client("saved-client") is None
+    assert await removed.load_access_token(kept.access_token) is None  # tokens of a removed client are dropped
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_login_lasts_and_slides_with_each_refresh(monkeypatch):
+    asyncio.run(sliding(monkeypatch))
+
+
+async def sliding(monkeypatch):
+    import time as clock
+
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mhphotos_lightroom_mcp import oauth_http
+
+    assert oauth_http.session_seconds() == 30 * 86400
+    monkeypatch.setenv("MHPHOTOS_OAUTH_SESSION_DAYS", "7")
+    assert oauth_http.session_seconds() == 7 * 86400
+    monkeypatch.setenv("MHPHOTOS_OAUTH_SESSION_DAYS", "400")
+    assert oauth_http.session_seconds() == 90 * 86400
+    monkeypatch.setenv("MHPHOTOS_OAUTH_SESSION_DAYS", "viel")
+    with pytest.raises(ValueError):
+        oauth_http.session_seconds()
+    monkeypatch.delenv("MHPHOTOS_OAUTH_SESSION_DAYS")
+    provider = Provider(ORIGIN, "synthetic", [REDIRECT], github=GITHUB, session_days=2)
+    client = OAuthClientInformationFull(
+        client_id="client", redirect_uris=[REDIRECT], token_endpoint_auth_method="none",
+        grant_types=["authorization_code", "refresh_token"], scope=SCOPE,
+    )
+    provider.clients["client"] = client
+    start = clock.time()
+    tokens = provider.issue("client", [SCOPE], provider.resource, OWNER_ID)
+    first = await provider.load_refresh_token(client, tokens.refresh_token)
+    assert abs(first.expires_at - (start + 2 * 86400)) < 5
+    later = start + 86400  # one day later the client refreshes: the login runs two days from then
+    monkeypatch.setattr(oauth_http.time, "time", lambda: later)
+    newer = await provider.exchange_refresh_token(client, first, [SCOPE])
+    second = await provider.load_refresh_token(client, newer.refresh_token)
+    assert abs(second.expires_at - (later + 2 * 86400)) < 5
 

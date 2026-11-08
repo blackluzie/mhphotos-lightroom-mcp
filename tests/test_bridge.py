@@ -6,6 +6,7 @@ import urllib.request
 import pytest
 from mhphotos_lightroom_mcp import server
 from mhphotos_lightroom_mcp.bridge import (
+    MAX_BODY,
     Bridge,
     BridgeAdapter,
     BridgeError,
@@ -78,7 +79,7 @@ def test_bad_requests(bridge):
     assert _req(bridge, "/v1/poll", token=bridge.token, data=b"[1]") == 400
     assert _req(bridge, "/v1/nope", token=bridge.token, data={}) == 404
     assert _req(bridge, "/v1/result", token=bridge.token, data={"id": "unknown"}) == 404
-    big = b'{"x":"' + b"a" * 4_100_000 + b'"}'
+    big = b'{"x":"' + b"a" * (MAX_BODY + 100_000) + b'"}'
     try:  # server may also reset the connection while the oversize body is still being sent
         assert _req(bridge, "/v1/poll", token=bridge.token, data=big) == 400
     except (urllib.error.URLError, ConnectionError):
@@ -239,3 +240,87 @@ async def test_roundtrip_editing_tools(bridge, plugin, monkeypatch):
     assert (await server.apply_develop_settings(["p4"], {"Exposure2012": 0.4}, confirm=True))["applied"]
     assert (await server.create_preset("Neu", {"Contrast2012": 5}, confirm=True))["applied"]
     assert plugin.commands.count("apply_develop_settings") == 1
+
+
+# ---------------------------------------------------------------- 0.1.28: reconnect, big batches
+class _WritePlugin:
+    """Stands in for Bridge.call and records each write part; fails the part number `fail_at` (1-based)."""
+
+    def __init__(self, fail_at=None):
+        self.calls = []
+        self.fail_at = fail_at
+
+    def call(self, name, args=None, timeout=30.0):
+        self.calls.append((name, args, timeout))
+        if self.fail_at == len(self.calls):
+            raise BridgeUnavailable(f"Lightroom did not answer '{name}' within {timeout:.0f}s.")
+        return {"updated": len(args["photo_ids"])}
+
+
+def test_big_writes_go_to_lightroom_in_parts():
+    # 100 photos in one call ran past the time limit (45 worked); parts of 25 each get their own limit
+    plugin = _WritePlugin()
+    ids = [f"u{i}" for i in range(100)]
+    out = BridgeAdapter(plugin).set_title_caption(ids, "Verona", None)
+    assert out == {"updated": 100}
+    assert [len(a["photo_ids"]) for _, a, _ in plugin.calls] == [25, 25, 25, 25]
+    assert all(a["title"] == "Verona" and "caption" not in a for _, a, _ in plugin.calls)
+    assert [p for _, a, _ in plugin.calls for p in a["photo_ids"]] == ids
+
+
+def test_failed_part_says_which_photos_were_already_changed():
+    plugin = _WritePlugin(fail_at=3)
+    ids = [f"u{i}" for i in range(60)]
+    with pytest.raises(BridgeUnavailable) as err:
+        BridgeAdapter(plugin).set_rating(ids, 4)
+    assert "first 50 of 60 photos were already changed" in str(err.value)
+    assert len(plugin.calls) == 3
+
+
+async def test_batch_reads_one_round_for_many_photos(bridge, plugin, monkeypatch):
+    monkeypatch.setenv("MHPHOTOS_ALLOW_WRITES", "1")
+    dry = await server.set_rating(["p1", "p2", "p3"], 2)
+    assert dry["dry_run"] and [p["id"] for p in dry["photos"]] == ["p1", "p2", "p3"]
+    assert plugin.commands.count("get_photos") == 1 and "get_photo" not in plugin.commands
+    bad = await server.set_rating(["p1", "nope"], 2)
+    assert "nope" in bad["error"]
+    sheet = await server.get_contact_sheet(["p1", "p2", "nope"])
+    legend = sheet[0]["legend"]
+    assert [entry.get("error") for entry in legend] == [None, None, "not available"]
+    assert plugin.commands.count("get_previews") == 1 and "get_preview" not in plugin.commands
+
+
+async def test_batch_reads_fall_back_for_an_older_plugin(bridge):
+    old = FakePlugin(bridge, legacy=True).start()
+    try:
+        server.set_adapter(BridgeAdapter(bridge, timeout=5))
+        assert bridge.wait_connected(5)
+        sheet = await server.get_contact_sheet(["p1", "p2"])
+        assert [entry.get("error") for entry in sheet[0]["legend"]] == [None, None]
+        assert old.commands.count("get_preview") == 2 and old.commands.count("get_photo") == 2
+    finally:
+        old.stop()
+
+
+def test_call_waits_for_the_plugin_to_come_back():
+    # the plug-in's watchdog replaces a hanging polling task within about a minute; the call waits for it
+    import threading
+
+    b = Bridge(poll_wait=0.5, connected_ttl=2.0, reconnect_wait=5.0)
+    b.start()
+    try:
+        late = FakePlugin(b)
+        threading.Timer(1.0, late.start).start()
+        started = time.monotonic()
+        data = BridgeAdapter(b, timeout=5).list_collections()
+        assert data and 0.8 < time.monotonic() - started < 5
+        late.stop()
+    finally:
+        b.stop()
+    quick = Bridge(poll_wait=0.5, connected_ttl=2.0, reconnect_wait=0.5)
+    quick.start()
+    try:
+        with pytest.raises(BridgeUnavailable, match="Waited 0s|Waited 1s"):
+            quick.call("list_collections")
+    finally:
+        quick.stop()

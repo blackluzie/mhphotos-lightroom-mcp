@@ -86,6 +86,43 @@ def _is_error(result: Any) -> bool:
     return isinstance(result, dict) and "error" in result
 
 
+async def _photos(photo_ids: list[str]) -> list[Any]:
+    """Metadata of many photos: one bridge round per 100 with plug-in 0.1.28+, else photo by photo.
+
+    Each entry is a Photo or an error dict (same shape as _run(_adapter.get_photo, id) gives).
+    """
+    batch = getattr(_adapter, "get_photos", None)
+    if batch is not None and len(photo_ids) > 1:
+        def fetch() -> list[Any]:
+            try:
+                return batch(photo_ids)
+            except NotImplementedError:
+                return None  # type: ignore[return-value]
+        found = await _run(fetch)
+        if _is_error(found):
+            return [found] * len(photo_ids)
+        if found is not None:
+            return [p if p is not None else {"error": f"Photo not found: {pid}"} for pid, p in zip(photo_ids, found)]
+    return [await _run(_adapter.get_photo, pid) for pid in photo_ids]
+
+
+async def _previews(photo_ids: list[str], size: int) -> list[Any]:
+    """JPEG bytes (or an error dict) per id: rendered in parallel with plug-in 0.1.28+, else one by one."""
+    batch = getattr(_adapter, "get_previews", None)
+    if batch is not None and len(photo_ids) > 1:
+        def fetch() -> list[Any]:
+            try:
+                return batch(photo_ids, size)
+            except NotImplementedError:
+                return None  # type: ignore[return-value]
+        found = await _run(fetch)
+        if _is_error(found):
+            return [found] * len(photo_ids)
+        if found is not None:
+            return [d if d is not None else {"error": "preview not rendered in time"} for d in found]
+    return [await _run(_adapter.get_preview, pid, size) for pid in photo_ids]
+
+
 # ---------------------------------------------------------------- reads
 @mcp.tool()
 async def connection_status() -> dict[str, Any]:
@@ -280,8 +317,7 @@ async def _edit(
     if not permissions.writes_enabled():
         return {"error": permissions.writes_disabled_message(), "code": "disabled"}
     current = []
-    for pid in photo_ids:  # also proves every id exists before anything changes
-        meta = await _run(_adapter.get_photo, pid)
+    for pid, meta in zip(photo_ids, await _photos(photo_ids)):  # also proves every id exists before anything changes
         if _is_error(meta):
             return meta
         current.append({"id": pid, "filename": meta.filename, "current": meta.metadata()})
@@ -1638,12 +1674,14 @@ async def get_photo_previews(photo_ids: list[str], size: int = 768) -> list[Any]
         return [{"error": f"Provide 1-{MAX_PREVIEWS} distinct photo ids"}]
     size = max(256, min(size, 1280))
     out: list[Any] = []
-    for pid in photo_ids:
-        meta = await _run(_adapter.get_photo, pid)
+    metas = await _photos(photo_ids)
+    found = [pid for pid, meta in zip(photo_ids, metas) if not _is_error(meta)]
+    images = dict(zip(found, await _previews(found, size))) if found else {}
+    for pid, meta in zip(photo_ids, metas):
         if _is_error(meta):
             out.append(meta)
             continue
-        data = await _run(_adapter.get_preview, pid, size)
+        data = images[pid]
         if _is_error(data):
             out.append({"id": pid, **data})
             continue
@@ -1671,9 +1709,13 @@ async def get_contact_sheet(photo_ids: list[str], columns: int = 5, cell: int = 
     cell = max(160, min(cell, 480))
     previews: list[bytes | None] = []
     legend: list[dict[str, Any]] = []
-    for number, pid in enumerate(photo_ids, 1):
-        meta = await _run(_adapter.get_photo, pid)
-        data = None if _is_error(meta) else await _run(_adapter.get_preview, pid, max(256, cell))
+    # all metadata in one round, previews rendered in parallel (photo by photo this ran into time limits
+    # with more than about 6 uncached photos, and the bridge looked dead meanwhile)
+    metas = await _photos(photo_ids)
+    found = [pid for pid, meta in zip(photo_ids, metas) if not _is_error(meta)]
+    images = dict(zip(found, await _previews(found, max(256, cell)))) if found else {}
+    for number, (pid, meta) in enumerate(zip(photo_ids, metas), 1):
+        data = None if _is_error(meta) else images[pid]
         if _is_error(meta) or _is_error(data):
             previews.append(None)
             legend.append({"n": number, "id": pid, "error": "not available"})
@@ -3768,7 +3810,7 @@ def main() -> None:
     kind = os.environ.get("MHPHOTOS_ADAPTER", "mock").lower()
     if kind == "bridge":
         port = int(os.environ.get("MHPHOTOS_BRIDGE_PORT", "47831"))
-        bridge = Bridge(token=os.environ.get("MHPHOTOS_BRIDGE_TOKEN"), port=port)
+        bridge = Bridge(token=os.environ.get("MHPHOTOS_BRIDGE_TOKEN"), port=port, reconnect_wait=60.0)
         bridge.start()
         cfg = write_plugin_config(bridge)
         print(f"Bridge listening on {bridge.url}; plugin config: {cfg}", file=sys.stderr)
