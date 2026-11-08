@@ -269,7 +269,7 @@ def main():
     token = bridge_config.get('token')
     if not isinstance(token, str) or len(token) < 32:
         raise ValueError('Invalid bridge token')
-    bridge = Bridge(token=token, port=47831)
+    bridge = Bridge(token=token, port=47831, reconnect_wait=60.0)
     server.set_adapter(BridgeAdapter(bridge))
     app = create_app()
     bridge.start()

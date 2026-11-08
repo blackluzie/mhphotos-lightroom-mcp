@@ -23,6 +23,10 @@ function StatusText.format(info, extra)
     'Letzter Befehl: ' .. tostring(info.last_command or '-') .. ' (' .. ago(now, info.last_ok_at) .. ')',
   }
   if info.started_at then lines[#lines + 1] = 'Läuft seit: ' .. ago(now, info.started_at):gsub('^vor ', '') end
+  if (tonumber(info.takeovers) or 0) > 0 then
+    lines[#lines + 1] = 'Selbstheilung: ' .. tostring(info.takeovers) .. 'x neu verbunden (zuletzt '
+      .. ago(now, info.last_takeover_at) .. ', ' .. tostring(info.last_takeover or '?') .. ')'
+  end
   if extra.catalog then lines[#lines + 1] = 'Katalog: ' .. tostring(extra.catalog) end
   if extra.hooks then lines[#lines + 1] = 'Webhooks eingerichtet: ' .. tostring(extra.hooks) end
   if type(info.recent_errors) == 'table' and #info.recent_errors > 0 then

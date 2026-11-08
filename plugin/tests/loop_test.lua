@@ -187,4 +187,51 @@ Tasks.startAsyncTask(function() Tasks.startAsyncTask(function() childDone = true
 runTasks(now + 3600)
 eq(childDone, true, 'nested task runs normally otherwise')
 
+-- 7) WATCHDOG (0.1.28): a command that never comes back (a thumbnail callback that never fires) used to keep
+-- the only polling task forever; the server said "not connected" until the plug-in was reloaded. With several
+-- runners, a watching one takes over after the command's timeout plus the grace time and the next command is
+-- answered. The hanging runner, once released, posts its own result and does not poll in parallel.
+local release = false
+Commands.hang = function()
+  while not release do Tasks.sleep(5) end
+  return { late = true }
+end
+local function idlePoll() Tasks.sleep(10); return '{"command":null}', { status = 200 } end
+local steps = { command('hang', 30), command('fine', 30) }
+for _ = 1, 30 do steps[#steps + 1] = idlePoll end -- about 5 minutes of quiet polling afterwards
+local scripted = #steps
+posts, script, State.stop, tasks, State.active, State.deadline = {}, steps, false, {}, nil, 0
+for i = 1, 2 do
+  local name = 'runner-' .. i
+  Tasks.startAsyncTask(function() Tasks.pcall(Loop.runner, name) end, name)
+end
+local w0 = now
+-- Lightroom lets the hanging call go after 3 minutes
+Tasks.startAsyncTask(function() Tasks.sleep(180); release = true end, 'lightroom')
+runTasks(now + 3600)
+r = results()
+eq(#r, 2, 'both commands get an answer')
+eq(r[1].id, 'fine-id', 'the command after the hanging one is answered first')
+local took = r[1].at - w0
+assert(took >= 30 + Loop.BUSY_GRACE and took <= 30 + Loop.BUSY_GRACE + Loop.WATCH_EVERY + 5,
+  'takeover after timeout + grace, took ' .. took .. ' s')
+eq(r[2].id, 'hang-id', 'the hanging runner still posts its result once Lightroom lets it go')
+eq(r[2].data.late, true)
+eq(State.active, 'runner-2', 'the released runner does not take the turn back')
+local polls = 0
+for _, p in ipairs(posts) do if p.path == '/v1/poll' then polls = polls + 1 end end
+eq(polls, scripted + 1, 'every scripted poll was used once (no parallel polling)')
+
+-- 8) with nothing hanging, the watchers never take over (a quiet bridge polls for an hour without a takeover)
+posts, State.stop, tasks, State.active, State.deadline = {}, false, {}, nil, 0
+local idle = {}
+for _ = 1, 150 do idle[#idle + 1] = function() return '{"command":null}', { status = 200 } end end
+script = idle
+for i = 1, 3 do
+  local name = 'runner-' .. i
+  Tasks.startAsyncTask(function() Tasks.pcall(Loop.runner, name) end, name)
+end
+runTasks(now + 3600)
+eq(State.active, 'runner-1', 'no takeover while the active runner keeps polling')
+
 print('loop ok')

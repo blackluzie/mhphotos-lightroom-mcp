@@ -1,4 +1,10 @@
-"""Single-owner OAuth provider. Credentials are ephemeral and never logged or persisted."""
+"""Single-owner OAuth provider. Credentials are never logged.
+
+Since 0.1.28 issued tokens survive a server restart: with a client database the provider keeps them in it, but
+only as SHA-256 digests (the raw access and refresh tokens are never written anywhere), so the file does not
+hand out a usable credential. A login lasts MHPHOTOS_OAUTH_SESSION_DAYS (default 30) after the client's last
+token refresh; before, every restart and every 24 hours forced the user to reconnect the connector.
+"""
 
 import base64
 import hashlib
@@ -128,8 +134,24 @@ def challenge(value):
     )
 
 
+DEFAULT_SESSION_DAYS = 30
+MAX_SESSION_DAYS = 90
+
+
+def session_seconds(days=None):
+    """Login lifetime after the last refresh, from MHPHOTOS_OAUTH_SESSION_DAYS (1-90 days, default 30)."""
+    if days is None:
+        raw = os.environ.get("MHPHOTOS_OAUTH_SESSION_DAYS", "").strip()
+        try:
+            days = float(raw) if raw else DEFAULT_SESSION_DAYS
+        except ValueError:
+            raise ValueError("MHPHOTOS_OAUTH_SESSION_DAYS must be a number of days") from None
+    days = max(1.0, min(float(days), MAX_SESSION_DAYS))
+    return int(days * 86400)
+
+
 class Provider:
-    def __init__(self, issuer, secret, redirects, client_db=None, *, github):
+    def __init__(self, issuer, secret, redirects, client_db=None, *, github, session_days=None):
         self.github = github_settings(**github)
         self.owner_id = self.github["owner_id"]
         self.issuer = issuer
@@ -137,6 +159,7 @@ class Provider:
         self.secret = secret
         self.redirects = frozenset(validate_redirect(str(uri)) for uri in redirects)
         self.rate = []
+        self.session = session_seconds(session_days)
         self.clients = {}
         self.client_db = None
         if client_db:
@@ -167,6 +190,55 @@ class Provider:
         self.access = {}
         self.refresh = {}
         self.used_refresh = {}
+        self._load_tokens()
+
+    # --- persisted tokens (digests only) ---
+    def _load_tokens(self):
+        if not self.client_db:
+            return
+        with self.client_db:
+            self.client_db.execute(
+                "CREATE TABLE IF NOT EXISTS tokens (kind TEXT NOT NULL, digest TEXT PRIMARY KEY, "
+                "family TEXT NOT NULL, data TEXT NOT NULL, expires REAL NOT NULL)"
+            )
+            self.client_db.execute("DELETE FROM tokens WHERE expires <= ?", (time.time(),))
+        rows = self.client_db.execute("SELECT kind, digest, family, data, expires FROM tokens").fetchall()
+        for kind, key, family, data, expires in rows:
+            if kind == "used":
+                self.used_refresh[key] = (family, expires)
+                continue
+            model = AccessToken if kind == "access" else RefreshToken
+            value = model.model_validate_json(data)
+            # a token of a removed client or for another owner/resource is dropped, not loaded
+            if (
+                value.client_id not in self.clients
+                or value.subject != self.owner_id
+                or value.resource != self.resource
+            ):
+                self._forget(key)
+                continue
+            (self.access if kind == "access" else self.refresh)[key] = value
+
+    def _save(self, kind, key, value, family=None, expires=None):
+        if not self.client_db:
+            return
+        data = "{}" if kind == "used" else value.model_dump_json()
+        with self.client_db:
+            self.client_db.execute(
+                "INSERT OR REPLACE INTO tokens VALUES (?, ?, ?, ?, ?)",
+                (
+                    kind,
+                    key,
+                    family if family is not None else value.token,
+                    data,
+                    expires if expires is not None else value.expires_at,
+                ),
+            )
+
+    def _forget(self, key):
+        if self.client_db:
+            with self.client_db:
+                self.client_db.execute("DELETE FROM tokens WHERE digest = ?", (key,))
 
     def prune(self):
         now = time.time()
@@ -178,6 +250,9 @@ class Provider:
         for key, (_, expiry) in list(self.used_refresh.items()):
             if expiry <= now:
                 del self.used_refresh[key]
+        if self.client_db:
+            with self.client_db:
+                self.client_db.execute("DELETE FROM tokens WHERE expires <= ?", (now,))
 
     async def get_client(self, client_id):
         return self.clients.get(client_id)
@@ -326,9 +401,10 @@ class Provider:
         ):
             raise TokenError("invalid_grant", "Token limit reached")
         family = family or secrets.token_urlsafe(32)
-        deadline = deadline or int(time.time()) + 86400
+        deadline = deadline or int(time.time()) + self.session
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        self.access[digest(access)] = AccessToken(
+        access_key, refresh_key = digest(access), digest(refresh)
+        self.access[access_key] = AccessToken(
             token=family,
             client_id=client_id,
             scopes=scopes,
@@ -336,7 +412,7 @@ class Provider:
             resource=resource,
             subject=subject,
         )
-        self.refresh[digest(refresh)] = RefreshToken(
+        self.refresh[refresh_key] = RefreshToken(
             token=family,
             client_id=client_id,
             scopes=scopes,
@@ -344,6 +420,8 @@ class Provider:
             resource=resource,
             subject=subject,
         )
+        self._save("access", access_key, self.access[access_key])
+        self._save("refresh", refresh_key, self.refresh[refresh_key])
         return OAuthToken(
             access_token=access,
             token_type="Bearer",
@@ -388,6 +466,11 @@ class Provider:
             for key, value in list(store.items()):
                 if value.token == family:
                     del store[key]
+        if self.client_db:
+            with self.client_db:
+                self.client_db.execute(
+                    "DELETE FROM tokens WHERE family = ? AND kind != 'used'", (family,)
+                )
 
     async def exchange_refresh_token(self, client, refresh_token, scopes):
         key = digest(refresh_token.token)
@@ -405,14 +488,17 @@ class Provider:
         ):
             raise TokenError("invalid_scope", "Invalid authorization")
         self.used_refresh[key] = (value.token, value.expires_at)
+        self._save("used", key, None, family=value.token, expires=value.expires_at)
         self.revoke_family(value.token)
+        # sliding login: every refresh extends it to `session` from now, so a connector in regular use
+        # never has to be reconnected; one unused for longer than that does
         return self.issue(
             client.client_id,
             scopes,
             value.resource,
             value.subject,
             value.token,
-            value.expires_at,
+            int(time.time()) + self.session,
         )
 
     async def revoke_token(self, token):

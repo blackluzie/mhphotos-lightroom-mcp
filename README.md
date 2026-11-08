@@ -70,6 +70,7 @@ Example requests and the exact tool sequence behind them: [docs/workflows.md](do
 | `MHPHOTOS_CONFIRMATION` | `ask` (default), `require` (refuse if the client cannot ask you), `flag` (never ask) |
 | `MHPHOTOS_TOOLSETS` | e.g. `read,develop`; limits the offered tools (`all`, `read`, `edit`, `develop`, `mhphotos`) |
 | `MHPHOTOS_BRIDGE_PORT`, `MHPHOTOS_BRIDGE_TOKEN`, `MHPHOTOS_CONFIG_DIR` | bridge port (47831), fixed token, config/audit folder (`~/.mhphotos-lightroom-mcp`) |
+| `MHPHOTOS_OAUTH_SESSION_DAYS` | public HTTP service only: how long a connector login lasts after its last token refresh (default 30, 1-90). Logins survive a server restart (only SHA-256 digests of the tokens are stored, in `oauth-clients.sqlite3`, mode 600) |
 
 ## Safety in short
 - Loopback-only bridge with token; the plugin connects to the server, never the reverse.
