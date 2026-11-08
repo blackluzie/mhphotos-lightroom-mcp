@@ -1,6 +1,6 @@
 ---
 name: mhphotos
-description: Foto-Durchsicht mit dem MHPhotos-Lightroom-Connector wie bei „Kreuzfahrt 2026“, Aufruf z. B. /mhphotos Oktober 2026: Sterne, Stichwörter, Instagram-Kopien, Aussortieren in Bögen, Fotobuch. Mit /mhphotos Instawoche <Sammlung>: Posts, Stories und Reel planen, Fotos mit Titel, Kategorie und SEO-Texten auf mhphotos.de.
+description: Foto-Durchsicht mit dem MHPhotos-Lightroom-Connector wie bei „Kreuzfahrt 2026“, z. B. /mhphotos Oktober 2026; mit /mhphotos Instawoche Kreuzfahrt 2026 Posts, Stories, Reel und mhphotos.de mit Titel, Kategorie, SEO.
 ---
 
 # /mhphotos: eine Sammlung komplett durchgehen (wie „Kreuzfahrt 2026“)
