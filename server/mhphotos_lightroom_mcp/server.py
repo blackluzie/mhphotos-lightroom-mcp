@@ -37,6 +37,9 @@ from . import (
     social_crop,
     trip_story,
 )
+from . import (
+    shop_export as shop_export_mod,
+)
 from .adapters import (
     COLOR_LABELS,
     FLAGS,
@@ -3068,7 +3071,8 @@ async def _online_plan() -> dict[str, Any]:
         if isinstance(recs, dict):
             return recs
         records += recs
-    return {"items": len(items), **online_marks.match(items, records)}
+    homepage_of = {str(i.get("id")): str(i["homepagePhotoId"]) for i in items if i.get("homepagePhotoId")}
+    return {"items": len(items), "homepage_of": homepage_of, **online_marks.match(items, records)}
 
 
 @mcp.tool()
@@ -3124,6 +3128,74 @@ async def mark_online_in_lightroom(
     result = {"photos_tagged": tagged, "smart_collections_created": created}
     change_id = audit.record("mark_online_in_lightroom", [], summary, approved_by=how, result=result)
     return {"applied": True, "change_id": change_id, **summary, **result}
+
+
+@mcp.tool()
+async def shop_export(
+    gallery: str | None = None, again: bool = False, max_photos: int = 300,
+    confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Export the photos on mhphotos.de in full resolution into folders named like their galleries, for a print
+    shop: <MHPHOTOS_EXPORT_DIR>/Wandbilder/<Bereich>/<Galerie>, e.g. "Unterwegs/Italien/Brixen".
+
+    Pictrs: upload the folder tree into "autoimport" on its FTP server and Pictrs creates the galleries itself.
+    Saal Photo Portal: upload each folder into the gallery of the same name. Then put the gallery links into the
+    MHPhotos admin ("Wandbilder"), so the lightbox offers "Als Wandbild bestellen".
+
+    Homepage photos are linked to Lightroom through the Foto-Inbox (like mark_online_in_lightroom). Only photos not
+    exported before go out (again=true exports all once more, e.g. after re-editing). gallery limits it to one
+    gallery and its sub-galleries (id like "unterwegs/italien"). Dry run unless confirm=true.
+    """
+    dest = permissions.export_dir()
+    if dest is None:
+        return {"error": permissions.export_disabled_message(), "code": "disabled"}
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    code, site = await anyio.to_thread.run_sync(publishing.site_photos, cfg)
+    if code != 200:
+        return _app_error(code, site)
+    code, gal = await anyio.to_thread.run_sync(publishing.galleries, cfg)
+    if code != 200:
+        return _app_error(code, gal)
+    online = await _online_plan()
+    if _is_error(online):
+        return online
+    root = Path(dest) / shop_export_mod.SUBDIR
+    done = shop_export_mod.load_state(root)
+    lr_of = shop_export_mod.lightroom_ids(online["matches"], online.get("homepage_of") or {})
+    p = shop_export_mod.plan(site.get("photos") or [], gal.get("galleries") or [], lr_of, done, gallery, again)
+    summary = {"destination": str(root), "folders": {k: len(v) for k, v in p["folders"].items()},
+               "photos_to_export": p["photos"], "already_exported": p["already_exported"],
+               "not_in_lightroom": len(p["not_in_lightroom"]), "unknown_galleries": p["unknown_galleries"]}
+    if p["photos"] > max_photos:
+        return {"error": f"{p['photos']} photos is more than max_photos={max_photos}; raise it or pick a gallery",
+                "code": "too_many", **summary}
+    if not confirm:
+        return {"dry_run": True, **summary, "not_in_lightroom_sample": p["not_in_lightroom"][:20],
+                "hint": "Nothing was exported. Call again with confirm=true."}
+    if not p["photos"]:
+        return {"applied": True, **summary, "exported": 0}
+    approved, how = await gate.approve(
+        ctx, f"{p['photos']} Homepage-Foto(s) in voller Auflösung in {len(p['folders'])} Galerie-Ordner unter {root} "
+             "exportieren")
+    if not approved:
+        return gate.refusal(how)
+    exported = 0
+    for folder, ids in p["folders"].items():
+        target = root / folder
+        target.mkdir(parents=True, exist_ok=True)
+        for start in range(0, len(ids), MAX_BATCH):
+            chunk = ids[start:start + MAX_BATCH]
+            res = await _run(_adapter.export_photos, chunk, str(target), None)
+            if _is_error(res):
+                return {**res, "partly_done": {"photos_exported": exported}}
+            shop_export_mod.save_state(root, done, folder, chunk)
+            exported += len(chunk)
+    change_id = audit.record("shop_export", [], summary, approved_by=how, result={"exported": exported})
+    return {"applied": True, "change_id": change_id, **summary, "exported": exported,
+            "next_step": "Pictrs: Ordner-Inhalt von Wandbilder/ per FTP nach autoimport/ hochladen. "
+                         "Saal: Ordner in die gleichnamigen Galerien hochladen."}
 
 
 # ---------------------------------------------------------------- gear statistics
@@ -3727,7 +3799,7 @@ TOOLSETS: dict[str, set[str]] = {
         "mhphotos_publish", "mhphotos_instagram_posts", "mhphotos_instagram_images",
         "mhphotos_schedule_instagram", "mhphotos_instagram_queue", "mhphotos_cancel_instagram",
         "mhphotos_inbox_images", "mhphotos_inbox_contact_sheet", "mhphotos_edit_preview",
-        "mhphotos_best_times", "instagram_candidates", "mhphotos_site_photos", "mhphotos_reel_jobs",
+        "mhphotos_best_times", "instagram_candidates", "mhphotos_site_photos", "shop_export", "mhphotos_reel_jobs",
         "mhphotos_create_reel", "spot_photos", "mhphotos_sync_gear_usage", "mhphotos_sync_spot_photos",
         "mhphotos_create_blog_draft",
     },
