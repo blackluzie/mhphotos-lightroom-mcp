@@ -23,14 +23,19 @@ from mcp.server.fastmcp import Context, FastMCP, Image
 from . import (
     audit,
     catalog_audit,
+    catalog_insights,
     develop,
     file_dates,
     gate,
     imaging,
+    keyword_check,
+    online_marks,
     permissions,
     preset_xmp,
+    presort,
     publishing,
     social_crop,
+    trip_story,
 )
 from .adapters import (
     COLOR_LABELS,
@@ -2724,6 +2729,972 @@ async def mhphotos_cancel_instagram(
     return {"applied": True, "change_id": change_id, **summary}
 
 
+# ---------------------------------------------------------------- catalog insights (from the last catalog check)
+SNAPSHOT_HINT = ("No catalog snapshot yet. Run catalog_audit_start without year (whole catalog, several minutes; "
+                 "plug-in 0.1.26+ also records place, lens and focal length), then try again.")
+
+
+def _snapshot() -> dict[str, Any]:
+    snap = catalog_audit.load_snapshot()
+    if not snap:
+        return {"error": SNAPSHOT_HINT, "code": "no_snapshot"}
+    return snap
+
+
+def _scope_note(snap: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {"checked_at": snap.get("finished_at")}
+    if snap.get("year"):
+        out["scope_note"] = (f"The last catalog check covered only {snap['year']}; run catalog_audit_start without "
+                             "year for the whole catalog.")
+    return out
+
+
+def _page(items: list[Any], limit: int, offset: int, cap: int = 200) -> dict[str, Any]:
+    limit, offset = max(1, min(limit, cap)), max(0, offset)
+    page = items[offset : offset + limit]
+    out: dict[str, Any] = {"total": len(items), "items": page}
+    if offset + len(page) < len(items):
+        out["next_offset"] = offset + len(page)
+    return out
+
+
+@mcp.tool()
+async def catalog_audit_overview() -> dict[str, Any]:
+    """Overview of the last catalog check per year: wrong folders, duplicates, non-photos, storage, open points.
+
+    Best after a run over the whole catalog (catalog_audit_start without year); history lists when each scope
+    (whole catalog or single years) was last checked. Read-only, no Lightroom call.
+    """
+    saved = catalog_audit.load_result()
+    if not saved:
+        return {"error": "No finished catalog check yet. Start one with catalog_audit_start."}
+    snap = catalog_audit.load_snapshot()
+    photos = snap["photos"] if snap and snap.get("finished_at") == saved.get("finished_at") else None
+    out = catalog_insights.overview(saved, photos)
+    out["history"] = {scope: h.get("finished_at") for scope, h in sorted(catalog_audit.load_history().items())}
+    return out
+
+
+@mcp.tool()
+async def catalog_folder_moves(
+    year: int | None = None, level: str | None = None, limit: int = 50, offset: int = 0
+) -> dict[str, Any]:
+    """Photos in the wrong date folder, grouped by the folder they are in: the move list at folder level.
+
+    Each entry: folder, photos_to_move, targets (expected folder path -> photos), levels, and whole_folder=true
+    when every photo of the folder belongs into one target, so the folder can be dragged onto its parent (or
+    renamed) in Lightroom's Folders panel in one step. year = target year, level = year|month|day|decade|no_day.
+    Biggest folders first. Read-only, from the last catalog check.
+    """
+    saved = catalog_audit.load_result()
+    if not saved:
+        return {"error": "No finished catalog check yet. Start one with catalog_audit_start."}
+    snap = catalog_audit.load_snapshot()
+    moves = catalog_insights.folder_moves(saved, snap["photos"] if snap else None, year, level)
+    out = {"checked_at": saved.get("finished_at"), "whole_folders": sum(1 for m in moves if m.get("whole_folder")),
+           **_page(moves, limit, offset)}
+    out["hint"] = ("whole_folder: drag the folder in Lightroom's Folders panel (never in Finder). Otherwise use "
+                   "catalog_audit_collections(kind='wrong_folder') and drag the review collections day by day.")
+    return out
+
+
+@mcp.tool()
+async def archive_candidates(
+    min_age_years: int = 5, include_videos: bool = True, limit: int = 50, offset: int = 0
+) -> dict[str, Any]:
+    """Photos nobody touched (no stars, flag, keywords, edits, colour label or virtual copies) and older than
+    min_age_years: candidates to move to an archive drive, per folder (biggest first) and per year.
+
+    whole_folder=true means every photo of the folder is a candidate, so the whole folder can be moved to the
+    archive in Lightroom (Folders panel). rejected_any_age counts photos flagged as rejected. Read-only, from the
+    catalog snapshot of the last catalog check.
+    """
+    if not 0 <= min_age_years <= 100:
+        return {"error": "min_age_years must be 0-100"}
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    res = catalog_insights.archive_candidates(snap["photos"], min_age_years, include_videos=include_videos)
+    folders = res.pop("folders")
+    res.pop("_ids_by_year")
+    res.pop("_rejected_ids")
+    return {**_scope_note(snap), **res, "folders": _page(folders, limit, offset)}
+
+
+@mcp.tool()
+async def archive_candidates_collections(
+    min_age_years: int = 5, include_videos: bool = True, include_rejected: bool = False,
+    confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Put the archive candidates into review collections: "Archiv-Kandidaten › <year> › unberührt"
+    (and "Archiv-Kandidaten › Abgelehnt › alle Jahre" with include_rejected). Moves and deletes nothing.
+
+    Dry run unless confirm=true; needs operator opt-in.
+    """
+    if not 0 <= min_age_years <= 100:
+        return {"error": "min_age_years must be 0-100"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    res = catalog_insights.archive_candidates(snap["photos"], min_age_years, include_videos=include_videos)
+    groups = [{"set": year, "name": "unberührt", "photo_ids": ids} for year, ids in sorted(res["_ids_by_year"].items())]
+    if include_rejected and res["_rejected_ids"]:
+        groups.append({"set": "Abgelehnt", "name": "alle Jahre", "photo_ids": res["_rejected_ids"]})
+    return await _review_collections("Archiv-Kandidaten", groups, confirm, ctx, "archive_candidates_collections",
+                                     {"min_age_years": min_age_years, "include_rejected": include_rejected})
+
+
+async def _review_collections(root: str, groups: list[dict[str, Any]], confirm: bool, ctx: Context | None,
+                              tool: str, change: dict[str, Any]) -> dict[str, Any]:
+    """Shared flow for review collections below root: plan -> dry run -> approval -> fill in chunks -> log."""
+    groups = [g for g in groups if g["photo_ids"]]
+    photos = sum(len(g["photo_ids"]) for g in groups)
+    plan = {"root": root, "collections": len(groups), "photos": photos,
+            "first_collections": [f"{root} › {g['set']} › {g['name']} ({len(g['photo_ids'])})" for g in groups[:15]]}
+    if not groups:
+        return {**plan, "nothing_to_do": True}
+    if not confirm:
+        return {"dry_run": True, **plan, "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"{len(groups)} Sammlung(en) mit {photos} Fotos unter '{root}' anlegen")
+    if not approved:
+        return gate.refusal(how)
+    added = missing = 0
+    for call in catalog_audit.chunk_groups(groups):
+        res = await _run(_adapter.create_review_collections, root, call)
+        if _is_error(res):
+            return {**res, "partly_done": {"photos_added": added}} if added else res
+        added += sum(c["added"] for c in res["collections"])
+        missing += int(res.get("missing") or 0)
+    result = {"collections": len(groups), "photos_added": added, "photos_no_longer_in_catalog": missing}
+    change_id = audit.record(tool, [], change, approved_by=how, result=result)
+    return {"applied": True, "change_id": change_id, **plan, **result,
+            "note": f"Additive; not undoable here. Delete the set '{root}' in Lightroom when you are done."}
+
+
+# ---------------------------------------------------------------- pre-sorting (nightly)
+@mcp.tool()
+async def presort_status() -> dict[str, Any]:
+    """Pre-sorting progress: months done, the month in progress, and the next months to do.
+
+    Unreviewed = no stars and no flag (videos left out). The backlog per month comes from the catalog snapshot of
+    the last catalog check; without one, give presort_month a month yourself. Read-only.
+    """
+    progress = presort.load_progress()
+    snap = catalog_audit.load_snapshot()
+    backlog = presort.unreviewed_by_month(snap["photos"]) if snap else None
+    out: dict[str, Any] = {
+        "months_done": sorted((m for m, e in progress.items() if e.get("done")), reverse=True),
+        "progress": {m: e for m, e in sorted(progress.items(), reverse=True)[:24]},
+    }
+    if backlog is not None:
+        out["unreviewed_total"] = sum(backlog.values())
+        out["next"] = presort.next_months(progress, backlog)
+        out["checked_at"] = snap.get("finished_at")
+    else:
+        out["note"] = SNAPSHOT_HINT
+    return out
+
+
+@mcp.tool()
+async def presort_month(
+    month: str, gap_seconds: int = 5, sheet_size: int = 6, batch_offset: int = 0, batches: int = 20
+) -> dict[str, Any]:
+    """Prepare pre-sorting of one month (YYYY-MM): unreviewed photos grouped into series and contact-sheet batches.
+
+    Photos of the same camera taken at most gap_seconds apart form a series (bursts, repeated attempts). Each batch
+    (sheet_size photos, default 6; a series is only split when it alone is bigger) is meant for one
+    get_contact_sheet call (columns=6, cell=200, one call at a time); judge every photo, then call
+    presort_apply with the ids: top (5★ candidate: could go on mhphotos.de / Instagram), good (4★), reject (blurred,
+    wrong exposure, accidental), series_rest (the weaker shots of a series; keep the best one as top/good or leave
+    it out). Owner's rules: family photos at most good, never top. Read-only.
+    """
+    rng = presort.month_range(month)
+    if rng is None:
+        return {"error": "month must be YYYY-MM"}
+    if not 1 <= gap_seconds <= 120 or not 1 <= sheet_size <= imaging.MAX_SHEET_PHOTOS:
+        return {"error": f"gap_seconds must be 1-120 and sheet_size 1-{imaging.MAX_SHEET_PHOTOS}"}
+    recs = await _range(*rng)
+    if isinstance(recs, dict):
+        return recs
+    plan = presort.plan(recs, month, gap_seconds, sheet_size)
+    work = plan.pop("batches")
+    offset, count = max(0, batch_offset), max(1, min(batches, 100))
+    plan["batches"] = work[offset : offset + count]
+    if offset + count < len(work):
+        plan["next_batch_offset"] = offset + count
+    done = presort.load_progress().get(month) or {}
+    if done:
+        plan["already_done"] = done
+    plan["next_step"] = "get_contact_sheet(batch.photo_ids) per batch, then presort_apply(month, ..., batch=N)."
+    return plan
+
+
+@mcp.tool()
+async def presort_apply(
+    month: str, top: list[str] | None = None, good: list[str] | None = None, reject: list[str] | None = None,
+    series_rest: list[str] | None = None, batch: int | None = None, finished: bool = False,
+    confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Put pre-sorting verdicts into review collections "Vorsortieren › <month> › Kandidat 5★ / Kandidat 4★ /
+    Aussortieren (Vorschlag) / Serie – Rest (Vorschlag)". Stars, flags and files are NOT changed; Martin decides
+    in Lightroom. batch = number of the batch just judged (progress), finished=true marks the month as done.
+    Additive. Dry run unless confirm=true; needs operator opt-in.
+    """
+    if presort.month_range(month) is None:
+        return {"error": "month must be YYYY-MM"}
+    verdicts = {"top": top or [], "good": good or [], "reject": reject or [], "series_rest": series_rest or []}
+    ids = [i for v in verdicts.values() for i in v]
+    if len(ids) != len(set(ids)):
+        return {"error": "a photo may only appear in one verdict list"}
+    if len(ids) > 5000:
+        return {"error": "at most 5000 photos per call"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    groups = [{"set": month, "name": presort.VERDICTS[k], "photo_ids": v} for k, v in verdicts.items()]
+    counts = {k: len(v) for k, v in verdicts.items()}
+    if not ids:
+        if finished and confirm:
+            return {"applied": True, "progress": presort.record(month, counts, True, batch)}
+        return {"nothing_to_do": True, "hint": "Give ids in top/good/reject/series_rest, or finished=true, confirm=true."}
+    out = await _review_collections(presort.ROOT_SET, groups, confirm, ctx, "presort_apply",
+                                    {"month": month, **counts, "batch": batch})
+    if out.get("applied"):
+        out["progress"] = presort.record(month, counts, finished, batch)
+    return out
+
+
+# ---------------------------------------------------------------- keywords
+@mcp.tool()
+async def keyword_check_start() -> dict[str, Any]:
+    """Start a read-only check of all keywords (needs plug-in 0.1.26+): duplicates, variants, unused, loose ones.
+
+    Runs in the background (counting photos per keyword takes a while on a big catalog); follow it with
+    keyword_check_status, then keyword_check_results.
+    """
+    adapter = _adapter
+    started, job = keyword_check.start(lambda offset, limit: adapter.keyword_tree(offset, limit, True))
+    return {"started": started, **job.status()}
+
+
+@mcp.tool()
+async def keyword_check_status() -> dict[str, Any]:
+    """Progress of the keyword check, or the counts of the last finished one."""
+    job = keyword_check.current()
+    out: dict[str, Any] = job.status() if job else {"status": "none"}
+    if out["status"] in ("none", "done", "failed"):
+        saved = keyword_check.load_result()
+        if saved:
+            out["last_result"] = {"finished_at": saved.get("finished_at"), "counts": saved.get("counts")}
+    return out
+
+
+@mcp.tool()
+async def keyword_check_results(kind: str = "duplicates", limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    """Findings of the last keyword check, page by page.
+
+    kind: duplicates (same name at the same place in the tree, or a loose top-level keyword next to the same one
+    inside a hierarchy: keep + merge, ready for merge_keywords), variants (singular/plural or spelling: check first),
+    same_name_elsewhere (the same name in different branches, e.g. two towns called Valencia: usually fine),
+    unused (no photos, no children: Lightroom > Metadata > Purge Unused Keywords), loose (top-level keywords with
+    photos, most used first: candidates to move into a hierarchy by drag and drop in the Keyword List).
+    """
+    if kind not in keyword_check.KINDS:
+        return {"error": f"kind must be one of: {', '.join(keyword_check.KINDS)}"}
+    saved = keyword_check.load_result()
+    if not saved:
+        return {"error": "No finished keyword check yet. Start one with keyword_check_start."}
+    return {"kind": kind, "checked_at": saved.get("finished_at"), **_page(saved["findings"].get(kind, []), limit, offset)}
+
+
+@mcp.tool()
+async def merge_keywords(
+    source_ids: list[str], target_id: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Merge keywords: every photo of the source keywords gets the target keyword and loses the source keyword.
+
+    Ids come from keyword_check_results (keep.id = target, merge[].id = sources). The emptied source keywords stay
+    in the list; remove them in Lightroom with Metadata > Purge Unused Keywords. Not undoable here (merge back by
+    hand). Dry run unless confirm=true; needs operator opt-in and plug-in 0.1.26+.
+    """
+    sources = [s.strip() for s in source_ids if s and s.strip()]
+    if not sources or len(sources) > 50 or len(set(sources)) != len(sources) or not target_id.strip():
+        return {"error": "1-50 distinct source_ids and a target_id are required"}
+    if target_id in sources:
+        return {"error": "the target must not be one of the sources"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    saved = keyword_check.load_result() or {}
+    known = {k["id"]: k for g in (saved.get("findings") or {}).get("duplicates", []) + (saved.get("findings") or {}).get("variants", [])
+             for k in [g["keep"], *g["merge"]]}
+    names = [known.get(i, {}).get("path") or i for i in sources]
+    target = known.get(target_id, {}).get("path") or target_id
+    if not confirm:
+        return {"dry_run": True, "merge": names, "into": target,
+                "photos_affected": sum(known.get(i, {}).get("photos") or 0 for i in sources) or None,
+                "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Stichwörter {', '.join(map(str, names))} in '{target}' zusammenführen")
+    if not approved:
+        return gate.refusal(how)
+    moved, rounds, res = 0, 0, {}
+    while rounds < 100:
+        rounds += 1
+        res = await _run(_adapter.merge_keywords, sources, target_id, 5000)
+        if _is_error(res):
+            return {**res, "partly_done": {"photos_moved": moved}} if moved else res
+        moved += int(res.get("moved") or 0)
+        if not res.get("remaining") or not res.get("moved"):
+            break
+    result = {"photos_moved": moved, "target": res.get("target") or target, "remaining": res.get("remaining") or 0}
+    change_id = audit.record("merge_keywords", [], {"sources": names, "target": result["target"]}, approved_by=how,
+                             result=result)
+    return {"applied": True, "change_id": change_id, **result,
+            "next_step": "Lightroom: Metadata > Purge Unused Keywords removes the emptied keywords."}
+
+
+# ---------------------------------------------------------------- online on mhphotos.de / Instagram
+async def _online_plan() -> dict[str, Any]:
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    code, data = await anyio.to_thread.run_sync(publishing.inbox_items, cfg)
+    if code != 200:
+        return _app_error(code, data)
+    items = [i for i in data.get("items", []) if online_marks.wanted(i)]
+    records: list[dict[str, Any]] = []
+    for start, end in online_marks.days_needed(items):
+        recs = await _range(start, end)
+        if isinstance(recs, dict):
+            return recs
+        records += recs
+    return {"items": len(items), **online_marks.match(items, records)}
+
+
+@mcp.tool()
+async def mark_online_in_lightroom(
+    smart_collections: bool = True, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Mark in Lightroom which photos are online: keyword "MHPhotos-Online" for photos on mhphotos.de and
+    "Instagram" for photos of Instagram posts, plus smart collections "MHPhotos › Online auf mhphotos.de" and
+    "MHPhotos › Auf Instagram" (smart_collections=true) that fill themselves.
+
+    Source: the MHPhotos Foto-Inbox (published items and items linked to an Instagram post), matched to Lightroom
+    by Lightroom id (uploads since 0.1.26), else capture time + file name, file name ± 1 day, or capture time +
+    camera. The dry run lists matches and items that could not be matched. Keywords are only added (safe to run
+    again, e.g. weekly). Needs the MHPhotos app config and the operator opt-in for writes.
+    """
+    plan = await _online_plan()
+    if _is_error(plan):
+        return plan
+    by_kw: dict[str, list[str]] = {}
+    for m in plan["matches"]:
+        for kw in m["keywords"]:
+            if m["photo_id"] not in by_kw.setdefault(kw, []):
+                by_kw[kw].append(m["photo_id"])
+    summary = {"inbox_items_online": plan["items"], "matched": len(plan["matches"]),
+               "not_matched": len(plan["unmatched"]), "photos_per_keyword": {k: len(v) for k, v in by_kw.items()}}
+    if not confirm:
+        return {"dry_run": True, **summary, "matches_sample": plan["matches"][:20],
+                "not_matched_sample": plan["unmatched"][:20], "hint": "Call again with confirm=true."}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    approved, how = await gate.approve(
+        ctx, f"Online-Markierung in Lightroom: {', '.join(f'{k} für {len(v)} Fotos' for k, v in by_kw.items()) or 'nichts'}")
+    if not approved:
+        return gate.refusal(how)
+    tagged = 0
+    for kw, ids in by_kw.items():
+        for start in range(0, len(ids), MAX_BATCH):
+            res = await _run(_adapter.add_keywords, ids[start:start + MAX_BATCH], [kw])
+            if _is_error(res):
+                return {**res, "partly_done": {"photos_tagged": tagged}}
+            tagged += len(ids[start:start + MAX_BATCH])
+    created = []
+    if smart_collections:
+        existing = await _run(_adapter.list_collections)
+        names = set() if _is_error(existing) else {c.name for c in existing}
+        for kw, name in online_marks.SMART_COLLECTIONS.items():
+            if f"{online_marks.SMART_PARENT}/{name}" in names:
+                continue
+            res = await _run(_adapter.create_smart_collection, name, online_marks.SMART_PARENT,
+                             PhotoFilter(keyword=kw).to_args())
+            if not _is_error(res):
+                created.append(f"{online_marks.SMART_PARENT}/{name}")
+    result = {"photos_tagged": tagged, "smart_collections_created": created}
+    change_id = audit.record("mark_online_in_lightroom", [], summary, approved_by=how, result=result)
+    return {"applied": True, "change_id": change_id, **summary, **result}
+
+
+# ---------------------------------------------------------------- gear statistics
+async def _gear_list() -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
+    cfg = publishing.inbox_config()
+    if cfg is None:
+        return None, None
+    code, data = await anyio.to_thread.run_sync(publishing.site_gear, cfg)
+    if code != 200:
+        return None, _app_error(code, data)
+    return list(data.get("gear") or []), None
+
+
+@mcp.tool()
+async def gear_usage(year: int | None = None) -> dict[str, Any]:
+    """Which cameras and lenses took the photos: photos, rated 4+ and 5★, first/last use, years, focal lengths.
+
+    When the MHPhotos app is configured, the statistics are also matched to its gear list (Ausrüstung): matched
+    items, EXIF names without a gear item, and active gear without any photo. year limits to one capture year.
+    Read-only, from the catalog snapshot (lens and focal length need plug-in 0.1.26+).
+    """
+    if year is not None and not 1900 <= year <= 2200:
+        return {"error": "year must be four digits"}
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    usage = catalog_insights.gear_usage(snap["photos"], year)
+    out = {**_scope_note(snap), **usage}
+    gear, err = await _gear_list()
+    if gear is not None:
+        out["mhphotos_gear"] = catalog_insights.match_gear(usage, gear)
+    elif err:
+        out["mhphotos_gear_error"] = err.get("error")
+    if not any(p.get("lens") for p in snap["photos"][:5000]):
+        out["note"] = "No lens data in the snapshot: install plug-in 0.1.26+ and run catalog_audit_start again."
+    return out
+
+
+@mcp.tool()
+async def mhphotos_sync_gear_usage(confirm: bool = False, ctx: Context | None = None) -> dict[str, Any]:
+    """Send the gear statistics (per gear item: photos, rated 4+, 5★, first/last use, focal lengths) to the
+    MHPhotos app, where the Ausrüstung admin page shows them. Admin data only, nothing becomes public.
+    Dry run unless confirm=true.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    gear, err = await _gear_list()
+    if err:
+        return err
+    matched = catalog_insights.match_gear(catalog_insights.gear_usage(snap["photos"]), gear or [])
+    payload = {"generatedAt": datetime.now(UTC).isoformat(timespec="seconds"), "checkedAt": snap.get("finished_at"),
+               "items": {m["gear_id"]: {k: m[k] for k in ("photos", "rated_4_plus", "five_star", "first_used",
+                                                          "last_used", "top_focal_lengths", "exif_names")}
+                         for m in matched["matched"]},
+               "unmatched": matched["unmatched"]}
+    summary = {"gear_items": len(payload["items"]), "unmatched_cameras": len(matched["unmatched"]["cameras"]),
+               "unmatched_lenses": len(matched["unmatched"]["lenses"]), "target": cfg.host}
+    if not confirm:
+        return {"dry_run": True, **summary, "matched": matched["matched"][:20], "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Ausrüstungs-Statistik ({len(payload['items'])} Geräte) an {cfg.host} senden")
+    if not approved:
+        return gate.refusal(how)
+    code, resp = await anyio.to_thread.run_sync(publishing.put_gear_usage, cfg, payload)
+    if code != 200:
+        return _app_error(code, resp)
+    change_id = audit.record("mhphotos_sync_gear_usage", [], summary, approved_by=how)
+    return {"applied": True, "change_id": change_id, **summary}
+
+
+# ---------------------------------------------------------------- spots and own photos
+async def _spot_matches(radius_m: int, min_rating: int, best: int = 5) -> dict[str, Any]:
+    if not 25 <= radius_m <= 5000 or not 0 <= min_rating <= 5:
+        return {"error": "radius_m must be 25-5000 and min_rating 0-5"}
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    code, data = await anyio.to_thread.run_sync(publishing.site_spots, cfg)
+    if code != 200:
+        return _app_error(code, data)
+    res = await anyio.to_thread.run_sync(
+        lambda: catalog_insights.spot_matches(snap["photos"], list(data.get("spots") or []), radius_m, min_rating, best))
+    return {**_scope_note(snap), **res}
+
+
+@mcp.tool()
+async def spot_photos(radius_m: int = 300, min_rating: int = 4, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    """Own photos at the MHPhotos spots: per spot the photos within radius_m (count, rated min_rating+, best ones),
+    and the spots where no own photo rated min_rating+ exists yet (ideas for the photo planner).
+
+    Read-only; uses the spot list of the MHPhotos app and the GPS positions of the catalog snapshot
+    (plug-in 0.1.26+).
+    """
+    res = await _spot_matches(radius_m, min_rating)
+    if _is_error(res):
+        return res
+    found = res.pop("spots_with_own_photos")
+    missing = res.pop("spots_without_good_own_photo")
+    res["spots_with_own_photos_count"] = len(found)
+    res["spots_without_good_own_photo_count"] = len(missing)
+    return {**res, "spots_with_own_photos": _page(found, limit, offset),
+            "spots_without_good_own_photo": _page(missing, limit, 0)}
+
+
+@mcp.tool()
+async def spot_photos_collections(
+    spot_ids: list[str], radius_m: int = 300, min_rating: int = 4, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Collections "MHPhotos-Spots › Spots › <spot name>" with the own photos rated min_rating+ at those spots
+    (at most 50 spots per call). Additive. Dry run unless confirm=true; needs operator opt-in.
+    """
+    if not spot_ids or len(spot_ids) > 50:
+        return {"error": "1-50 spot_ids"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    res = await _spot_matches(radius_m, min_rating, best=5000)
+    if _is_error(res):
+        return res
+    wanted = set(spot_ids)
+    groups = []
+    for spot in res["spots_with_own_photos"]:
+        if spot["spot_id"] in wanted:
+            name = re.sub(r"[/\n\r]", "-", str(spot["name"]))[:120] or spot["spot_id"]
+            ids = [b["id"] for b in spot.get("best", []) if b["rating"] >= min_rating]
+            groups.append({"set": "Spots", "name": name, "photo_ids": ids})
+    return await _review_collections("MHPhotos-Spots", groups, confirm, ctx, "spot_photos_collections",
+                                     {"spots": len(groups), "radius_m": radius_m, "min_rating": min_rating})
+
+
+@mcp.tool()
+async def mhphotos_sync_spot_photos(
+    radius_m: int = 300, min_rating: int = 4, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Send per spot how many own photos exist in Lightroom (count, rated min_rating+, best rating, last capture)
+    to the MHPhotos app; the spot admin shows it and the photo planner can list spots without a good own photo.
+    Admin data only, no images and nothing public. Dry run unless confirm=true.
+    """
+    res = await _spot_matches(radius_m, min_rating)
+    if _is_error(res):
+        return res
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    payload = {"generatedAt": datetime.now(UTC).isoformat(timespec="seconds"), "checkedAt": res.get("checked_at"),
+               "radiusM": radius_m, "minRating": min_rating,
+               "spots": {s["spot_id"]: {"photos": s["photos"], "rated": s["rated"], "bestRating": s.get("best_rating", 0),
+                                        "lastCaptured": s.get("last_captured")} for s in res["spots_with_own_photos"]}}
+    summary = {"spots_with_own_photos": len(payload["spots"]),
+               "spots_without_good_own_photo": len(res["spots_without_good_own_photo"]), "target": cfg.host}
+    if not confirm:
+        return {"dry_run": True, **summary, "hint": "Call again with confirm=true."}
+    approved, how = await gate.approve(ctx, f"Eigene Fotos je Spot ({len(payload['spots'])} Spots) an {cfg.host} senden")
+    if not approved:
+        return gate.refusal(how)
+    code, resp = await anyio.to_thread.run_sync(publishing.put_spot_photos, cfg, payload)
+    if code != 200:
+        return _app_error(code, resp)
+    change_id = audit.record("mhphotos_sync_spot_photos", [], summary, approved_by=how)
+    return {"applied": True, "change_id": change_id, **summary}
+
+
+# ---------------------------------------------------------------- trip -> blog draft
+async def _trip_records(captured_from: str, captured_to: str, collection_id: str | None) -> list[dict[str, Any]] | dict[str, Any]:
+    if bad := _check_range(captured_from, captured_to):
+        return bad
+    recs = await _range(captured_from, captured_to)
+    if isinstance(recs, dict) or not collection_id:
+        return recs
+    ids: set[str] = set()
+    offset = 0
+    while offset < 20000:
+        res = await _run(_adapter.list_photos, collection_id, MAX_PAGE_SIZE, offset, None)
+        if _is_error(res):
+            return res
+        photos, total = res
+        ids.update(p.id for p in photos)
+        offset += MAX_PAGE_SIZE
+        if offset >= total:
+            break
+    return [r for r in recs if r["id"] in ids]
+
+
+@mcp.tool()
+async def trip_outline(
+    captured_from: str, captured_to: str, collection_id: str | None = None, title: str | None = None,
+    best_per_day: int = 3,
+) -> dict[str, Any]:
+    """A trip as a story: per day the places (in order), the route length from the photos' GPS, a map link and
+    the best photos; plus a Markdown blog draft with placeholders. collection_id limits it to one collection
+    (e.g. "Kreuzfahrt 2026"). Write the real text from it, then mhphotos_create_blog_draft. Read-only.
+    """
+    recs = await _trip_records(captured_from, captured_to, collection_id)
+    if isinstance(recs, dict):
+        return recs
+    if not recs:
+        return {"error": "No photos in that range (or collection)."}
+    plan = trip_story.outline(recs, max(1, min(best_per_day, 10)))
+    name = (title or "").strip() or f"Reise {captured_from} bis {captured_to}"
+    return {**plan, "draft_markdown": trip_story.markdown(name, plan),
+            "hint": "Send the best photos with send_to_mhphotos_inbox to have images for the post."}
+
+
+@mcp.tool()
+async def mhphotos_create_blog_draft(
+    title: str, content: str | None = None, excerpt: str = "", tags: list[str] | None = None,
+    captured_from: str | None = None, captured_to: str | None = None, collection_id: str | None = None,
+    confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Save a blog post on mhphotos.de as an unpublished DRAFT (Admin › Blog), e.g. a travel report.
+
+    content: the finished Markdown; without it, the draft from trip_outline(captured_from, captured_to,
+    collection_id) is used. Nothing becomes public; Martin publishes in the admin. Dry run unless confirm=true.
+    """
+    title = title.strip()
+    if not title or len(title) > 200:
+        return {"error": "title required (max 200 characters)"}
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    if not content:
+        if not captured_from or not captured_to:
+            return {"error": "Give content, or captured_from and captured_to for a generated draft."}
+        recs = await _trip_records(captured_from, captured_to, collection_id)
+        if isinstance(recs, dict):
+            return recs
+        content = trip_story.markdown(title, trip_story.outline(recs))
+    if len(content) > 200_000:
+        return {"error": "content too long (max 200,000 characters)"}
+    clean_tags = [t.strip() for t in (tags or []) if t and t.strip()][:20]
+    post = {"title": title, "excerpt": excerpt.strip()[:500], "content": content, "tags": clean_tags}
+    if not confirm:
+        return {"dry_run": True, "target": cfg.host, "title": title, "characters": len(content), "tags": clean_tags,
+                "preview": content[:1500], "hint": "Call again with confirm=true (saved as an unpublished draft)."}
+    approved, how = await gate.approve(ctx, f"Blog-Entwurf '{title}' auf {cfg.host} speichern (nicht veröffentlicht)")
+    if not approved:
+        return gate.refusal(how)
+    code, resp = await anyio.to_thread.run_sync(publishing.create_blog_draft, cfg, post)
+    if code not in (200, 201):
+        return _app_error(code, resp)
+    saved = resp.get("post") or {}
+    change_id = audit.record("mhphotos_create_blog_draft", [], {"title": title}, approved_by=how,
+                             result={"post_id": saved.get("id")})
+    return {"applied": True, "change_id": change_id, "post_id": saved.get("id"), "slug": saved.get("slug"),
+            "published": False, "next_step": "Review and publish it in MHPhotos › Admin › Blog."}
+
+
+# ---------------------------------------------------------------- duplicates, missing files, GPS gaps (0.1.27)
+@mcp.tool()
+async def duplicate_folders(limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    """Double imports: the verified duplicates of the last catalog check per folder pair (copy folder -> folder
+    with the original), biggest first. whole_folder=true: every photo of the copy folder is a duplicate, so the
+    whole folder can be removed in Lightroom (Folders panel) after a look. Put the copies into review collections
+    with catalog_audit_collections(kind="duplicates"). Read-only.
+    """
+    saved = catalog_audit.load_result()
+    if not saved:
+        return {"error": SNAPSHOT_HINT, "code": "no_result"}
+    snap = catalog_audit.load_snapshot()
+    rows = catalog_insights.duplicate_folders(saved, (snap or {}).get("photos"))
+    for r in rows:
+        r.pop("photo_ids")
+    return {"checked_at": saved.get("finished_at"), "copy_folders": len({r["copy_folder"] for r in rows}),
+            "whole_folders": sum(1 for r in rows if r.get("whole_folder")),
+            "photos": sum(r["photos"] for r in rows), "gb": round(sum(r["gb"] for r in rows), 2),
+            "pairs": _page(rows, limit, offset)}
+
+
+@mcp.tool()
+async def missing_files_by_drive() -> dict[str, Any]:
+    """Photos whose original file Lightroom cannot find, per drive and folder: offline (drive not connected,
+    nothing lost) or missing (drive connected, file gone or moved outside Lightroom). Needs a catalog check with
+    check_files=true. Read-only.
+    """
+    saved = catalog_audit.load_result()
+    if not saved:
+        return {"error": SNAPSHOT_HINT, "code": "no_result"}
+    snap = catalog_audit.load_snapshot()
+    res = await anyio.to_thread.run_sync(
+        lambda: catalog_insights.missing_by_drive(saved, (snap or {}).get("photos"), os.path.isdir))
+    for d in res["drives"]:
+        d.pop("photo_ids")
+        d["folders"] = d["folders"][:30]
+    if not res["checked_files"]:
+        res["hint"] = "The last check did not look at the files: run catalog_audit_start(check_files=true)."
+    return {"checked_at": saved.get("finished_at"), **res}
+
+
+_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _gps_args(captured_from: str | None, captured_to: str | None, window_minutes: int) -> str | None:
+    if any(d and not _DAY.match(d) for d in (captured_from, captured_to)):
+        return "captured_from/captured_to must be YYYY-MM-DD"
+    if not 1 <= window_minutes <= 180:
+        return "window_minutes must be 1-180"
+    return None
+
+
+@mcp.tool()
+async def gps_gaps(captured_from: str | None = None, captured_to: str | None = None, window_minutes: int = 30,
+                   limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    """Photos without GPS that were taken at most window_minutes before or after a photo with GPS (any camera,
+    e.g. the phone): each gets that photo's position as a suggestion, with the distance in minutes. by_month
+    shows where most gaps can be closed. Write them with fill_gps_gaps. Read-only, from the catalog snapshot.
+    """
+    if err := _gps_args(captured_from, captured_to, window_minutes):
+        return {"error": err}
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    res = await anyio.to_thread.run_sync(
+        lambda: catalog_insights.gps_gaps(snap["photos"], window_minutes, captured_from, captured_to))
+    items = res.pop("suggestions")
+    return {**_scope_note(snap), **res, "suggestions": _page(items, limit, offset)}
+
+
+MAX_GPS_FILL = 5000
+
+
+@mcp.tool()
+async def fill_gps_gaps(captured_from: str, captured_to: str, window_minutes: int = 30, max_photos: int = 2000,
+                        confirm: bool = False, ctx: Context | None = None) -> dict[str, Any]:
+    """Write the GPS suggestions of gps_gaps for one date range (at most max_photos, up to 5000): every photo
+    gets the position of the nearest photo with GPS taken within window_minutes. Only photos without GPS are
+    touched; place names are not changed. Check samples with gps_gaps first.
+
+    Dry run unless confirm=true; needs operator opt-in.
+    """
+    if err := _gps_args(captured_from, captured_to, window_minutes):
+        return {"error": err}
+    if not 1 <= max_photos <= MAX_GPS_FILL:
+        return {"error": f"max_photos must be 1-{MAX_GPS_FILL}"}
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    res = await anyio.to_thread.run_sync(
+        lambda: catalog_insights.gps_gaps(snap["photos"], window_minutes, captured_from, captured_to))
+    todo = res["suggestions"][:max_photos]
+    groups = catalog_insights.gps_groups(todo)
+    plan = {"captured_from": captured_from, "captured_to": captured_to, "window_minutes": window_minutes,
+            "photos": len(todo), "positions": len(groups), "more_left": max(0, res["suggestions_total"] - len(todo))}
+    if not todo:
+        return {**plan, "nothing_to_do": True}
+    if not confirm:
+        return {"dry_run": True, **plan, "sample": todo[:10], "hint": "Call again with confirm=true."}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    approved, how = await gate.approve(ctx, f"GPS-Position für {len(todo)} Fotos ({captured_from} bis {captured_to}) "
+                                            "aus Fotos derselben Zeit übernehmen")
+    if not approved:
+        return gate.refusal(how)
+    written, gps_error = 0, None
+    for g in groups:
+        for start in range(0, len(g["photo_ids"]), 200):
+            part = g["photo_ids"][start:start + 200]
+            out = await _run(_adapter.set_location, part, g["lat"], g["lon"], {})
+            if _is_error(out):
+                return {**out, "partly_done": {"photos_written": written}} if written else out
+            if out.get("gps_written") is False:
+                gps_error = out.get("gps_error") or "this Lightroom version does not allow writing GPS"
+                break
+            written += int(out.get("updated") or 0)
+        if gps_error:
+            break
+    result = {"photos_written": written, **({"gps_error": gps_error} if gps_error else {})}
+    change_id = audit.record("fill_gps_gaps", [s["id"] for s in todo[:written]], {"gps_from_neighbours": plan},
+                             approved_by=how, result=result)
+    return {"applied": not gps_error, "change_id": change_id, **plan, **result,
+            "note": "The snapshot still shows the old state until the next catalog check."}
+
+
+# ---------------------------------------------------------------- print candidates, calendar (0.1.27)
+def _snapshot_photos() -> list[dict[str, Any]] | dict[str, Any]:
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    photos = snap["photos"]
+    if photos and not any(p.get("w") or p.get("cw") for p in photos[:5000]):
+        return {"error": "The catalog snapshot has no image sizes yet (plug-in 0.1.27+): run catalog_audit_start "
+                         "without year again.", "code": "old_snapshot"}
+    return photos
+
+
+@mcp.tool()
+async def print_candidates(min_rating: int = 4, min_size: str = "45×30", limit: int = 50,
+                           offset: int = 0) -> dict[str, Any]:
+    """Photos good enough for a wall print: rated min_rating+, not rejected, with enough pixels after cropping
+    for at least min_size cm (30×20, 45×30, 60×40, 90×60, 120×80 at 150 dpi), grouped by the biggest size they
+    allow, best first. Read-only, from the catalog snapshot (plug-in 0.1.27+).
+    """
+    if not 1 <= min_rating <= 5:
+        return {"error": "min_rating must be 1-5"}
+    photos = _snapshot_photos()
+    if _is_error(photos):
+        return photos
+    try:
+        res = catalog_insights.print_candidates(photos, min_rating, min_size)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    for g in res["groups"]:
+        g["items"] = _page(g["items"], limit, offset)
+    return res
+
+
+@mcp.tool()
+async def print_candidates_collections(min_rating: int = 4, min_size: str = "45×30", confirm: bool = False,
+                                       ctx: Context | None = None) -> dict[str, Any]:
+    """Review collections "Druck-Kandidaten › <max size> › <stars>★" with the print candidates. Additive.
+
+    Dry run unless confirm=true; needs operator opt-in.
+    """
+    if not 1 <= min_rating <= 5:
+        return {"error": "min_rating must be 1-5"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    photos = _snapshot_photos()
+    if _is_error(photos):
+        return photos
+    try:
+        res = catalog_insights.print_candidates(photos, min_rating, min_size)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    groups = []
+    for g in res["groups"]:
+        for stars in range(5, min_rating - 1, -1):
+            ids = [i["id"] for i in g["items"] if i.get("r") == stars]
+            groups.append({"set": f"bis {g['max_size']} cm", "name": f"{stars}★", "photo_ids": ids})
+    return await _review_collections("Druck-Kandidaten", groups, confirm, ctx, "print_candidates_collections",
+                                     {"min_rating": min_rating, "min_size": min_size})
+
+
+def _calendar_args(year: int, per_month: int, min_rating: int) -> str | None:
+    if not 2000 <= year <= 2100:
+        return "year must be 2000-2100"
+    if not 1 <= per_month <= 30:
+        return "per_month must be 1-30"
+    if not 1 <= min_rating <= 5:
+        return "min_rating must be 1-5"
+    return None
+
+
+@mcp.tool()
+async def calendar_candidates(year: int = 2027, per_month: int = 8, min_rating: int = 4,
+                              orientation: str = "landscape", min_size: str = "45×30") -> dict[str, Any]:
+    """Suggestions for a photo calendar: for each of the 12 months the best photos taken in that month (any
+    year), rated min_rating+, in the wanted orientation (landscape, portrait, any) and big enough for min_size
+    (an A3 calendar needs about 45×30). Variety: one photo per day, at most two per year and place where
+    possible. Look at them with get_contact_sheet (6 per sheet), then calendar_collections. Read-only.
+    """
+    if err := _calendar_args(year, per_month, min_rating):
+        return {"error": err}
+    photos = _snapshot_photos()
+    if _is_error(photos):
+        return photos
+    try:
+        res = catalog_insights.calendar_candidates(photos, per_month, min_rating, orientation, min_size)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    return {"calendar": year, **res}
+
+
+@mcp.tool()
+async def calendar_collections(year: int = 2027, per_month: int = 8, min_rating: int = 4,
+                               orientation: str = "landscape", min_size: str = "45×30",
+                               photo_ids_by_month: dict[str, list[str]] | None = None, confirm: bool = False,
+                               ctx: Context | None = None) -> dict[str, Any]:
+    """Collections "Kalender <year> › Vorschläge › 01 Januar" … "12 Dezember" with the calendar suggestions, or
+    with your own pick per month (photo_ids_by_month, keys "1"-"12"). Additive; pick the final photo per month in
+    Lightroom. Dry run unless confirm=true; needs operator opt-in.
+    """
+    if err := _calendar_args(year, per_month, min_rating):
+        return {"error": err}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    names = catalog_insights.MONTHS_DE
+    if photo_ids_by_month:
+        if any(k not in {str(m) for m in range(1, 13)} for k in photo_ids_by_month) or \
+                any(not isinstance(v, list) or len(v) > 100 for v in photo_ids_by_month.values()):
+            return {"error": "photo_ids_by_month: keys '1'-'12', at most 100 ids each"}
+        by_month = {int(k): list(v) for k, v in photo_ids_by_month.items()}
+    else:
+        photos = _snapshot_photos()
+        if _is_error(photos):
+            return photos
+        try:
+            res = catalog_insights.calendar_candidates(photos, per_month, min_rating, orientation, min_size)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        by_month = {m["month"]: [s["id"] for s in m["suggestions"]] for m in res["months"]}
+    groups = [{"set": "Vorschläge", "name": f"{m:02d} {names[m - 1]}", "photo_ids": ids}
+              for m, ids in sorted(by_month.items())]
+    return await _review_collections(f"Kalender {year}", groups, confirm, ctx, "calendar_collections",
+                                     {"year": year, "own_pick": bool(photo_ids_by_month)})
+
+
+# ---------------------------------------------------------------- weekly report (0.1.27)
+def _item_time(item: dict[str, Any]) -> str:
+    for key in ("publishedAt", "approvedAt", "updatedAt", "createdAt", "uploadedAt"):
+        if item.get(key):
+            return str(item[key])
+    return ""
+
+
+@mcp.tool()
+async def weekly_report(days: int = 7) -> dict[str, Any]:
+    """A short report for the last days (default 7): new photos in Lightroom (by capture date) and how many are
+    still unreviewed, the unreviewed backlog of the whole catalog, what went online on mhphotos.de and Instagram,
+    and the spots without a good own photo. Each part that cannot be read says why. Read-only.
+    """
+    if not 1 <= days <= 62:
+        return {"error": "days must be 1-62"}
+    today = datetime.now().date()
+    since = today - timedelta(days=days - 1)
+    out: dict[str, Any] = {"from": since.isoformat(), "to": today.isoformat()}
+    recs: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        page = await _run(_adapter.photos_by_date, since.isoformat(), today.isoformat(), offset, 2000, offset == 0)
+        if _is_error(page):
+            out["new_photos"] = {"error": page.get("error")}
+            break
+        recs += page.get("photos") or []
+        nxt = int(page.get("next_offset") or 0)
+        if nxt <= offset or nxt >= int(page.get("total") or 0):
+            break
+        offset = nxt
+    if "new_photos" not in out:
+        photos = [r for r in recs if not presort.is_video(r)]
+        per_day: dict[str, int] = {}
+        for r in photos:
+            per_day[str(r.get("t") or "")[:10]] = per_day.get(str(r.get("t") or "")[:10], 0) + 1
+        out["new_photos"] = {"photos": len(photos), "videos": len(recs) - len(photos),
+                             "unreviewed": sum(1 for r in photos if presort.is_unreviewed(r)),
+                             "rated_4_plus": sum(1 for r in photos if (r.get("r") or 0) >= 4),
+                             "busiest_days": sorted(per_day.items(), key=lambda x: -x[1])[:5]}
+    snap = catalog_audit.load_snapshot()
+    if snap:
+        backlog = presort.unreviewed_by_month(snap["photos"])
+        out["backlog"] = {"unreviewed_total": sum(backlog.values()), "as_of": snap.get("finished_at"),
+                          "next_months": presort.next_months(presort.load_progress(), backlog, 3)}
+    else:
+        out["backlog"] = {"error": SNAPSHOT_HINT}
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        out["online"] = {"error": cfg.get("error")}
+    else:
+        code, data = await anyio.to_thread.run_sync(publishing.inbox_items, cfg)
+        if code != 200:
+            out["online"] = _app_error(code, data)
+        else:
+            recent = [i for i in data.get("items", []) if _item_time(i)[:10] >= since.isoformat()]
+            out["online"] = {"inbox_new": len(recent),
+                             "on_homepage": sum(1 for i in recent if i.get("status") == "uebernommen"),
+                             "on_instagram": sum(1 for i in recent if i.get("instagramId")),
+                             "waiting": sum(1 for i in data.get("items", []) if i.get("status") == "wartet")}
+        spots = await _spot_matches(300, 4)
+        if _is_error(spots):
+            out["spots"] = {"error": spots.get("error")}
+        else:
+            missing = spots.get("spots_without_good_own_photo") or []
+            out["spots"] = {"without_good_own_photo": len(missing),
+                            "ideas": [s.get("name") for s in missing[:5]]}
+    return out
+
+
 # ---------------------------------------------------------------- toolsets
 # MHPHOTOS_TOOLSETS="read,develop" limits which tools are offered (fewer tools = fewer tokens,
 # smaller blast radius). Default: all. "read" is always on.
@@ -2734,12 +3705,18 @@ TOOLSETS: dict[str, set[str]] = {
         "list_presets", "backlog_report", "list_changes",
         "catalog_audit_start", "catalog_audit_status", "catalog_audit_results", "catalog_audit_cancel",
         "photos_by_date", "suggest_locations", "list_webhooks",
+        "catalog_audit_overview", "catalog_folder_moves", "archive_candidates", "presort_status", "presort_month",
+        "keyword_check_start", "keyword_check_status", "keyword_check_results", "gear_usage", "trip_outline",
+        "duplicate_folders", "missing_files_by_drive", "gps_gaps", "print_candidates", "calendar_candidates",
+        "weekly_report",
     },
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
         "create_collection", "move_collection", "create_smart_collection", "create_keyword", "import_photo",
         "set_custom_metadata", "send_webhook", "add_to_collection", "export_photos", "undo_last_change",
         "catalog_audit_collections", "set_location", "rotate_photos", "write_name_dates_to_files",
+        "archive_candidates_collections", "presort_apply", "merge_keywords", "mark_online_in_lightroom",
+        "spot_photos_collections", "fill_gps_gaps", "print_candidates_collections", "calendar_collections",
     },
     "develop": {
         "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",
@@ -2751,7 +3728,8 @@ TOOLSETS: dict[str, set[str]] = {
         "mhphotos_schedule_instagram", "mhphotos_instagram_queue", "mhphotos_cancel_instagram",
         "mhphotos_inbox_images", "mhphotos_inbox_contact_sheet", "mhphotos_edit_preview",
         "mhphotos_best_times", "instagram_candidates", "mhphotos_site_photos", "mhphotos_reel_jobs",
-        "mhphotos_create_reel",
+        "mhphotos_create_reel", "spot_photos", "mhphotos_sync_gear_usage", "mhphotos_sync_spot_photos",
+        "mhphotos_create_blog_draft",
     },
 }
 

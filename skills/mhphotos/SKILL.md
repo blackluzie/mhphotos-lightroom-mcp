@@ -109,6 +109,26 @@ auf getrennte Chats verteilen.
 Lightroom kann über das SDK keine Fotos verschieben oder löschen, und der Haken „Mit Lightroom synchronisieren“ geht nur
 von Hand. Eigene Metadatenfelder (`set_custom_metadata`) sind derzeit abgeschaltet: Stichwörter oder Sammlungen nutzen.
 
+## 6. Vorsortieren (auch nachts, Plugin ab 0.1.26)
+Für den großen Rückstand ungesichteter Fotos, Monat für Monat. Es werden **keine Sterne gesetzt**, nur Prüf-Sammlungen gefüllt.
+1. `presort_status()`: nimm `next[0]` (ein angefangener Monat kommt zuerst; `last_batch` sagt, wo es weitergeht).
+2. `presort_month(month, batch_offset=last_batch)`: Serien und Blätter zu je 6 Fotos.
+3. Pro Blatt `get_contact_sheet(photo_ids, columns=6, cell=200)`, Regeln wie in Abschnitt 1 (5★ = könnte online, Familie höchstens 4★, pro Serie nur das beste). Danach `presort_apply(month, top=[…], good=[…], reject=[…], series_rest=[…], batch=N, confirm=true)`.
+4. Nach dem letzten Blatt `finished=true`. Pro Lauf höchstens etwa 40 Blätter, dann kurzer Bericht (Monat, Zahlen je Liste).
+Der Eigentümer sieht morgens „Vorsortieren › <Monat> › Kandidat 5★ / Kandidat 4★ / Aussortieren (Vorschlag) / Serie – Rest (Vorschlag)“ und entscheidet in Lightroom.
+
+## 7. Aufräumen und Verbinden (Plugin ab 0.1.26)
+- Nach einer Katalog-Prüfung über alles: `catalog_audit_overview`, `catalog_folder_moves` (ganze Ordner zuerst), `archive_candidates`.
+- Stichwörter: `keyword_check_start` → `keyword_check_results("duplicates")` → `merge_keywords` nach Freigabe, danach in Lightroom „Nicht verwendete Stichwörter löschen“.
+- Was online ist: `mark_online_in_lightroom` (Trockenlauf, dann `confirm=true`), z. B. einmal pro Woche.
+- MHPhotos: `spot_photos` (Spots ohne gutes eigenes Foto für den Fotoplaner), `gear_usage`, `trip_outline` → `mhphotos_create_blog_draft` (bleibt Entwurf).
+- Ab 0.1.27: `duplicate_folders` (doppelt importierte Ordner), `missing_files_by_drive` (nach `catalog_audit_start(check_files=true)`), `gps_gaps` → `fill_gps_gaps` nach Freigabe, `print_candidates` → `print_candidates_collections`, `weekly_report`.
+
+## 8. Fotokalender („Kalender 2027“, Plugin ab 0.1.27)
+1. `calendar_candidates(year=2027, per_month=8)`: pro Monat die besten Fotos aus diesem Monat (alle Jahre), quer, groß genug für A3.
+2. Pro Monat `get_contact_sheet(photo_ids, columns=6, cell=200)` ansehen, 2–3 Favoriten mit Begründung vorschlagen (Jahreszeit passt, keine zwei ähnlichen Motive hintereinander, Abwechslung bei Orten und Farben).
+3. `calendar_collections(year=2027, confirm=true)` mit allen Vorschlägen, oder nach Martins Wahl mit `photo_ids_by_month`. Das endgültige Bild je Monat wählt Martin in Lightroom.
+
 ## Eisenregeln
 - Alles Schreibende zuerst als Trockenlauf, `confirm=true` erst nach der Freigabe oder wenn der Block dem Vereinbarten entspricht.
 - Keine Löschung, kein Verschieben, keine Veröffentlichung. Aussortieren heißt nur „Vorschlag“ bzw. Flagge „abgelehnt“.

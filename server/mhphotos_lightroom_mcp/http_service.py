@@ -23,6 +23,10 @@ READ_TOOLS = (
     'get_develop_settings', 'list_presets', 'list_changes',
     'catalog_audit_start', 'catalog_audit_status', 'catalog_audit_results', 'catalog_audit_cancel',
     'photos_by_date', 'suggest_locations',
+    'catalog_audit_overview', 'catalog_folder_moves', 'archive_candidates', 'presort_status', 'presort_month',
+    'keyword_check_start', 'keyword_check_status', 'keyword_check_results', 'gear_usage', 'trip_outline',
+    'duplicate_folders', 'missing_files_by_drive', 'gps_gaps', 'print_candidates', 'calendar_candidates',
+    'weekly_report',
 )
 # Catalog edits, offered only when the operator enabled them (desktop.json "allow_writes").
 # Nothing here deletes photos or publishes; ratings, flags, labels, titles and keywords are undoable,
@@ -34,18 +38,24 @@ WRITE_TOOLS = (
     'virtual_copy_job', 'undo_last_change',
     'apply_preset', 'apply_develop_settings', 'sync_develop_settings', 'create_preset', 'crop_to_aspect',
     'catalog_audit_collections', 'set_location', 'rotate_photos',
+    'archive_candidates_collections', 'presort_apply', 'merge_keywords', 'mark_online_in_lightroom',
+    'spot_photos_collections', 'fill_gps_gaps', 'print_candidates_collections', 'calendar_collections',
 )
 # status of a running create_virtual_copies job: only useful with writes, reads nothing but the plug-in's memory
 STATUS_TOOLS = {'virtual_copy_job'}
 ADDITIVE_TOOLS = STATUS_TOOLS | {'create_collection', 'move_collection', 'create_smart_collection', 'create_keyword', 'import_photo',
     'build_smart_previews', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords',
-    'catalog_audit_collections'}
+    'catalog_audit_collections', 'archive_candidates_collections', 'presort_apply', 'mark_online_in_lightroom',
+    'spot_photos_collections', 'print_candidates_collections', 'calendar_collections'}
 WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
 # Read-only views of the MHPhotos app (Instagram library, inbox), offered when desktop.json
 # names the MHPhotos site ("mhphotos_url"); the admin token stays in the macOS Keychain.
 MHPHOTOS_TOOLS = ('mhphotos_instagram_posts', 'mhphotos_instagram_images', 'mhphotos_inbox',
     'mhphotos_instagram_queue', 'mhphotos_best_times', 'instagram_candidates', 'mhphotos_site_photos',
-    'mhphotos_reel_jobs')
+    'mhphotos_reel_jobs', 'spot_photos')
+# Admin-only data written to the MHPhotos app (gear statistics, own photos per spot, an UNPUBLISHED blog draft):
+# offered with an MHPhotos site and writes; nothing here becomes public.
+MHPHOTOS_WRITE_TOOLS = ('mhphotos_sync_gear_usage', 'mhphotos_sync_spot_photos', 'mhphotos_create_blog_draft')
 # Planning posts that the MHPhotos social queue later publishes on Instagram by itself. Offered only
 # when desktop.json has "allow_instagram": true (and an MHPhotos site); each post is a dry run first.
 INSTAGRAM_TOOLS = ('mhphotos_schedule_instagram', 'mhphotos_cancel_instagram', 'mhphotos_create_reel')
@@ -182,6 +192,7 @@ def register_tools(app, writes=None):
     instagram = mhphotos and os.environ.get(INSTAGRAM_FLAG) == '1'
     files = writes and os.environ.get(FILES_FLAG) == '1'
     names = (READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ()) + (MHPHOTOS_TOOLS if mhphotos else ())
+        + (MHPHOTOS_WRITE_TOOLS if mhphotos and writes else ())
         + (INSTAGRAM_TOOLS if instagram else ()) + (FILES_TOOLS if files else ()))
     for name in names:
         function = export_photos if name == 'export_photos' else getattr(server, name)
@@ -192,7 +203,7 @@ def register_tools(app, writes=None):
             structured_output=False if name in {'get_photo_previews', 'get_contact_sheet', 'mhphotos_instagram_images'} else None,
             annotations=ToolAnnotations(readOnlyHint=reads,
                 destructiveHint=overwrites, idempotentHint=reads,
-                openWorldHint=name in MHPHOTOS_TOOLS or name in INSTAGRAM_TOOLS),
+                openWorldHint=name in MHPHOTOS_TOOLS or name in INSTAGRAM_TOOLS or name in MHPHOTOS_WRITE_TOOLS),
             meta={'securitySchemes': [{'type': 'oauth2', 'scopes': [SCOPE]}]})
 
 

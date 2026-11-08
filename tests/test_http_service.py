@@ -20,6 +20,10 @@ def test_public_tools_only_read_and_local_export():
         'get_develop_settings', 'list_presets', 'list_changes',
         'catalog_audit_start', 'catalog_audit_status', 'catalog_audit_results', 'catalog_audit_cancel',
         'photos_by_date', 'suggest_locations',
+        'catalog_audit_overview', 'catalog_folder_moves', 'archive_candidates', 'presort_status', 'presort_month',
+        'keyword_check_start', 'keyword_check_status', 'keyword_check_results', 'gear_usage', 'trip_outline',
+        'duplicate_folders', 'missing_files_by_drive', 'gps_gaps', 'print_candidates', 'calendar_candidates',
+        'weekly_report',
     }
     for tool in tools:
         assert tool.annotations.destructiveHint is False
