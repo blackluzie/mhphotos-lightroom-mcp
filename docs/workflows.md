@@ -81,7 +81,9 @@ numbered image. Look closely only at the few picks with `get_photo_previews`.
 ## 7. Plan Instagram posts
 `mhphotos_schedule_instagram(caption, scheduled_at, photo_id=...)` (a Lightroom photo) or `inbox_item_id=...` (an
 MHPhotos inbox item, no Lightroom needed) shrinks the photo for Instagram and puts it into the **social queue** of
-the MHPhotos app, the same queue its "Neues Foto" flow uses. **MHPhotos publishes it automatically at that time.**
+the MHPhotos app, the same queue its "Neues Foto" flow uses. By default it waits there as "wartet auf Freigabe" until you
+approve it in *Admin › Social › Warteschlange*; then **MHPhotos publishes it automatically at that time**
+(`needs_approval=false` skips the approval). `mentions=[...]` tags trusted accounts in the picture, `location_name` sets the place.
 Accounts default to `mhphotos`; `malou` and `martin` only when named; `post_type` is `post` or `story`. MHPhotos
 duplicate check runs first. `adjust={...}` applies basic edits to the Instagram copy only (preview them with
 `mhphotos_edit_preview`). Check with `mhphotos_instagram_queue`, cancel in time with `mhphotos_cancel_instagram`.

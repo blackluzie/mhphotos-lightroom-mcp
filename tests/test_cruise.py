@@ -141,7 +141,7 @@ async def test_schedule_validation(app):
 async def test_schedule_from_inbox_dry_run_then_queue(app):
     when = future()
     dry = await server.mhphotos_schedule_instagram("Sonnenuntergang", when, inbox_item_id="lr-1")
-    assert dry["dry_run"] and dry["accounts"] == ["mhphotos"] and dry["posted_automatically"] is True
+    assert dry["dry_run"] and dry["accounts"] == ["mhphotos"] and dry["posted_automatically"] is False and dry["needs_approval"] is True
     assert app.social_uploads == []
     done = await server.mhphotos_schedule_instagram(
         "Sonnenuntergang", when, inbox_item_id="lr-1", adjust={"exposure": 0.3, "crop": "4:5"}, confirm=True
@@ -200,7 +200,7 @@ async def test_hub_error_is_reported(app):
 async def test_queue_listing_and_cancel(app):
     await server.mhphotos_schedule_instagram("Hallo", future(), inbox_item_id="lr-1", confirm=True)
     items = (await server.mhphotos_instagram_queue())["items"]
-    assert items[0]["id"] == "q-0001" and items[0]["status"] == "geplant"
+    assert items[0]["id"] == "q-0001" and items[0]["status"] == "freigabe"
     assert [i["id"] for i in (await server.mhphotos_instagram_queue(status="veroeffentlicht"))["items"]] == ["q-old"]
     dry = await server.mhphotos_cancel_instagram("q-0001")
     assert dry["dry_run"] and len(app.social_queue) == 2
@@ -222,3 +222,32 @@ def test_parse_accounts_and_ids():
         assert publishing.parse_accounts(bad) is None, bad
     assert publishing.parse_accounts("mhphotos,") == ["mhphotos"]  # a trailing comma is harmless
     assert publishing.valid_queue_id("q-1a2b3c4d") and not publishing.valid_queue_id("q-../x")
+
+
+async def test_schedule_waits_for_approval_with_tags_and_place(app):
+    res = await server.mhphotos_schedule_instagram(
+        "Tossa", future(), inbox_item_id="lr-1", mentions=["@costabrava", "tossademar"], location_name="Tossa de Mar",
+        confirm=True)
+    assert res["applied"] and res["needs_approval"] is True and res["mentions"] == ["@costabrava", "@tossademar"]
+    up = app.social_uploads[0]
+    assert up["needsApproval"] == b"true" and up["mentions"] == b"@costabrava @tossademar"
+    assert up["locationName"] == b"Tossa de Mar"
+    assert app.social_queue[-1]["status"] == "freigabe"
+
+
+async def test_schedule_without_approval_publishes_automatically(app):
+    res = await server.mhphotos_schedule_instagram("Direkt", future(), inbox_item_id="lr-1", needs_approval=False, confirm=True)
+    assert res["applied"] and "needsApproval" not in app.social_uploads[0]
+    assert app.social_queue[-1]["status"] == "geplant"
+
+
+async def test_schedule_takes_item_out_again_when_mhphotos_has_no_approval(app):
+    app.approval = False
+    res = await server.mhphotos_schedule_instagram("Alt", future(), inbox_item_id="lr-1", confirm=True)
+    assert res["code"] == "approval_unsupported"
+    assert [r["id"] for r in app.social_queue] == ["q-old"]  # removed again, nothing is posted
+
+
+async def test_schedule_rejects_bad_mentions(app):
+    res = await server.mhphotos_schedule_instagram("x", future(), inbox_item_id="lr-1", mentions=["not a handle!"])
+    assert "mentions" in res["error"]

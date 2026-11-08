@@ -2468,10 +2468,18 @@ async def mhphotos_schedule_instagram(
     post_type: str = "post",
     adjust: dict[str, Any] | None = None,
     allow_duplicate: bool = False,
+    needs_approval: bool = True,
+    mentions: list[str] | None = None,
+    location_name: str | None = None,
     confirm: bool = False,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Queue a photo for Instagram in the MHPhotos social queue (it publishes automatically at that time).
+    """Queue a photo for Instagram in the MHPhotos social queue.
+
+    needs_approval (default true): the item waits as "wartet auf Freigabe" until the owner approves it in the
+    MHPhotos queue (/admin/social/queue); only then it is published at the planned time. needs_approval=false
+    publishes automatically at that time. mentions: Instagram accounts to tag in the picture (post only; only
+    accounts on the MHPhotos list of trusted accounts are tagged). location_name: place for the location tag.
 
     Source: either a Lightroom photo (photo_id, needs the Lightroom bridge and MHPHOTOS_EXPORT_DIR),
     a carousel of 2-10 Lightroom photos (photo_ids, in this order; post only) or an MHPhotos inbox
@@ -2506,6 +2514,12 @@ async def mhphotos_schedule_instagram(
     edits, err = imaging.validate_adjust(adjust)
     if err:
         return {"error": err}
+    handles = [str(m).strip().lstrip("@") for m in mentions or [] if str(m).strip()]
+    if len(handles) > 20 or not all(re.fullmatch(r"[A-Za-z0-9._]{1,30}", h) for h in handles):
+        return {"error": "mentions: up to 20 Instagram handles like @mhphotos.de"}
+    location_name = (location_name or "").strip()
+    if len(location_name) > 120:
+        return {"error": "location_name: at most 120 characters"}
     when = _parse_when(scheduled_at)
     if isinstance(when, dict):
         return when
@@ -2557,19 +2571,23 @@ async def mhphotos_schedule_instagram(
         "scheduled_at": when.astimezone(UTC).isoformat(timespec="minutes"),
         "caption": caption,
         "edits": edits or None,
+        "needs_approval": needs_approval,
+        **({"mentions": ["@" + h for h in handles]} if handles else {}),
+        **({"location": location_name} if location_name else {}),
     }
     if dup and not allow_duplicate:
         return {"error": "This photo already looks planned or posted. Pass allow_duplicate=true to queue it anyway.",
                 "code": "duplicate", "duplicate": dup, **plan}
     if not confirm:
         return {
-            "dry_run": True, **plan, "duplicate": dup, "posted_automatically": True,
+            "dry_run": True, **plan, "duplicate": dup, "posted_automatically": not needs_approval,
             "hint": "Nothing was queued. Call again with confirm=true; cancel later with mhphotos_cancel_instagram.",
         }
     approved, how = await gate.approve(
         ctx,
-        f"AUTOMATISCH auf Instagram ({', '.join(names)}, {post_type}) am {when.astimezone().strftime('%d.%m.%Y %H:%M')} "
-        f"veröffentlichen: {label}{f' (Karussell, {len(photo_ids)} Bilder)' if photo_ids else ''} – \"{caption[:80]}\"",
+        ("Zur FREIGABE in die Instagram-Warteschlange" if needs_approval else "AUTOMATISCH auf Instagram") +
+        f" ({', '.join(names)}, {post_type}) am {when.astimezone().strftime('%d.%m.%Y %H:%M')} "
+        f"{'einplanen' if needs_approval else 'veröffentlichen'}: {label}{f' (Karussell, {len(photo_ids)} Bilder)' if photo_ids else ''} – \"{caption[:80]}\"",
     )
     if not approved:
         return gate.refusal(how)
@@ -2602,12 +2620,25 @@ async def mhphotos_schedule_instagram(
     }
     if img_hash:
         fields["imgHash"] = img_hash
+    if needs_approval:
+        fields["needsApproval"] = "true"
+    if handles and post_type == "post":
+        fields["mentions"] = " ".join("@" + h for h in handles)
+    if location_name:
+        fields["locationName"] = location_name
     code, resp = await anyio.to_thread.run_sync(
         lambda: publishing.social_schedule(cfg, f"{Path(label).stem}.jpg", final, fields, extras=extras or None)
     )
     if code != 200 or not resp.get("ok"):
         return _app_error(code, resp)
     ids = resp.get("ids") or [resp.get("id")]
+    if needs_approval and resp.get("status") != "freigabe":
+        # An MHPhotos version without approval would publish this by itself: take it out again at once.
+        for qid in ids:
+            if qid and publishing.valid_queue_id(qid):
+                await anyio.to_thread.run_sync(publishing.social_cancel, cfg, qid)
+        return {"error": "MHPhotos does not support approval yet (update the MHPhotos app); nothing stays queued.",
+                "code": "approval_unsupported", **plan}
     change_id = audit.record(
         "mhphotos_schedule_instagram", lr_ids,
         {**plan, "queue_ids": ids, "inbox_item": inbox_item_id}, approved_by=how,
@@ -2619,7 +2650,7 @@ async def mhphotos_schedule_instagram(
 async def mhphotos_instagram_queue(status: str | None = None, limit: int = 30) -> dict[str, Any]:
     """MHPhotos queue (newest first): scheduled, published and failed items.
 
-    status filter: geplant | veroeffentlicht | fehler.
+    status filter: freigabe (waits for the owner's approval) | geplant | veroeffentlicht | fehler.
     """
     cfg = _app_cfg()
     if isinstance(cfg, dict):

@@ -27,6 +27,7 @@ class FakeMHPhotos:
              "permalink": "https://instagram.com/p/old"},
         ]
         self.social_uploads: list[dict] = []
+        self.approval = True  # False = an MHPhotos version without "wartet auf Freigabe"
         self.duplicate: dict | None = None  # set to simulate "already planned"
         self.duplicate_after: int | None = None
         self.reel_jobs: list[dict] = []
@@ -123,6 +124,7 @@ class FakeMHPhotos:
                     if method == "POST":
                         outer.social_uploads.append(body)
                         accounts = body["accountId"].decode().split(",")
+                        status = "freigabe" if body.get("needsApproval") == b"true" and outer.approval else "geplant"
                         ids = []
                         for acc in accounts:
                             rid = f"q-{len(outer.social_queue):04d}"
@@ -130,9 +132,10 @@ class FakeMHPhotos:
                             outer.social_queue.append({
                                 "id": rid, "account_id": acc, "account_name": acc.title(),
                                 "type": body["type"].decode(), "caption": body["caption"].decode(),
-                                "scheduled_at": body["scheduledAt"].decode(), "status": "geplant",
+                                "scheduled_at": body["scheduledAt"].decode(), "status": status,
                             })
-                        return self._reply(200, {"ok": True, "id": ids[0], **({"ids": ids} if len(ids) > 1 else {})})
+                        return self._reply(200, {"ok": True, "id": ids[0], **({"ids": ids} if len(ids) > 1 else {}),
+                                                 **({"status": status} if outer.approval else {})})
                 if method == "GET" and path == "/api/admin/photos":
                     return self._reply(200, {"photos": outer.site_photos})
                 if path == "/api/admin/reel-jobs":

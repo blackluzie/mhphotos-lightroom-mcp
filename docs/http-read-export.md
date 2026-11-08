@@ -23,8 +23,11 @@ With the site configured the service also offers `mhphotos_instagram_queue`, `mh
 **Instagram planning (opt-in).** `rebuild-mac.sh --mhphotos-url https://<site> --allow-instagram` stores
 `"allow_instagram": true`; the service then offers `mhphotos_schedule_instagram` (single photo or carousel),
 `mhphotos_cancel_instagram` and `mhphotos_create_reel` (orders a reel video, publishes nothing).
-Planned posts are published by the MHPhotos social queue at the planned time without further questions, so every
-plan is a dry run until `confirm=true`, and in claude.ai these two tools should stay on "ask". The consent page
+By default (`needs_approval=true`) a planned post waits as "wartet auf Freigabe" in the MHPhotos queue
+(*Admin › Social › Warteschlange*) and is only published at the planned time after the owner approves it there; with
+`needs_approval=false` the queue publishes it by itself. If the MHPhotos app does not know approval yet, the connector
+takes the item out again at once. Every plan is a dry run until `confirm=true`, and in claude.ai these tools should
+stay on "ask". The consent page
 names this right. `--no-allow-instagram` removes it again.
 
 **Publishing on the site (opt-in).** `rebuild-mac.sh --mhphotos-url https://<site> --allow-publish` stores
