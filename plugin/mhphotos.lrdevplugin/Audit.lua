@@ -16,7 +16,7 @@ local BASE_RAW = { 'uuid', 'path', 'fileSize', 'fileFormat', 'dimensions', 'date
   'isVirtualCopy', 'rating', 'pickStatus' }
 -- Keys that may not exist in every Lightroom version: asked one by one, failures are reported.
 local OPTIONAL_RAW = { 'dateTimeOriginalISO8601', 'keywords', 'colorNameForLabel', 'lastEditTime',
-  'countVirtualCopies', 'isoSpeedRating', 'aperture', 'gps', 'focalLength' }
+  'countVirtualCopies', 'isoSpeedRating', 'aperture', 'gps', 'focalLength', 'croppedDimensions' }
 local FORMATTED = { 'cameraModel', 'cameraSerialNumber' }
 -- asked on their own, so a Lightroom without them still reports camera and serial number (since 0.1.26)
 local OPTIONAL_FORMATTED = { 'lens' }
@@ -185,6 +185,8 @@ function Audit.page(args)
     if type(gps) ~= 'table' or type(gps.latitude) ~= 'number' then gps = nil end
     local lensRow = extraFmt.lens and extraFmt.lens[photo]
     local fl = tonumber(opt('focalLength'))
+    local crop = opt('croppedDimensions')
+    if type(crop) ~= 'table' then crop = {} end
     out.photos[#out.photos + 1] = {
       id = r.uuid,
       path = r.path,
@@ -209,6 +211,9 @@ function Audit.page(args)
       lon = gps and round5(gps.longitude) or nil,
       lens = nonEmpty(lensRow and lensRow.lens),
       fl = fl and fl > 0 and math.floor(fl + 0.5) or nil,
+      -- since 0.1.27: size after cropping (print sizes, calendar: landscape or portrait)
+      cw = crop.width and math.floor(crop.width + 0.5) or nil,
+      ch = crop.height and math.floor(crop.height + 0.5) or nil,
     }
   end
   return out

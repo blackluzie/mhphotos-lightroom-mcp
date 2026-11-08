@@ -3376,6 +3376,325 @@ async def mhphotos_create_blog_draft(
             "published": False, "next_step": "Review and publish it in MHPhotos › Admin › Blog."}
 
 
+# ---------------------------------------------------------------- duplicates, missing files, GPS gaps (0.1.27)
+@mcp.tool()
+async def duplicate_folders(limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    """Double imports: the verified duplicates of the last catalog check per folder pair (copy folder -> folder
+    with the original), biggest first. whole_folder=true: every photo of the copy folder is a duplicate, so the
+    whole folder can be removed in Lightroom (Folders panel) after a look. Put the copies into review collections
+    with catalog_audit_collections(kind="duplicates"). Read-only.
+    """
+    saved = catalog_audit.load_result()
+    if not saved:
+        return {"error": SNAPSHOT_HINT, "code": "no_result"}
+    snap = catalog_audit.load_snapshot()
+    rows = catalog_insights.duplicate_folders(saved, (snap or {}).get("photos"))
+    for r in rows:
+        r.pop("photo_ids")
+    return {"checked_at": saved.get("finished_at"), "copy_folders": len({r["copy_folder"] for r in rows}),
+            "whole_folders": sum(1 for r in rows if r.get("whole_folder")),
+            "photos": sum(r["photos"] for r in rows), "gb": round(sum(r["gb"] for r in rows), 2),
+            "pairs": _page(rows, limit, offset)}
+
+
+@mcp.tool()
+async def missing_files_by_drive() -> dict[str, Any]:
+    """Photos whose original file Lightroom cannot find, per drive and folder: offline (drive not connected,
+    nothing lost) or missing (drive connected, file gone or moved outside Lightroom). Needs a catalog check with
+    check_files=true. Read-only.
+    """
+    saved = catalog_audit.load_result()
+    if not saved:
+        return {"error": SNAPSHOT_HINT, "code": "no_result"}
+    snap = catalog_audit.load_snapshot()
+    res = await anyio.to_thread.run_sync(
+        lambda: catalog_insights.missing_by_drive(saved, (snap or {}).get("photos"), os.path.isdir))
+    for d in res["drives"]:
+        d.pop("photo_ids")
+        d["folders"] = d["folders"][:30]
+    if not res["checked_files"]:
+        res["hint"] = "The last check did not look at the files: run catalog_audit_start(check_files=true)."
+    return {"checked_at": saved.get("finished_at"), **res}
+
+
+_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _gps_args(captured_from: str | None, captured_to: str | None, window_minutes: int) -> str | None:
+    if any(d and not _DAY.match(d) for d in (captured_from, captured_to)):
+        return "captured_from/captured_to must be YYYY-MM-DD"
+    if not 1 <= window_minutes <= 180:
+        return "window_minutes must be 1-180"
+    return None
+
+
+@mcp.tool()
+async def gps_gaps(captured_from: str | None = None, captured_to: str | None = None, window_minutes: int = 30,
+                   limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    """Photos without GPS that were taken at most window_minutes before or after a photo with GPS (any camera,
+    e.g. the phone): each gets that photo's position as a suggestion, with the distance in minutes. by_month
+    shows where most gaps can be closed. Write them with fill_gps_gaps. Read-only, from the catalog snapshot.
+    """
+    if err := _gps_args(captured_from, captured_to, window_minutes):
+        return {"error": err}
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    res = await anyio.to_thread.run_sync(
+        lambda: catalog_insights.gps_gaps(snap["photos"], window_minutes, captured_from, captured_to))
+    items = res.pop("suggestions")
+    return {**_scope_note(snap), **res, "suggestions": _page(items, limit, offset)}
+
+
+MAX_GPS_FILL = 5000
+
+
+@mcp.tool()
+async def fill_gps_gaps(captured_from: str, captured_to: str, window_minutes: int = 30, max_photos: int = 2000,
+                        confirm: bool = False, ctx: Context | None = None) -> dict[str, Any]:
+    """Write the GPS suggestions of gps_gaps for one date range (at most max_photos, up to 5000): every photo
+    gets the position of the nearest photo with GPS taken within window_minutes. Only photos without GPS are
+    touched; place names are not changed. Check samples with gps_gaps first.
+
+    Dry run unless confirm=true; needs operator opt-in.
+    """
+    if err := _gps_args(captured_from, captured_to, window_minutes):
+        return {"error": err}
+    if not 1 <= max_photos <= MAX_GPS_FILL:
+        return {"error": f"max_photos must be 1-{MAX_GPS_FILL}"}
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    res = await anyio.to_thread.run_sync(
+        lambda: catalog_insights.gps_gaps(snap["photos"], window_minutes, captured_from, captured_to))
+    todo = res["suggestions"][:max_photos]
+    groups = catalog_insights.gps_groups(todo)
+    plan = {"captured_from": captured_from, "captured_to": captured_to, "window_minutes": window_minutes,
+            "photos": len(todo), "positions": len(groups), "more_left": max(0, res["suggestions_total"] - len(todo))}
+    if not todo:
+        return {**plan, "nothing_to_do": True}
+    if not confirm:
+        return {"dry_run": True, **plan, "sample": todo[:10], "hint": "Call again with confirm=true."}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    approved, how = await gate.approve(ctx, f"GPS-Position für {len(todo)} Fotos ({captured_from} bis {captured_to}) "
+                                            "aus Fotos derselben Zeit übernehmen")
+    if not approved:
+        return gate.refusal(how)
+    written, gps_error = 0, None
+    for g in groups:
+        for start in range(0, len(g["photo_ids"]), 200):
+            part = g["photo_ids"][start:start + 200]
+            out = await _run(_adapter.set_location, part, g["lat"], g["lon"], {})
+            if _is_error(out):
+                return {**out, "partly_done": {"photos_written": written}} if written else out
+            if out.get("gps_written") is False:
+                gps_error = out.get("gps_error") or "this Lightroom version does not allow writing GPS"
+                break
+            written += int(out.get("updated") or 0)
+        if gps_error:
+            break
+    result = {"photos_written": written, **({"gps_error": gps_error} if gps_error else {})}
+    change_id = audit.record("fill_gps_gaps", [s["id"] for s in todo[:written]], {"gps_from_neighbours": plan},
+                             approved_by=how, result=result)
+    return {"applied": not gps_error, "change_id": change_id, **plan, **result,
+            "note": "The snapshot still shows the old state until the next catalog check."}
+
+
+# ---------------------------------------------------------------- print candidates, calendar (0.1.27)
+def _snapshot_photos() -> list[dict[str, Any]] | dict[str, Any]:
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+    photos = snap["photos"]
+    if photos and not any(p.get("w") or p.get("cw") for p in photos[:5000]):
+        return {"error": "The catalog snapshot has no image sizes yet (plug-in 0.1.27+): run catalog_audit_start "
+                         "without year again.", "code": "old_snapshot"}
+    return photos
+
+
+@mcp.tool()
+async def print_candidates(min_rating: int = 4, min_size: str = "45×30", limit: int = 50,
+                           offset: int = 0) -> dict[str, Any]:
+    """Photos good enough for a wall print: rated min_rating+, not rejected, with enough pixels after cropping
+    for at least min_size cm (30×20, 45×30, 60×40, 90×60, 120×80 at 150 dpi), grouped by the biggest size they
+    allow, best first. Read-only, from the catalog snapshot (plug-in 0.1.27+).
+    """
+    if not 1 <= min_rating <= 5:
+        return {"error": "min_rating must be 1-5"}
+    photos = _snapshot_photos()
+    if _is_error(photos):
+        return photos
+    try:
+        res = catalog_insights.print_candidates(photos, min_rating, min_size)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    for g in res["groups"]:
+        g["items"] = _page(g["items"], limit, offset)
+    return res
+
+
+@mcp.tool()
+async def print_candidates_collections(min_rating: int = 4, min_size: str = "45×30", confirm: bool = False,
+                                       ctx: Context | None = None) -> dict[str, Any]:
+    """Review collections "Druck-Kandidaten › <max size> › <stars>★" with the print candidates. Additive.
+
+    Dry run unless confirm=true; needs operator opt-in.
+    """
+    if not 1 <= min_rating <= 5:
+        return {"error": "min_rating must be 1-5"}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    photos = _snapshot_photos()
+    if _is_error(photos):
+        return photos
+    try:
+        res = catalog_insights.print_candidates(photos, min_rating, min_size)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    groups = []
+    for g in res["groups"]:
+        for stars in range(5, min_rating - 1, -1):
+            ids = [i["id"] for i in g["items"] if i.get("r") == stars]
+            groups.append({"set": f"bis {g['max_size']} cm", "name": f"{stars}★", "photo_ids": ids})
+    return await _review_collections("Druck-Kandidaten", groups, confirm, ctx, "print_candidates_collections",
+                                     {"min_rating": min_rating, "min_size": min_size})
+
+
+def _calendar_args(year: int, per_month: int, min_rating: int) -> str | None:
+    if not 2000 <= year <= 2100:
+        return "year must be 2000-2100"
+    if not 1 <= per_month <= 30:
+        return "per_month must be 1-30"
+    if not 1 <= min_rating <= 5:
+        return "min_rating must be 1-5"
+    return None
+
+
+@mcp.tool()
+async def calendar_candidates(year: int = 2027, per_month: int = 8, min_rating: int = 4,
+                              orientation: str = "landscape", min_size: str = "45×30") -> dict[str, Any]:
+    """Suggestions for a photo calendar: for each of the 12 months the best photos taken in that month (any
+    year), rated min_rating+, in the wanted orientation (landscape, portrait, any) and big enough for min_size
+    (an A3 calendar needs about 45×30). Variety: one photo per day, at most two per year and place where
+    possible. Look at them with get_contact_sheet (6 per sheet), then calendar_collections. Read-only.
+    """
+    if err := _calendar_args(year, per_month, min_rating):
+        return {"error": err}
+    photos = _snapshot_photos()
+    if _is_error(photos):
+        return photos
+    try:
+        res = catalog_insights.calendar_candidates(photos, per_month, min_rating, orientation, min_size)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    return {"calendar": year, **res}
+
+
+@mcp.tool()
+async def calendar_collections(year: int = 2027, per_month: int = 8, min_rating: int = 4,
+                               orientation: str = "landscape", min_size: str = "45×30",
+                               photo_ids_by_month: dict[str, list[str]] | None = None, confirm: bool = False,
+                               ctx: Context | None = None) -> dict[str, Any]:
+    """Collections "Kalender <year> › Vorschläge › 01 Januar" … "12 Dezember" with the calendar suggestions, or
+    with your own pick per month (photo_ids_by_month, keys "1"-"12"). Additive; pick the final photo per month in
+    Lightroom. Dry run unless confirm=true; needs operator opt-in.
+    """
+    if err := _calendar_args(year, per_month, min_rating):
+        return {"error": err}
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    names = catalog_insights.MONTHS_DE
+    if photo_ids_by_month:
+        if any(k not in {str(m) for m in range(1, 13)} for k in photo_ids_by_month) or \
+                any(not isinstance(v, list) or len(v) > 100 for v in photo_ids_by_month.values()):
+            return {"error": "photo_ids_by_month: keys '1'-'12', at most 100 ids each"}
+        by_month = {int(k): list(v) for k, v in photo_ids_by_month.items()}
+    else:
+        photos = _snapshot_photos()
+        if _is_error(photos):
+            return photos
+        try:
+            res = catalog_insights.calendar_candidates(photos, per_month, min_rating, orientation, min_size)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        by_month = {m["month"]: [s["id"] for s in m["suggestions"]] for m in res["months"]}
+    groups = [{"set": "Vorschläge", "name": f"{m:02d} {names[m - 1]}", "photo_ids": ids}
+              for m, ids in sorted(by_month.items())]
+    return await _review_collections(f"Kalender {year}", groups, confirm, ctx, "calendar_collections",
+                                     {"year": year, "own_pick": bool(photo_ids_by_month)})
+
+
+# ---------------------------------------------------------------- weekly report (0.1.27)
+def _item_time(item: dict[str, Any]) -> str:
+    for key in ("publishedAt", "approvedAt", "updatedAt", "createdAt", "uploadedAt"):
+        if item.get(key):
+            return str(item[key])
+    return ""
+
+
+@mcp.tool()
+async def weekly_report(days: int = 7) -> dict[str, Any]:
+    """A short report for the last days (default 7): new photos in Lightroom (by capture date) and how many are
+    still unreviewed, the unreviewed backlog of the whole catalog, what went online on mhphotos.de and Instagram,
+    and the spots without a good own photo. Each part that cannot be read says why. Read-only.
+    """
+    if not 1 <= days <= 62:
+        return {"error": "days must be 1-62"}
+    today = datetime.now().date()
+    since = today - timedelta(days=days - 1)
+    out: dict[str, Any] = {"from": since.isoformat(), "to": today.isoformat()}
+    recs: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        page = await _run(_adapter.photos_by_date, since.isoformat(), today.isoformat(), offset, 2000, offset == 0)
+        if _is_error(page):
+            out["new_photos"] = {"error": page.get("error")}
+            break
+        recs += page.get("photos") or []
+        nxt = int(page.get("next_offset") or 0)
+        if nxt <= offset or nxt >= int(page.get("total") or 0):
+            break
+        offset = nxt
+    if "new_photos" not in out:
+        photos = [r for r in recs if not presort.is_video(r)]
+        per_day: dict[str, int] = {}
+        for r in photos:
+            per_day[str(r.get("t") or "")[:10]] = per_day.get(str(r.get("t") or "")[:10], 0) + 1
+        out["new_photos"] = {"photos": len(photos), "videos": len(recs) - len(photos),
+                             "unreviewed": sum(1 for r in photos if presort.is_unreviewed(r)),
+                             "rated_4_plus": sum(1 for r in photos if (r.get("r") or 0) >= 4),
+                             "busiest_days": sorted(per_day.items(), key=lambda x: -x[1])[:5]}
+    snap = catalog_audit.load_snapshot()
+    if snap:
+        backlog = presort.unreviewed_by_month(snap["photos"])
+        out["backlog"] = {"unreviewed_total": sum(backlog.values()), "as_of": snap.get("finished_at"),
+                          "next_months": presort.next_months(presort.load_progress(), backlog, 3)}
+    else:
+        out["backlog"] = {"error": SNAPSHOT_HINT}
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        out["online"] = {"error": cfg.get("error")}
+    else:
+        code, data = await anyio.to_thread.run_sync(publishing.inbox_items, cfg)
+        if code != 200:
+            out["online"] = _app_error(code, data)
+        else:
+            recent = [i for i in data.get("items", []) if _item_time(i)[:10] >= since.isoformat()]
+            out["online"] = {"inbox_new": len(recent),
+                             "on_homepage": sum(1 for i in recent if i.get("status") == "uebernommen"),
+                             "on_instagram": sum(1 for i in recent if i.get("instagramId")),
+                             "waiting": sum(1 for i in data.get("items", []) if i.get("status") == "wartet")}
+        spots = await _spot_matches(300, 4)
+        if _is_error(spots):
+            out["spots"] = {"error": spots.get("error")}
+        else:
+            missing = spots.get("spots_without_good_own_photo") or []
+            out["spots"] = {"without_good_own_photo": len(missing),
+                            "ideas": [s.get("name") for s in missing[:5]]}
+    return out
+
+
 # ---------------------------------------------------------------- toolsets
 # MHPHOTOS_TOOLSETS="read,develop" limits which tools are offered (fewer tools = fewer tokens,
 # smaller blast radius). Default: all. "read" is always on.
@@ -3388,6 +3707,8 @@ TOOLSETS: dict[str, set[str]] = {
         "photos_by_date", "suggest_locations", "list_webhooks",
         "catalog_audit_overview", "catalog_folder_moves", "archive_candidates", "presort_status", "presort_month",
         "keyword_check_start", "keyword_check_status", "keyword_check_results", "gear_usage", "trip_outline",
+        "duplicate_folders", "missing_files_by_drive", "gps_gaps", "print_candidates", "calendar_candidates",
+        "weekly_report",
     },
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
@@ -3395,7 +3716,7 @@ TOOLSETS: dict[str, set[str]] = {
         "set_custom_metadata", "send_webhook", "add_to_collection", "export_photos", "undo_last_change",
         "catalog_audit_collections", "set_location", "rotate_photos", "write_name_dates_to_files",
         "archive_candidates_collections", "presort_apply", "merge_keywords", "mark_online_in_lightroom",
-        "spot_photos_collections",
+        "spot_photos_collections", "fill_gps_gaps", "print_candidates_collections", "calendar_collections",
     },
     "develop": {
         "apply_preset", "apply_develop_settings", "create_preset", "sync_develop_settings",

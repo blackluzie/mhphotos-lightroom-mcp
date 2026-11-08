@@ -288,3 +288,37 @@ numbers on the Ausrüstung admin page.
    km from GPS, map link, best photos, and a Markdown draft with placeholders.
 2. Write the text with the owner (what happened each day), send the best photos to the inbox (`send_to_mhphotos_inbox`).
 3. `mhphotos_create_blog_draft(title, content=…, tags=[…], confirm=true)` saves it unpublished in Admin › Blog.
+
+## 28. Double imports per folder
+After a catalog check over the whole catalog, `duplicate_folders()` lists the verified duplicates per folder pair (copy
+folder → folder with the original), biggest first. `whole_folder=true` means the copy folder holds nothing else: look at it
+once in Lightroom and remove the folder there. Review collections for the single copies:
+`catalog_audit_collections(kind="duplicates")`.
+
+## 29. Missing and offline files
+`catalog_audit_start(check_files=true)`, then `missing_files_by_drive()`: per drive `offline` (not connected, nothing lost:
+connect it) or `missing` (connected, file gone or moved outside Lightroom: *Library > Find Missing Photos*), with the folders
+and whether a whole folder is affected.
+
+## 30. Close GPS gaps
+1. `gps_gaps(captured_from, captured_to, window_minutes=30)`: photos without GPS taken close to a photo with GPS (often the
+   phone), with the minutes between them; `by_month` shows where most gaps are.
+2. Look at a few samples, then `fill_gps_gaps(captured_from, captured_to, confirm=true)` (at most 5000 photos per call).
+   Only photos without GPS are written; place names stay as they are (`suggest_locations` for those).
+
+## 31. Print candidates (wall art)
+`print_candidates(min_rating=4, min_size="45×30")`: rated photos with enough pixels after cropping, grouped by the biggest
+size (30×20 … 120×80 cm at 150 dpi). `print_candidates_collections(confirm=true)` fills "Druck-Kandidaten › bis <size> cm ›
+5★/4★". Needs a catalog snapshot from plug-in 0.1.27+ (image size after cropping).
+
+## 32. Photo calendar
+1. `calendar_candidates(year=2027, per_month=8, orientation="landscape", min_size="45×30")`: per month the best photos taken
+   in that month (any year), one per day, spread over years and places; `months_short` names months with too few.
+2. Look at them with `get_contact_sheet` (6 per sheet) together with the owner.
+3. `calendar_collections(year=2027, confirm=true)` fills "Kalender 2027 › Vorschläge › 01 Januar … 12 Dezember", or with the
+   final pick `photo_ids_by_month={"1": [...], ...}`. The final photo per month is chosen in Lightroom.
+
+## 33. Weekly report
+`weekly_report(days=7)`: new photos (and how many are unreviewed), the unreviewed backlog with the next months for
+pre-sorting, what went online on mhphotos.de/Instagram, inbox items waiting, spots without a good own photo. Meant for a
+scheduled run every Monday; each part that cannot be read says why.

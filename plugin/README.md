@@ -66,6 +66,8 @@ not yet checked, or checked with a note:
       lenses (the `lens`/`gps`/`focalLength` keys are not in `unsupported_keys`)
 - [ ] 0.1.26: `keyword_check_start` finishes; `merge_keywords` on a test keyword moves its photos, the emptied keyword goes
       with *Metadata > Purge Unused Keywords*
+- [ ] 0.1.27: after `catalog_audit_start()` `print_candidates` answers (no `old_snapshot`): `croppedDimensions` is not in
+      `unsupported_keys`, a cropped photo shows its smaller size
 - [x] `get_contact_sheet` with 6 photos: one numbered image
 - [ ] `list_collections(include_counts=true)` counts match; without it the call is fast
 - [ ] `apply_preset` (dry run, then confirm) on a test photo: preset visible in Develop, one history step "MHPhotos…", undoable

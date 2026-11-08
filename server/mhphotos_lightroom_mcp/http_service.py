@@ -25,6 +25,8 @@ READ_TOOLS = (
     'photos_by_date', 'suggest_locations',
     'catalog_audit_overview', 'catalog_folder_moves', 'archive_candidates', 'presort_status', 'presort_month',
     'keyword_check_start', 'keyword_check_status', 'keyword_check_results', 'gear_usage', 'trip_outline',
+    'duplicate_folders', 'missing_files_by_drive', 'gps_gaps', 'print_candidates', 'calendar_candidates',
+    'weekly_report',
 )
 # Catalog edits, offered only when the operator enabled them (desktop.json "allow_writes").
 # Nothing here deletes photos or publishes; ratings, flags, labels, titles and keywords are undoable,
@@ -37,14 +39,14 @@ WRITE_TOOLS = (
     'apply_preset', 'apply_develop_settings', 'sync_develop_settings', 'create_preset', 'crop_to_aspect',
     'catalog_audit_collections', 'set_location', 'rotate_photos',
     'archive_candidates_collections', 'presort_apply', 'merge_keywords', 'mark_online_in_lightroom',
-    'spot_photos_collections',
+    'spot_photos_collections', 'fill_gps_gaps', 'print_candidates_collections', 'calendar_collections',
 )
 # status of a running create_virtual_copies job: only useful with writes, reads nothing but the plug-in's memory
 STATUS_TOOLS = {'virtual_copy_job'}
 ADDITIVE_TOOLS = STATUS_TOOLS | {'create_collection', 'move_collection', 'create_smart_collection', 'create_keyword', 'import_photo',
     'build_smart_previews', 'add_to_collection', 'create_virtual_copies', 'create_preset', 'add_keywords',
     'catalog_audit_collections', 'archive_candidates_collections', 'presort_apply', 'mark_online_in_lightroom',
-    'spot_photos_collections'}
+    'spot_photos_collections', 'print_candidates_collections', 'calendar_collections'}
 WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
 # Read-only views of the MHPhotos app (Instagram library, inbox), offered when desktop.json
 # names the MHPhotos site ("mhphotos_url"); the admin token stays in the macOS Keychain.
