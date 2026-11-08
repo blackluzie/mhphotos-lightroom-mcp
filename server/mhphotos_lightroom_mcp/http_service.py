@@ -52,13 +52,18 @@ WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
 # names the MHPhotos site ("mhphotos_url"); the admin token stays in the macOS Keychain.
 MHPHOTOS_TOOLS = ('mhphotos_instagram_posts', 'mhphotos_instagram_images', 'mhphotos_inbox',
     'mhphotos_instagram_queue', 'mhphotos_best_times', 'instagram_candidates', 'mhphotos_site_photos',
-    'mhphotos_reel_jobs', 'spot_photos')
+    'mhphotos_reel_jobs', 'spot_photos', 'mhphotos_comments', 'mhphotos_friend_posts', 'mhphotos_friends')
+# Notes in the social hub that post nothing: a new AI reply draft, a watched post marked done/ignored,
+# whether someone is a close friend.
+COMMENT_DRAFT_TOOLS = ('mhphotos_comment_draft', 'mhphotos_friend_post', 'mhphotos_set_friend')
 # Admin-only data written to the MHPhotos app (gear statistics, own photos per spot, an UNPUBLISHED blog draft):
 # offered with an MHPhotos site and writes; nothing here becomes public.
 MHPHOTOS_WRITE_TOOLS = ('mhphotos_sync_gear_usage', 'mhphotos_sync_spot_photos', 'mhphotos_create_blog_draft')
 # Planning posts that the MHPhotos social queue later publishes on Instagram by itself. Offered only
 # when desktop.json has "allow_instagram": true (and an MHPhotos site); each post is a dry run first.
-INSTAGRAM_TOOLS = ('mhphotos_schedule_instagram', 'mhphotos_cancel_instagram', 'mhphotos_create_reel')
+# mhphotos_comment_respond posts a reply / sets a heart under a comment, visibly; dry run until confirm=true.
+INSTAGRAM_TOOLS = ('mhphotos_schedule_instagram', 'mhphotos_cancel_instagram', 'mhphotos_create_reel',
+    'mhphotos_comment_respond')
 INSTAGRAM_FLAG = 'MHPHOTOS_HTTP_INSTAGRAM'
 # Writing a capture time into the JPEG files themselves (exiftool, with backups). Offered only when
 # desktop.json has "allow_file_edits": true together with "allow_writes": true.
@@ -191,7 +196,7 @@ def register_tools(app, writes=None):
     mhphotos = bool(os.environ.get('MHPHOTOS_INBOX_URL'))
     instagram = mhphotos and os.environ.get(INSTAGRAM_FLAG) == '1'
     files = writes and os.environ.get(FILES_FLAG) == '1'
-    names = (READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ()) + (MHPHOTOS_TOOLS if mhphotos else ())
+    names = (READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ()) + (MHPHOTOS_TOOLS + COMMENT_DRAFT_TOOLS if mhphotos else ())
         + (MHPHOTOS_WRITE_TOOLS if mhphotos and writes else ())
         + (INSTAGRAM_TOOLS if instagram else ()) + (FILES_TOOLS if files else ()))
     for name in names:
@@ -203,7 +208,8 @@ def register_tools(app, writes=None):
             structured_output=False if name in {'get_photo_previews', 'get_contact_sheet', 'mhphotos_instagram_images'} else None,
             annotations=ToolAnnotations(readOnlyHint=reads,
                 destructiveHint=overwrites, idempotentHint=reads,
-                openWorldHint=name in MHPHOTOS_TOOLS or name in INSTAGRAM_TOOLS or name in MHPHOTOS_WRITE_TOOLS),
+                openWorldHint=name in MHPHOTOS_TOOLS or name in INSTAGRAM_TOOLS or name in MHPHOTOS_WRITE_TOOLS
+                or name in COMMENT_DRAFT_TOOLS),
             meta={'securitySchemes': [{'type': 'oauth2', 'scopes': [SCOPE]}]})
 
 
