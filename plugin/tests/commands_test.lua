@@ -426,6 +426,7 @@ fakeCatalog.createVirtualCopies = origVC
 p1.raw.path = '/Volumes/NAS/Fotos/2001/2001-01/2001-01-01/IMG_1.dng'
 p1.raw.fileSize = 1234; p1.raw.fileFormat = 'DNG'; p1.raw.dimensions = { width = 6000, height = 4000 }
 p1.raw.lastEditTime = 5; p1.raw.colorNameForLabel = 'grey'
+p1.raw.croppedDimensions = { width = 5400.4, height = 3600 }
 p1.raw.rating = 5; p1.raw.pickStatus = 1; p1.raw.isVirtualCopy = nil
 p1.raw.keywords = { { getName = function() return 'a' end }, { getName = function() return 'b' end } }
 p2.raw.rating = 0; p2.raw.pickStatus = 0
@@ -445,6 +446,7 @@ local a2 = Commands.run('audit_page', { offset = 1, limit = 1 }).photos[1]
 eq(a2.id, 'u2'); eq(a2.t, '2026-10-14T00:30:00', 'wall clock from the ISO string, not UTC'); eq(a2.r, nil)
 eq(a2.label, 'red'); eq(a2.edited, nil); eq(a2.pick, nil); eq(a2.exif, nil, 'no exposure data')
 eq(a2.lat, nil); eq(a2.lens, nil); eq(a2.fl, nil)
+eq(a1.cw, 5400); eq(a1.ch, 3600, 'size after cropping since 0.1.27'); eq(a2.cw, nil)
 local past = Commands.run('audit_page', { offset = 50, limit = 10 })
 eq(#past.photos, 0); eq(past.next_offset, 50)
 eq(#Commands.run('audit_page', { limit = 99999 }).photos, #photos, 'limit is capped, not rejected')

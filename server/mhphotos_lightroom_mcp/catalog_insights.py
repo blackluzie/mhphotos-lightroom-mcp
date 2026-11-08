@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import math
 import re
+from bisect import bisect_left
 from collections import Counter, defaultdict
-from datetime import date
+from collections.abc import Callable
+from datetime import date, datetime
+from pathlib import PurePosixPath
 from typing import Any
 
 from .catalog_audit import folder_dates
@@ -325,3 +328,251 @@ def spot_matches(photos: list[dict[str, Any]], spots: list[dict[str, Any]], radi
     return {"radius_m": radius_m, "min_rating": min_rating, "photos_with_gps": with_gps, "spots": len(spots),
             "spots_without_position": skipped, "spots_with_own_photos": found,
             "spots_without_good_own_photo": missing}
+
+
+# ---------------------------------------------------------------- duplicate imports per folder
+def duplicate_folders(result: dict[str, Any], photos: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Verified duplicates of the last check per folder pair: a folder whose photos are copies of another folder
+    (a card imported twice, a backup imported again). whole_folder=True: every photo of the folder is a copy, so
+    the folder can go as a whole after a look in Lightroom."""
+    full = {p["id"]: p.get("folder") for p in photos or [] if p.get("id")}
+    in_folder: Counter[str] = Counter(p.get("folder") for p in photos or [] if p.get("folder"))
+    pairs: dict[tuple[str, str], dict[str, Any]] = {}
+    for g in (result.get("findings") or {}).get("duplicates") or []:
+        keep = g.get("keep") or {}
+        kf = full.get(keep.get("id")) or keep.get("folder") or ""
+        for r in g.get("remove") or []:
+            rf = full.get(r.get("id")) or r.get("folder") or ""
+            row = pairs.setdefault((rf, kf), {"copy_folder": rf, "original_folder": kf, "photos": 0, "bytes": 0,
+                                              "photo_ids": []})
+            row["photos"] += 1
+            row["bytes"] += int(r.get("bytes") or 0)
+            row["photo_ids"].append(r["id"])
+    out = []
+    for row in pairs.values():
+        total = in_folder.get(row["copy_folder"])
+        row["gb"] = _gb(row.pop("bytes"))
+        if total:
+            row["photos_in_folder"] = total
+            row["whole_folder"] = row["photos"] >= total
+        row["same_folder"] = row["copy_folder"] == row["original_folder"]
+        out.append(row)
+    out.sort(key=lambda r: (-r["photos"], r["copy_folder"]))
+    return out
+
+
+# ---------------------------------------------------------------- missing and offline files
+def volume_of(folder: str) -> str:
+    """'/Volumes/NAS/Fotos/2020' -> '/Volumes/NAS'; other paths belong to the Mac's own disk ('/')."""
+    parts = PurePosixPath(folder or "/").parts
+    if len(parts) >= 3 and parts[1] == "Volumes":
+        return f"/Volumes/{parts[2]}"
+    if len(parts) >= 3 and parts[1] == "mnt":  # Linux test machines
+        return f"/mnt/{parts[2]}"
+    return "/"
+
+
+def missing_by_drive(result: dict[str, Any], photos: list[dict[str, Any]] | None,
+                     is_dir: Callable[[str], bool]) -> dict[str, Any]:
+    """missing_file findings per drive and folder. A drive that is not mounted is offline (connect it, nothing
+    is lost); on a mounted drive the files are really gone or were moved outside Lightroom."""
+    full = {p["id"]: p.get("folder") for p in photos or [] if p.get("id")}
+    in_folder: Counter[str] = Counter(p.get("folder") for p in photos or [] if p.get("folder"))
+    drives: dict[str, dict[str, Any]] = {}
+    for f in (result.get("findings") or {}).get("missing_file") or []:
+        folder = full.get(f.get("id")) or f.get("folder") or ""
+        vol = volume_of(folder)
+        d = drives.setdefault(vol, {"drive": vol, "online": is_dir(vol), "photos": 0, "folders": Counter(),
+                                    "photo_ids": []})
+        d["photos"] += 1
+        d["folders"][folder] += 1
+        d["photo_ids"].append(f["id"])
+    out = []
+    for d in drives.values():
+        folders = [{"folder": k, "missing": n, **({"photos_in_folder": in_folder[k], "whole_folder": n >= in_folder[k]}
+                                                  if in_folder.get(k) else {})}
+                   for k, n in d.pop("folders").most_common()]
+        d["status"] = "missing" if d["online"] else "offline"
+        d["hint"] = ("Laufwerk ist angeschlossen: Dateien fehlen oder wurden außerhalb von Lightroom verschoben "
+                     "(Lightroom: Ordner suchen / fehlende Fotos suchen)." if d["online"] else
+                     "Laufwerk ist nicht angeschlossen: anschließen, dann ist nichts verloren.")
+        d["folder_count"] = len(folders)
+        d["folders"] = folders
+        out.append(d)
+    out.sort(key=lambda d: (d["online"], -d["photos"]))
+    return {"checked_files": bool(result.get("check_files")), "drives": out,
+            "missing_total": sum(d["photos"] for d in out)}
+
+
+# ---------------------------------------------------------------- GPS gaps
+def _ts(p: dict[str, Any]) -> float | None:
+    try:
+        return datetime.fromisoformat(str(p.get("t") or "")[:19]).timestamp()
+    except ValueError:
+        return None
+
+
+def gps_gaps(photos: list[dict[str, Any]], window_minutes: int = 30, captured_from: str | None = None,
+             captured_to: str | None = None) -> dict[str, Any]:
+    """Photos without GPS that were taken at most window_minutes before or after a photo with GPS (any camera,
+    e.g. the phone) get that photo's place as a suggestion. Videos are left out."""
+    def in_range(p: dict[str, Any]) -> bool:
+        day = str(p.get("t") or "")[:10]
+        return bool(day) and (not captured_from or day >= captured_from) and (not captured_to or day <= captured_to)
+
+    with_gps = sorted(((t, p) for p in photos if p.get("lat") is not None and p.get("lon") is not None
+                       and (t := _ts(p)) is not None), key=lambda x: x[0])
+    times = [t for t, _ in with_gps]
+    window = window_minutes * 60
+    suggestions, without = [], 0
+    for p in photos:
+        if p.get("lat") is not None or not in_range(p) or (p.get("fmt") or "").upper() == "VIDEO":
+            continue
+        without += 1
+        t = _ts(p)
+        if t is None or not times:
+            continue
+        i = bisect_left(times, t)
+        best = None
+        for j in (i - 1, i):
+            if 0 <= j < len(times) and abs(times[j] - t) <= window and (best is None or abs(times[j] - t) < abs(times[best] - t)):
+                best = j
+        if best is None:
+            continue
+        src = with_gps[best][1]
+        suggestions.append({"id": p["id"], "file": p.get("file"), "t": p.get("t"), "cam": p.get("cam"),
+                            "lat": src["lat"], "lon": src["lon"], "from_id": src["id"], "from_file": src.get("file"),
+                            "from_cam": src.get("cam"), "minutes_apart": round(abs(times[best] - t) / 60, 1)})
+    by_month: Counter[str] = Counter(str(s["t"])[:7] for s in suggestions)
+    return {"without_gps": without, "suggestions_total": len(suggestions), "by_month": dict(sorted(by_month.items())),
+            "suggestions": suggestions}
+
+
+def gps_groups(suggestions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One set_location call per coordinate."""
+    groups: dict[tuple[float, float], list[str]] = defaultdict(list)
+    for s in suggestions:
+        groups[(s["lat"], s["lon"])].append(s["id"])
+    return [{"lat": lat, "lon": lon, "photo_ids": ids} for (lat, lon), ids in groups.items()]
+
+
+# ---------------------------------------------------------------- print candidates
+# common wall-art sizes (long edge in cm) and the pixels they need at 150 dpi, enough for viewing distance
+PRINT_SIZES = ((120, "120×80"), (90, "90×60"), (60, "60×40"), (45, "45×30"), (30, "30×20"))
+PRINT_DPI = 150
+
+
+def edge_px(p: dict[str, Any]) -> tuple[int, int]:
+    """(long, short) edge after cropping, else of the original."""
+    w, h = p.get("cw") or p.get("w") or 0, p.get("ch") or p.get("h") or 0
+    return (max(w, h), min(w, h))
+
+
+def max_print(p: dict[str, Any], dpi: int = PRINT_DPI) -> str | None:
+    long_edge = edge_px(p)[0]
+    for cm, label in PRINT_SIZES:
+        if long_edge >= cm / 2.54 * dpi:
+            return label
+    return None
+
+
+def _score(p: dict[str, Any]) -> float:
+    return (p.get("r") or 0) * 10 + (2 if p.get("pick") == 1 else 0) + (1 if p.get("edited") else 0) + \
+        min(p.get("kw") or 0, 5) * 0.2
+
+
+def print_candidates(photos: list[dict[str, Any]], min_rating: int = 4, min_size: str = "45×30",
+                     dpi: int = PRINT_DPI) -> dict[str, Any]:
+    """Rated photos (min_rating+, not rejected, no videos) with enough pixels after cropping for a wall print of
+    at least min_size, grouped by the biggest size they allow."""
+    labels = [label for _, label in PRINT_SIZES]
+    if min_size not in labels:
+        raise ValueError(f"min_size must be one of {', '.join(labels)}")
+    allowed = labels[: labels.index(min_size) + 1]
+    by_size: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    too_small = 0
+    for p in photos:
+        if (p.get("r") or 0) < min_rating or p.get("pick") == -1 or (p.get("fmt") or "").upper() == "VIDEO":
+            continue
+        size = max_print(p, dpi)
+        if size not in allowed:
+            too_small += 1
+            continue
+        long_edge, short_edge = edge_px(p)
+        by_size[size].append({"id": p["id"], "file": p.get("file"), "t": p.get("t"), "r": p.get("r"),
+                              "px": f"{long_edge}×{short_edge}", "cropped": bool(p.get("cw")),
+                              "orientation": _orientation(p), "_score": _score(p)})
+    groups = []
+    for label in allowed:
+        items = sorted(by_size.get(label, []), key=lambda x: (-x["_score"], str(x["t"])))
+        for x in items:
+            x.pop("_score")
+        groups.append({"max_size": label, "photos": len(items), "items": items})
+    return {"min_rating": min_rating, "dpi": dpi, "too_small": too_small,
+            "candidates": sum(g["photos"] for g in groups), "groups": groups}
+
+
+def _orientation(p: dict[str, Any]) -> str:
+    w, h = p.get("cw") or p.get("w") or 0, p.get("ch") or p.get("h") or 0
+    if not w or not h:
+        return "unknown"
+    return "landscape" if w > h * 1.05 else "portrait" if h > w * 1.05 else "square"
+
+
+# ---------------------------------------------------------------- photo calendar
+MONTHS_DE = ("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober",
+             "November", "Dezember")
+
+
+def calendar_candidates(photos: list[dict[str, Any]], per_month: int = 8, min_rating: int = 4,
+                        orientation: str = "landscape", min_size: str = "45×30",
+                        exclude_ids: set[str] | None = None) -> dict[str, Any]:
+    """Suggestions for a 12-month photo calendar: per month the best photos taken in that month (any year), with
+    variety (at most one photo per day, then spread over years and places). orientation: landscape, portrait
+    or any. min_size: the print must allow at least this size (A3 calendar ≈ 45×30)."""
+    labels = [label for _, label in PRINT_SIZES]
+    if min_size not in labels:
+        raise ValueError(f"min_size must be one of {', '.join(labels)}")
+    if orientation not in ("landscape", "portrait", "any"):
+        raise ValueError("orientation must be landscape, portrait or any")
+    allowed = set(labels[: labels.index(min_size) + 1])
+    exclude = exclude_ids or set()
+    pool: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for p in photos:
+        t = str(p.get("t") or "")
+        if len(t) < 10 or p["id"] in exclude or (p.get("r") or 0) < min_rating or p.get("pick") == -1:
+            continue
+        if (p.get("fmt") or "").upper() == "VIDEO" or max_print(p) not in allowed:
+            continue
+        if orientation != "any" and _orientation(p) != orientation:
+            continue
+        pool[int(t[5:7])].append(p)
+    months = []
+    for m in range(1, 13):
+        ranked = sorted(pool.get(m, []), key=lambda p: (-_score(p), str(p.get("t"))))
+        chosen: list[dict[str, Any]] = []
+        days: set[str] = set()
+        years: Counter[str] = Counter()
+        places: Counter[tuple[int, int]] = Counter()
+        # first pass: one per day, at most two per year and per place (~10 km); second pass fills up per day only
+        for strict in (True, False):
+            for p in ranked:
+                if len(chosen) >= per_month:
+                    break
+                day, year = str(p["t"])[:10], str(p["t"])[:4]
+                place = (round(p["lat"] * 10), round(p["lon"] * 10)) if p.get("lat") is not None else None
+                if day in days or p in chosen:
+                    continue
+                if strict and (years[year] >= 2 or (place and places[place] >= 2)):
+                    continue
+                chosen.append(p)
+                days.add(day)
+                years[year] += 1
+                if place:
+                    places[place] += 1
+        months.append({"month": m, "name": MONTHS_DE[m - 1], "pool": len(ranked),
+                       "suggestions": [{"id": p["id"], "file": p.get("file"), "t": p.get("t"), "r": p.get("r"),
+                                        "max_size": max_print(p), "place": [p.get("lat"), p.get("lon")]
+                                        if p.get("lat") is not None else None} for p in chosen]})
+    return {"per_month": per_month, "min_rating": min_rating, "orientation": orientation, "min_size": min_size,
+            "months": months, "months_short": [m["name"] for m in months if len(m["suggestions"]) < per_month]}

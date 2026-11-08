@@ -80,6 +80,12 @@ Der Eigentümer sieht morgens „Vorsortieren › <Monat> › Kandidat 5★ / Ka
 - Stichwörter: `keyword_check_start` → `keyword_check_results("duplicates")` → `merge_keywords` nach Freigabe, danach in Lightroom „Nicht verwendete Stichwörter löschen“.
 - Was online ist: `mark_online_in_lightroom` (Trockenlauf, dann `confirm=true`), z. B. einmal pro Woche.
 - MHPhotos: `spot_photos` (Spots ohne gutes eigenes Foto für den Fotoplaner), `gear_usage`, `trip_outline` → `mhphotos_create_blog_draft` (bleibt Entwurf).
+- Ab 0.1.27: `duplicate_folders` (doppelt importierte Ordner), `missing_files_by_drive` (nach `catalog_audit_start(check_files=true)`), `gps_gaps` → `fill_gps_gaps` nach Freigabe, `print_candidates` → `print_candidates_collections`, `weekly_report`.
+
+## 8. Fotokalender („Kalender 2027“, Plugin ab 0.1.27)
+1. `calendar_candidates(year=2027, per_month=8)`: pro Monat die besten Fotos aus diesem Monat (alle Jahre), quer, groß genug für A3.
+2. Pro Monat `get_contact_sheet(photo_ids, columns=6, cell=200)` ansehen, 2–3 Favoriten mit Begründung vorschlagen (Jahreszeit passt, keine zwei ähnlichen Motive hintereinander, Abwechslung bei Orten und Farben).
+3. `calendar_collections(year=2027, confirm=true)` mit allen Vorschlägen, oder nach Martins Wahl mit `photo_ids_by_month`. Das endgültige Bild je Monat wählt Martin in Lightroom.
 
 ## Eisenregeln
 - Alles Schreibende zuerst als Trockenlauf, `confirm=true` erst nach der Freigabe oder wenn der Block dem Vereinbarten entspricht.
