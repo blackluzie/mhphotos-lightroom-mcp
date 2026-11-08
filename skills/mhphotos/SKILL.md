@@ -1,6 +1,6 @@
 ---
 name: mhphotos
-description: Foto-Durchsicht mit dem MHPhotos-Lightroom-Connector, Ablauf wie bei „Kreuzfahrt 2026“. Aufruf zum Beispiel "/mhphotos Oktober 2026", "/mhphotos 2026/10" oder "/mhphotos Kreuzfahrt 2026". Sterne, Stichwörter, Instagram-Zuschnitte als virtuelle Kopien, Aussortieren in Bögen mit Tabelle, Fotobuch und Kontaktabzüge.
+description: Foto-Durchsicht mit dem MHPhotos-Lightroom-Connector wie bei „Kreuzfahrt 2026“, Aufruf z. B. /mhphotos Oktober 2026: Sterne, Stichwörter, Instagram-Kopien, Aussortieren in Bögen, Fotobuch. Mit /mhphotos Instawoche <Sammlung>: Posts, Stories und Reel planen, Fotos mit Titel, Kategorie und SEO-Texten auf mhphotos.de.
 ---
 
 # /mhphotos: eine Sammlung komplett durchgehen (wie „Kreuzfahrt 2026“)
@@ -11,6 +11,7 @@ Nichts wird gelöscht, verschoben oder veröffentlicht; das entscheidet der Eige
 
 Ablauf in dieser Reihenfolge, jede Phase mit kurzem Bericht:
 **0 Vorbereitung → 1 Durchsicht → 2 Sterne und Stichwörter → 3 Instagram-Zuschnitte → 4 Aussortieren in Bögen → 5 Fotobuch und Abschluss.**
+Mit „Instawoche“ im Aufruf (z. B. „/mhphotos Instawoche Kreuzfahrt 2026“) gleich Abschnitt 6.
 Wird ein Lauf in einem neuen Chat fortgesetzt, zuerst fragen bzw. aus dem letzten Bericht übernehmen, bei welcher Phase
 und welchem Bogen es weitergeht, und dort einsteigen.
 
@@ -98,7 +99,45 @@ Gegenstand: die Sammlung „<Sammlung> – Aussortieren (Vorschlag)“ plus alle
 2. Kontaktabzug der 5★ und der Instagram-Kopien als Übersicht zeigen.
 3. Abschlussbericht: Anzahl 5★/4★, Stichwörter gesetzt, Instagram-Kopien (4:5/9:16), Fotobuch, abgelehnt, offen.
 4. Instagram/MHPhotos nur vorschlagen (`instagram_candidates`, `mhphotos_schedule_instagram` ohne `confirm`);
-   nichts geht ohne ausdrückliche Anweisung online.
+   nichts geht ohne ausdrückliche Anweisung online. Wochenplan mit Posts, Stories und Reel: Abschnitt 6.
+
+## 6. Instagram-Woche mit mhphotos.de („/mhphotos Instawoche Kreuzfahrt 2026“)
+Beispiel: Posts Montag, Mittwoch, Freitag um 6 Uhr, abends die passende Story, Sonntagabend ein Wochenrückblick als Reel.
+Zeiten in Europe/Berlin mit Offset angeben (Winter `+01:00`, Sommer `+02:00`). Konto `mhphotos`, außer der Eigentümer nennt `malou` oder `martin`.
+1. **Serien wählen:** aus der Sammlung pro Post eine Serie von 3 bis 6 starken Fotos (meist 5★, keine Familie, abwechslungsreich:
+   Orte, Licht, Motive). `mhphotos_instagram_queue` und `mhphotos_best_times` vorher ansehen, nichts doppelt planen.
+2. **Zuschnitte:** pro Foto eine „Insta 4:5“-Kopie, für die Story eine „Story 9:16“-Kopie (Abschnitt 3).
+3. **Texte pro Post** (Stil früherer Posts aus `mhphotos_instagram_posts` übernehmen, deutsch, kurz):
+   Titel/erste Zeile, 2 bis 4 Sätze, Ort, 10 bis 20 passende Hashtags (Ort, Reise, Motiv, Fotografie), Markierungen als
+   `@konto` im Text (Reederei, Schiff, Hafen, Orte), nur echte Konten, die der Eigentümer bestätigt; im Zweifel fragen.
+4. **Plan zeigen**, eine Tabelle: Tag, Uhrzeit, Typ (Post/Story/Reel), Fotos (Dateinamen), Text, Hashtags, Markierungen,
+   dazu die mhphotos.de-Angaben aus Schritt 5. Erst nach dem Ok des Eigentümers einplanen.
+5. **Auf mhphotos.de** kommen alle Fotos, die auf Instagram gepostet werden, immer mit (Originale, nicht die Insta-Kopien):
+   - Pro Foto festlegen: **Titel**, **Kategorie** (vorhandene Galerie, über `mhphotos_site_photos` bzw. `mhphotos_galleries`
+     nachschlagen, nichts erfinden), **Beschreibung** (1 bis 3 Sätze, SEO: Ort, Motiv, Anlass natürlich formuliert),
+     **Alt-Text** (was zu sehen ist, für Barrierefreiheit und Bildersuche), **Ort**, 5 bis 12 deutsche **Stichwörter**.
+   - In Lightroom schreiben: `set_title_caption` (Titel, Beschreibung) und `add_keywords`, Trockenlauf, dann `confirm=true`.
+   - Über den Connector: `export_photos(photo_ids, confirm=true)` schickt die Fotos in die MHPhotos-Inbox (Status „wartet“).
+     Der Connector kann nicht selbst veröffentlichen: dem Eigentümer pro Foto Titel, Kategorie, Beschreibung und Alt-Text
+     als Liste geben, die er beim Übernehmen in der MHPhotos-App einträgt bzw. mit dem KI-Vorschlag abgleicht.
+     Mit `mhphotos_inbox(status="wartet")` prüfen, dass sie angekommen sind.
+   - Mit dem lokalen Server (Claude Code mit allen Tools): `send_to_mhphotos_inbox`, `mhphotos_analyze_inbox`, dann
+     `mhphotos_publish(item_ids, overrides={id: {title, description, alt, location, categories}})` als Trockenlauf und nach
+     Freigabe mit `confirm=true`.
+   - Das passiert **vor** den Posts, dann gibt es die Fotos am Sonntag für das Reel.
+6. **Posts einplanen:** `mhphotos_schedule_instagram(caption, scheduled_at, photo_ids=[…Insta-Kopien in Reihenfolge…])`
+   (Karussell, 2 bis 10 Fotos; ein Einzelfoto mit `photo_id`), zuerst ohne `confirm`, nach Freigabe mit `confirm=true`.
+7. **Stories am Abend** (z. B. 19 Uhr, besser nach `mhphotos_best_times`): `mhphotos_schedule_instagram(post_type="story",
+   photo_id=<Story-9:16-Kopie>, caption=…, scheduled_at=…)`. Einen anklickbaren Link oder Sticker zum Post vom Morgen kann der
+   Connector nicht setzen: dem Eigentümer sagen, dass er den Post in der Instagram-App in die Story teilt oder den Link-Sticker
+   dort ergänzt. Im Plan vermerken.
+8. **Reel am Sonntagabend:** nach der Übernahme auf mhphotos.de die Fotos mit `mhphotos_site_photos(query)` finden,
+   6 bis 12 der Woche in guter Reihenfolge (starkes erstes und letztes Bild), `mhphotos_create_reel(photo_ids, title, caption)`
+   als Trockenlauf, dann `confirm=true`. `mhphotos_reel_jobs` zeigt „bereit“. Das Reel ist eine stumme Diashow; freigeben und
+   auf Sonntagabend planen macht der Eigentümer im Content Studio. Musik nur, wenn er das MP4 dort lädt und in der App postet.
+9. **Abschluss:** `mhphotos_instagram_queue` zeigen (alles mit Zeit), offene Handgriffe für den Eigentümer auflisten
+   (Story-Links, Bild-Markierungen, Reel freigeben, Inbox übernehmen). Nach dem Posten `add_keywords([ids], ["Instagram"])`.
+Instagram-Beiträge erscheinen automatisch zur geplanten Zeit; rechtzeitig abbrechen mit `mhphotos_cancel_instagram`.
 
 ## Ganzes Jahr („/mhphotos 2026“)
 Reise- und Monatssammlungen des Jahres über `list_collections` finden, **eine nach der anderen** mit den Phasen 1 bis 5
@@ -109,7 +148,7 @@ auf getrennte Chats verteilen.
 Lightroom kann über das SDK keine Fotos verschieben oder löschen, und der Haken „Mit Lightroom synchronisieren“ geht nur
 von Hand. Eigene Metadatenfelder (`set_custom_metadata`) sind derzeit abgeschaltet: Stichwörter oder Sammlungen nutzen.
 
-## 6. Vorsortieren (auch nachts, Plugin ab 0.1.26)
+## 7. Vorsortieren (auch nachts, Plugin ab 0.1.26)
 Für den großen Rückstand ungesichteter Fotos, Monat für Monat. Es werden **keine Sterne gesetzt**, nur Prüf-Sammlungen gefüllt.
 1. `presort_status()`: nimm `next[0]` (ein angefangener Monat kommt zuerst; `last_batch` sagt, wo es weitergeht).
 2. `presort_month(month, batch_offset=last_batch)`: Serien und Blätter zu je 6 Fotos.
@@ -117,21 +156,21 @@ Für den großen Rückstand ungesichteter Fotos, Monat für Monat. Es werden **k
 4. Nach dem letzten Blatt `finished=true`. Pro Lauf höchstens etwa 40 Blätter, dann kurzer Bericht (Monat, Zahlen je Liste).
 Der Eigentümer sieht morgens „Vorsortieren › <Monat> › Kandidat 5★ / Kandidat 4★ / Aussortieren (Vorschlag) / Serie – Rest (Vorschlag)“ und entscheidet in Lightroom.
 
-## 7. Aufräumen und Verbinden (Plugin ab 0.1.26)
+## 8. Aufräumen und Verbinden (Plugin ab 0.1.26)
 - Nach einer Katalog-Prüfung über alles: `catalog_audit_overview`, `catalog_folder_moves` (ganze Ordner zuerst), `archive_candidates`.
 - Stichwörter: `keyword_check_start` → `keyword_check_results("duplicates")` → `merge_keywords` nach Freigabe, danach in Lightroom „Nicht verwendete Stichwörter löschen“.
 - Was online ist: `mark_online_in_lightroom` (Trockenlauf, dann `confirm=true`), z. B. einmal pro Woche.
 - MHPhotos: `spot_photos` (Spots ohne gutes eigenes Foto für den Fotoplaner), `gear_usage`, `trip_outline` → `mhphotos_create_blog_draft` (bleibt Entwurf).
 - Ab 0.1.27: `duplicate_folders` (doppelt importierte Ordner), `missing_files_by_drive` (nach `catalog_audit_start(check_files=true)`), `gps_gaps` → `fill_gps_gaps` nach Freigabe, `print_candidates` → `print_candidates_collections`, `weekly_report`.
 
-## 8. Fotokalender („Kalender 2027“, Plugin ab 0.1.27)
+## 9. Fotokalender („Kalender 2027“, Plugin ab 0.1.27)
 1. `calendar_candidates(year=2027, per_month=8)`: pro Monat die besten Fotos aus diesem Monat (alle Jahre), quer, groß genug für A3.
 2. Pro Monat `get_contact_sheet(photo_ids, columns=6, cell=200)` ansehen, 2–3 Favoriten mit Begründung vorschlagen (Jahreszeit passt, keine zwei ähnlichen Motive hintereinander, Abwechslung bei Orten und Farben).
 3. `calendar_collections(year=2027, confirm=true)` mit allen Vorschlägen, oder nach Martins Wahl mit `photo_ids_by_month`. Das endgültige Bild je Monat wählt Martin in Lightroom.
 
 ## Eisenregeln
 - Alles Schreibende zuerst als Trockenlauf, `confirm=true` erst nach der Freigabe oder wenn der Block dem Vereinbarten entspricht.
-- Keine Löschung, kein Verschieben, keine Veröffentlichung. Aussortieren heißt nur „Vorschlag“ bzw. Flagge „abgelehnt“.
+- Keine Löschung, kein Verschieben. Veröffentlichen und Einplanen nur nach ausdrücklichem Ok zum gezeigten Plan (Abschnitt 6). Aussortieren heißt nur „Vorschlag“ bzw. Flagge „abgelehnt“.
 - Sterne nie senken, Originale nie überschreiben (Bearbeitungen auf virtuellen Kopien), IDs immer frisch aus Lightroom.
 - Bei Zeitüberschreitung nicht blind wiederholen: erst `connection_status`, dann prüfen, ob die Änderung angekommen ist.
 - Jede Änderung ist mit `undo_last_change` rückgängig zu machen.
