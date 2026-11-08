@@ -65,6 +65,11 @@ MHPHOTOS_WRITE_TOOLS = ('mhphotos_sync_gear_usage', 'mhphotos_sync_spot_photos',
 INSTAGRAM_TOOLS = ('mhphotos_schedule_instagram', 'mhphotos_cancel_instagram', 'mhphotos_create_reel',
     'mhphotos_comment_respond')
 INSTAGRAM_FLAG = 'MHPHOTOS_HTTP_INSTAGRAM'
+# Putting inbox items on the PUBLIC MHPhotos site and correcting photos that are already online. Offered only
+# when desktop.json has "allow_publish": true (and an MHPhotos site); each change is a dry run first.
+PUBLISH_TOOLS = ('mhphotos_galleries', 'mhphotos_analyze_inbox', 'mhphotos_publish', 'mhphotos_update_site_photo',
+    'mhphotos_link_instagram')
+PUBLISH_FLAG = 'MHPHOTOS_HTTP_PUBLISH'
 # Writing a capture time into the JPEG files themselves (exiftool, with backups). Offered only when
 # desktop.json has "allow_file_edits": true together with "allow_writes": true.
 FILES_TOOLS = ('write_name_dates_to_files',)
@@ -195,21 +200,22 @@ def register_tools(app, writes=None):
     writes = os.environ.get(WRITES_FLAG) == '1' if writes is None else writes
     mhphotos = bool(os.environ.get('MHPHOTOS_INBOX_URL'))
     instagram = mhphotos and os.environ.get(INSTAGRAM_FLAG) == '1'
+    publish = mhphotos and os.environ.get(PUBLISH_FLAG) == '1'
     files = writes and os.environ.get(FILES_FLAG) == '1'
     names = (READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ()) + (MHPHOTOS_TOOLS + COMMENT_DRAFT_TOOLS if mhphotos else ())
         + (MHPHOTOS_WRITE_TOOLS if mhphotos and writes else ())
-        + (INSTAGRAM_TOOLS if instagram else ()) + (FILES_TOOLS if files else ()))
+        + (INSTAGRAM_TOOLS if instagram else ()) + (PUBLISH_TOOLS if publish else ()) + (FILES_TOOLS if files else ()))
     for name in names:
         function = export_photos if name == 'export_photos' else getattr(server, name)
         overwrites = ((name in WRITE_TOOLS and name not in ADDITIVE_TOOLS) or name == 'mhphotos_cancel_instagram'
-            or name in FILES_TOOLS)
-        reads = name in READ_TOOLS or name in MHPHOTOS_TOOLS or name in STATUS_TOOLS
+            or name in FILES_TOOLS or name == 'mhphotos_update_site_photo')
+        reads = name in READ_TOOLS or name in MHPHOTOS_TOOLS or name in STATUS_TOOLS or name == 'mhphotos_galleries'
         app.add_tool(function,
             structured_output=False if name in {'get_photo_previews', 'get_contact_sheet', 'mhphotos_instagram_images'} else None,
             annotations=ToolAnnotations(readOnlyHint=reads,
                 destructiveHint=overwrites, idempotentHint=reads,
                 openWorldHint=name in MHPHOTOS_TOOLS or name in INSTAGRAM_TOOLS or name in MHPHOTOS_WRITE_TOOLS
-                or name in COMMENT_DRAFT_TOOLS),
+                or name in COMMENT_DRAFT_TOOLS or name in PUBLISH_TOOLS),
             meta={'securitySchemes': [{'type': 'oauth2', 'scopes': [SCOPE]}]})
 
 
@@ -222,7 +228,7 @@ def create_app():
 def main():
     # Never inherit an accidental write/publish opt-in from another launch context.
     for key in ('MHPHOTOS_ALLOW_WRITES', 'MHPHOTOS_ALLOW_PUBLISH', 'MHPHOTOS_ALLOW_INSTAGRAM', WRITES_FLAG,
-            'MHPHOTOS_INBOX_URL', INSTAGRAM_FLAG, FILES_FLAG, 'MHPHOTOS_ALLOW_FILE_EDITS'):
+            'MHPHOTOS_INBOX_URL', INSTAGRAM_FLAG, FILES_FLAG, 'MHPHOTOS_ALLOW_FILE_EDITS', PUBLISH_FLAG):
         os.environ.pop(key, None)
     if not server.permissions.export_dir():
         raise ValueError('An operator-controlled export directory is required')
@@ -242,6 +248,10 @@ def main():
     if config.get('allow_instagram') is True and config.get('mhphotos_url'):
         os.environ[INSTAGRAM_FLAG] = '1'
         os.environ['MHPHOTOS_ALLOW_INSTAGRAM'] = '1'
+        os.environ['MHPHOTOS_CONFIRMATION'] = 'flag'
+    if config.get('allow_publish') is True and config.get('mhphotos_url'):
+        os.environ[PUBLISH_FLAG] = '1'
+        os.environ['MHPHOTOS_ALLOW_PUBLISH'] = '1'
         os.environ['MHPHOTOS_CONFIRMATION'] = 'flag'
     if config.get('allow_writes') is True:
         os.environ[WRITES_FLAG] = '1'

@@ -27,6 +27,7 @@ class FakeMHPhotos:
              "permalink": "https://instagram.com/p/old"},
         ]
         self.social_uploads: list[dict] = []
+        self.approval = True  # False = an MHPhotos version without "wartet auf Freigabe"
         self.comments: list[dict] = [
             {"id": "17900000000000001", "account_id": "mhphotos", "username": "anna.k", "text": "Wo ist das?",
              "media_caption": "Abendlicht am Aasee", "media_id": "m1", "classification": "frage",
@@ -203,6 +204,7 @@ class FakeMHPhotos:
                     if method == "POST":
                         outer.social_uploads.append(body)
                         accounts = body["accountId"].decode().split(",")
+                        status = "freigabe" if body.get("needsApproval") == b"true" and outer.approval else "geplant"
                         ids = []
                         for acc in accounts:
                             rid = f"q-{len(outer.social_queue):04d}"
@@ -210,9 +212,10 @@ class FakeMHPhotos:
                             outer.social_queue.append({
                                 "id": rid, "account_id": acc, "account_name": acc.title(),
                                 "type": body["type"].decode(), "caption": body["caption"].decode(),
-                                "scheduled_at": body["scheduledAt"].decode(), "status": "geplant",
+                                "scheduled_at": body["scheduledAt"].decode(), "status": status,
                             })
-                        return self._reply(200, {"ok": True, "id": ids[0], **({"ids": ids} if len(ids) > 1 else {})})
+                        return self._reply(200, {"ok": True, "id": ids[0], **({"ids": ids} if len(ids) > 1 else {}),
+                                                 **({"status": status} if outer.approval else {})})
                 if method == "GET" and path == "/api/admin/photos":
                     return self._reply(200, {"photos": outer.site_photos})
                 if path == "/api/admin/reel-jobs":
@@ -272,6 +275,17 @@ class FakeMHPhotos:
                     return self._reply(200, {"items": outer.instagram, "photos": []})
                 if method == "POST" and path.endswith("/analyze"):
                     return self._reply(202, {"ok": True, "status": "queued"})
+                if method == "PATCH" and path.startswith("/api/admin/photos/"):
+                    photo = next((p for p in outer.site_photos if p["id"] == path.rsplit("/", 1)[1]), None)
+                    if photo is None:
+                        return self._reply(404, {"error": "nicht gefunden"})
+                    photo.update(body)
+                    return self._reply(200, {"ok": True, "photo": photo})
+                if method == "POST" and path == "/api/admin/instagram-library":
+                    if body.get("action") == "link":
+                        return self._reply(200, {"ok": True, "item": {"id": body["instagramId"],
+                                                                      "homepagePhotoId": body["photoId"]}})
+                    return self._reply(400, {"error": "Ungültige Aktion"})
                 if method == "PATCH" and path.startswith("/api/admin/lightroom-import/"):
                     item = outer.items[path.rsplit("/", 1)[1]]
                     item["status"] = "uebernommen"

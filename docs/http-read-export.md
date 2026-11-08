@@ -34,9 +34,19 @@ are text to paste in the Instagram app.
 `mhphotos_cancel_instagram`, `mhphotos_create_reel` (orders a reel video, publishes nothing) and
 `mhphotos_comment_respond` (reply under a comment on an own post and/or like it; publicly visible, dry run until
 `confirm=true`, only after the user approved the exact text).
-Planned posts are published by the MHPhotos social queue at the planned time without further questions, so every
-plan is a dry run until `confirm=true`, and in claude.ai these two tools should stay on "ask". The consent page
+By default (`needs_approval=true`) a planned post waits as "wartet auf Freigabe" in the MHPhotos queue
+(*Admin › Social › Warteschlange*) and is only published at the planned time after the owner approves it there; with
+`needs_approval=false` the queue publishes it by itself. If the MHPhotos app does not know approval yet, the connector
+takes the item out again at once. Every plan is a dry run until `confirm=true`, and in claude.ai these tools should
+stay on "ask". The consent page
 names this right. `--no-allow-instagram` removes it again.
+
+**Publishing on the site (opt-in).** `rebuild-mac.sh --mhphotos-url https://<site> --allow-publish` stores
+`"allow_publish": true`; the service then offers `mhphotos_galleries`, `mhphotos_analyze_inbox`, `mhphotos_publish`
+(inbox item → public site with title, description, alt text, place and galleries), `mhphotos_update_site_photo`
+(correct a photo that is already online) and `mhphotos_link_instagram` (link an Instagram post to a site photo).
+Every change is a dry run until `confirm=true`; in claude.ai keep these on "ask". The consent page names this right.
+`--no-allow-publish` removes it again.
 
 **Catalog edits (opt-in).** `rebuild-mac.sh --allow-writes --apply --start` stores
 `"allow_writes": true` in `desktop.json`; the service then also offers `set_rating`, `set_flag`

@@ -268,6 +268,17 @@ def approve(cfg: InboxConfig, item_id: str, fields: dict[str, Any]) -> tuple[int
     return api(cfg, "PATCH", f"{ENDPOINT}/{_quote(item_id)}", {"action": "approve", **fields})
 
 
+def update_site_photo(cfg: InboxConfig, photo_id: str, fields: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """Change title, description, alt text, place or galleries of a photo that is already on the site."""
+    return api(cfg, "PATCH", f"/api/admin/photos/{_quote(photo_id)}", fields)
+
+
+def link_instagram(cfg: InboxConfig, instagram_id: str, photo_id: str) -> tuple[int, dict[str, Any]]:
+    """Mark an Instagram post as showing this homepage photo (Instagram library of the MHPhotos app)."""
+    return api(cfg, "POST", "/api/admin/instagram-library",
+               {"action": "link", "instagramId": instagram_id, "photoId": photo_id})
+
+
 def instagram_library(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
     return api(cfg, "GET", "/api/admin/instagram-library", timeout=120.0)
 

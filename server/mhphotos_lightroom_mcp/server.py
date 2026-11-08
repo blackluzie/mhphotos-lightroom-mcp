@@ -2154,6 +2154,115 @@ async def mhphotos_publish(
     return {"applied": True, "change_id": change_id, "published": published, "items": plan}
 
 
+_SITE_PHOTO_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
+
+
+@mcp.tool()
+async def mhphotos_update_site_photo(
+    photo_id: str,
+    title: str | None = None,
+    description: str | None = None,
+    alt: str | None = None,
+    location: str | None = None,
+    categories: list[str] | None = None,
+    confirm: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Correct a photo that is already PUBLIC on mhphotos.de: title, description, alt text, place, galleries.
+
+    photo_id from mhphotos_site_photos. Only the fields you pass change. categories are gallery ids
+    (mhphotos_galleries). Dry run shows old and new values; confirm=true saves it on the public site.
+    Needs MHPHOTOS_ALLOW_PUBLISH=1.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    if not publishing.publishing_enabled():
+        return {"error": publishing.publish_disabled_message(), "code": "disabled"}
+    if not _SITE_PHOTO_ID.match(photo_id or ""):
+        return {"error": "photo_id looks like hafen-von-tossa-ab12cd; see mhphotos_site_photos"}
+    fields: dict[str, Any] = {}
+    for key, value in (("title", title), ("description", description), ("alt", alt), ("location", location)):
+        if value is not None:
+            value = str(value).strip()
+            if len(value) > _OVERRIDE_KEYS[key]:
+                return {"error": f"{key} is longer than {_OVERRIDE_KEYS[key]} characters"}
+            if key == "title" and not value:
+                return {"error": "title must not be empty"}
+            fields[key] = value
+    if categories is not None:
+        if not categories or not all(isinstance(c, str) and c.strip() for c in categories):
+            return {"error": "categories must be a non-empty list of gallery ids (mhphotos_galleries)"}
+        fields["categories"] = [c.strip() for c in categories]
+    if not fields:
+        return {"error": "Nothing to change: pass title, description, alt, location or categories"}
+    code, data = await anyio.to_thread.run_sync(publishing.site_photos, cfg)
+    if code != 200:
+        return _app_error(code, data)
+    photo = next((p for p in data.get("photos") or [] if p.get("id") == photo_id), None)
+    if photo is None:
+        return {"error": f"Photo not on the site: {photo_id}. Use mhphotos_site_photos."}
+    if "categories" in fields:
+        code, gal = await anyio.to_thread.run_sync(publishing.galleries, cfg)
+        if code != 200:
+            return _app_error(code, gal)
+        unknown = set(fields["categories"]) - {g.get("id") for g in gal.get("galleries", [])}
+        if unknown:
+            return {"error": "unknown category: " + ", ".join(sorted(unknown))}
+    changes = {k: {"old": photo.get(k), "new": v} for k, v in fields.items() if photo.get(k) != v}
+    if not changes:
+        return {"applied": False, "photo_id": photo_id, "hint": "Everything already has these values."}
+    if not confirm:
+        return {"dry_run": True, "will_be_public": True, "photo_id": photo_id, "changes": changes,
+                "hint": "Nothing changed yet. Call again with confirm=true to save it on mhphotos.de."}
+    approved, how = await gate.approve(ctx, f"Foto auf mhphotos.de ändern: {photo.get('title')} ({', '.join(changes)})")
+    if not approved:
+        return gate.refusal(how)
+    code, resp = await anyio.to_thread.run_sync(publishing.update_site_photo, cfg, photo_id,
+                                                {k: fields[k] for k in changes})
+    if code != 200 or not resp.get("ok"):
+        return _app_error(code, resp)
+    change_id = audit.record("mhphotos_update_site_photo", [], {"photo_id": photo_id, "changes": changes}, approved_by=how)
+    return {"applied": True, "change_id": change_id, "photo_id": photo_id, "changes": changes}
+
+
+@mcp.tool()
+async def mhphotos_link_instagram(
+    instagram_post_id: str, photo_id: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Link an Instagram post to the photo on mhphotos.de that it shows (after the fact).
+
+    instagram_post_id from mhphotos_instagram_posts, photo_id from mhphotos_site_photos. Afterwards the post no
+    longer counts as "not on the homepage". Dry run unless confirm=true; needs MHPHOTOS_ALLOW_PUBLISH=1.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    if not publishing.publishing_enabled():
+        return {"error": publishing.publish_disabled_message(), "code": "disabled"}
+    if not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", instagram_post_id or ""):
+        return {"error": "instagram_post_id is the id from mhphotos_instagram_posts"}
+    if not _SITE_PHOTO_ID.match(photo_id or ""):
+        return {"error": "photo_id looks like hafen-von-tossa-ab12cd; see mhphotos_site_photos"}
+    code, data = await anyio.to_thread.run_sync(publishing.site_photos, cfg)
+    if code != 200:
+        return _app_error(code, data)
+    photo = next((p for p in data.get("photos") or [] if p.get("id") == photo_id), None)
+    if photo is None:
+        return {"error": f"Photo not on the site: {photo_id}. Use mhphotos_site_photos."}
+    summary = {"instagram_post_id": instagram_post_id, "photo_id": photo_id, "photo_title": photo.get("title")}
+    if not confirm:
+        return {"dry_run": True, **summary, "hint": "Call again with confirm=true to link them."}
+    approved, how = await gate.approve(ctx, f"Instagram-Post mit Foto „{photo.get('title')}“ auf mhphotos.de verknüpfen")
+    if not approved:
+        return gate.refusal(how)
+    code, resp = await anyio.to_thread.run_sync(publishing.link_instagram, cfg, instagram_post_id, photo_id)
+    if code != 200 or not resp.get("ok"):
+        return _app_error(code, resp)
+    change_id = audit.record("mhphotos_link_instagram", [], summary, approved_by=how)
+    return {"applied": True, "change_id": change_id, **summary}
+
+
 @mcp.tool()
 async def mhphotos_instagram_posts(
     year: int | None = None,
@@ -2401,10 +2510,18 @@ async def mhphotos_schedule_instagram(
     post_type: str = "post",
     adjust: dict[str, Any] | None = None,
     allow_duplicate: bool = False,
+    needs_approval: bool = True,
+    mentions: list[str] | None = None,
+    location_name: str | None = None,
     confirm: bool = False,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Queue a photo for Instagram in the MHPhotos social queue (it publishes automatically at that time).
+    """Queue a photo for Instagram in the MHPhotos social queue.
+
+    needs_approval (default true): the item waits as "wartet auf Freigabe" until the owner approves it in the
+    MHPhotos queue (/admin/social/queue); only then it is published at the planned time. needs_approval=false
+    publishes automatically at that time. mentions: Instagram accounts to tag in the picture (post only; only
+    accounts on the MHPhotos list of trusted accounts are tagged). location_name: place for the location tag.
 
     Source: either a Lightroom photo (photo_id, needs the Lightroom bridge and MHPHOTOS_EXPORT_DIR),
     a carousel of 2-10 Lightroom photos (photo_ids, in this order; post only) or an MHPhotos inbox
@@ -2439,6 +2556,12 @@ async def mhphotos_schedule_instagram(
     edits, err = imaging.validate_adjust(adjust)
     if err:
         return {"error": err}
+    handles = [str(m).strip().lstrip("@") for m in mentions or [] if str(m).strip()]
+    if len(handles) > 20 or not all(re.fullmatch(r"[A-Za-z0-9._]{1,30}", h) for h in handles):
+        return {"error": "mentions: up to 20 Instagram handles like @mhphotos.de"}
+    location_name = (location_name or "").strip()
+    if len(location_name) > 120:
+        return {"error": "location_name: at most 120 characters"}
     when = _parse_when(scheduled_at)
     if isinstance(when, dict):
         return when
@@ -2490,19 +2613,23 @@ async def mhphotos_schedule_instagram(
         "scheduled_at": when.astimezone(UTC).isoformat(timespec="minutes"),
         "caption": caption,
         "edits": edits or None,
+        "needs_approval": needs_approval,
+        **({"mentions": ["@" + h for h in handles]} if handles else {}),
+        **({"location": location_name} if location_name else {}),
     }
     if dup and not allow_duplicate:
         return {"error": "This photo already looks planned or posted. Pass allow_duplicate=true to queue it anyway.",
                 "code": "duplicate", "duplicate": dup, **plan}
     if not confirm:
         return {
-            "dry_run": True, **plan, "duplicate": dup, "posted_automatically": True,
+            "dry_run": True, **plan, "duplicate": dup, "posted_automatically": not needs_approval,
             "hint": "Nothing was queued. Call again with confirm=true; cancel later with mhphotos_cancel_instagram.",
         }
     approved, how = await gate.approve(
         ctx,
-        f"AUTOMATISCH auf Instagram ({', '.join(names)}, {post_type}) am {when.astimezone().strftime('%d.%m.%Y %H:%M')} "
-        f"veröffentlichen: {label}{f' (Karussell, {len(photo_ids)} Bilder)' if photo_ids else ''} – \"{caption[:80]}\"",
+        ("Zur FREIGABE in die Instagram-Warteschlange" if needs_approval else "AUTOMATISCH auf Instagram") +
+        f" ({', '.join(names)}, {post_type}) am {when.astimezone().strftime('%d.%m.%Y %H:%M')} "
+        f"{'einplanen' if needs_approval else 'veröffentlichen'}: {label}{f' (Karussell, {len(photo_ids)} Bilder)' if photo_ids else ''} – \"{caption[:80]}\"",
     )
     if not approved:
         return gate.refusal(how)
@@ -2535,12 +2662,25 @@ async def mhphotos_schedule_instagram(
     }
     if img_hash:
         fields["imgHash"] = img_hash
+    if needs_approval:
+        fields["needsApproval"] = "true"
+    if handles and post_type == "post":
+        fields["mentions"] = " ".join("@" + h for h in handles)
+    if location_name:
+        fields["locationName"] = location_name
     code, resp = await anyio.to_thread.run_sync(
         lambda: publishing.social_schedule(cfg, f"{Path(label).stem}.jpg", final, fields, extras=extras or None)
     )
     if code != 200 or not resp.get("ok"):
         return _app_error(code, resp)
     ids = resp.get("ids") or [resp.get("id")]
+    if needs_approval and resp.get("status") != "freigabe":
+        # An MHPhotos version without approval would publish this by itself: take it out again at once.
+        for qid in ids:
+            if qid and publishing.valid_queue_id(qid):
+                await anyio.to_thread.run_sync(publishing.social_cancel, cfg, qid)
+        return {"error": "MHPhotos does not support approval yet (update the MHPhotos app); nothing stays queued.",
+                "code": "approval_unsupported", **plan}
     change_id = audit.record(
         "mhphotos_schedule_instagram", lr_ids,
         {**plan, "queue_ids": ids, "inbox_item": inbox_item_id}, approved_by=how,
@@ -2552,7 +2692,7 @@ async def mhphotos_schedule_instagram(
 async def mhphotos_instagram_queue(status: str | None = None, limit: int = 30) -> dict[str, Any]:
     """MHPhotos queue (newest first): scheduled, published and failed items.
 
-    status filter: geplant | veroeffentlicht | fehler.
+    status filter: freigabe (waits for the owner's approval) | geplant | veroeffentlicht | fehler.
     """
     cfg = _app_cfg()
     if isinstance(cfg, dict):
@@ -4077,7 +4217,7 @@ TOOLSETS: dict[str, set[str]] = {
     },
     "mhphotos": {
         "send_to_mhphotos_inbox", "mhphotos_galleries", "mhphotos_inbox", "mhphotos_analyze_inbox",
-        "mhphotos_publish", "mhphotos_instagram_posts", "mhphotos_instagram_images",
+        "mhphotos_publish", "mhphotos_update_site_photo", "mhphotos_link_instagram", "mhphotos_instagram_posts", "mhphotos_instagram_images",
         "mhphotos_schedule_instagram", "mhphotos_instagram_queue", "mhphotos_cancel_instagram",
         "mhphotos_inbox_images", "mhphotos_inbox_contact_sheet", "mhphotos_edit_preview",
         "mhphotos_best_times", "instagram_candidates", "mhphotos_site_photos", "mhphotos_reel_jobs",
