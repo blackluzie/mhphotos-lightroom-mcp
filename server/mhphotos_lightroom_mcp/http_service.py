@@ -53,9 +53,10 @@ WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
 MHPHOTOS_TOOLS = ('mhphotos_instagram_posts', 'mhphotos_instagram_images', 'mhphotos_inbox',
     'mhphotos_instagram_queue', 'mhphotos_best_times', 'instagram_candidates', 'mhphotos_site_photos',
     'mhphotos_reel_jobs', 'spot_photos', 'mhphotos_comments', 'mhphotos_friend_posts', 'mhphotos_friends')
-# Notes in the social hub that post nothing: a new AI reply draft, a watched post marked done/ignored,
-# whether someone is a close friend.
-COMMENT_DRAFT_TOOLS = ('mhphotos_comment_draft', 'mhphotos_friend_post', 'mhphotos_set_friend')
+# Internal changes in the MHPhotos app that post nothing: a new AI reply draft, a watched post marked
+# done/ignored, whether someone is a close friend, refreshing the Instagram library from Instagram.
+COMMENT_DRAFT_TOOLS = ('mhphotos_comment_draft', 'mhphotos_friend_post', 'mhphotos_set_friend',
+    'mhphotos_sync_instagram')
 # Admin-only data written to the MHPhotos app (gear statistics, own photos per spot, an UNPUBLISHED blog draft):
 # offered with an MHPhotos site and writes; nothing here becomes public.
 MHPHOTOS_WRITE_TOOLS = ('mhphotos_sync_gear_usage', 'mhphotos_sync_spot_photos', 'mhphotos_create_blog_draft')
