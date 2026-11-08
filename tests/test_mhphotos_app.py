@@ -266,3 +266,14 @@ async def test_link_instagram(app, can_publish):
     assert done["applied"] is True
     assert ("POST", "/api/admin/instagram-library", {"action": "link", "instagramId": "17900", "photoId": "hp-1"}) in app.calls
     assert "not on the site" in (await server.mhphotos_link_instagram("17900", "hp-9"))["error"]
+
+
+async def test_sync_instagram(app):
+    res = await server.mhphotos_sync_instagram()
+    assert res["synced"] == len(app.instagram) and res["library_total"] == len(app.instagram)
+    assert res["newest_sync"] == "2026-11-08T20:30:00.000Z"
+    assert ("POST", "/api/admin/instagram-library", {"action": "sync"}) in app.calls
+
+
+async def test_sync_instagram_disabled_without_config():
+    assert (await server.mhphotos_sync_instagram())["code"] == "disabled"

@@ -2264,6 +2264,30 @@ async def mhphotos_link_instagram(
 
 
 @mcp.tool()
+async def mhphotos_sync_instagram() -> dict[str, Any]:
+    """Refresh the MHPhotos Instagram library from Instagram (like „Instagram jetzt abgleichen“ in the app).
+
+    Use it when mhphotos_instagram_posts looks old (newest_sync) or mhphotos_instagram_images reports expired
+    links. Only the app's internal library changes (new posts, fresh image links, likes); nothing is posted
+    and links to homepage photos are kept. Can take a minute.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    code, data = await anyio.to_thread.run_sync(publishing.sync_instagram_library, cfg)
+    if code != 200 or not data.get("ok"):
+        return _app_error(code, data)
+    items = data.get("items") or []
+    newest_sync = max((i.get("syncedAt") or "" for i in items), default="") or None
+    return {
+        "synced": data.get("synced", 0),
+        "library_total": len(items),
+        "not_on_homepage": sum(1 for i in items if not i.get("homepagePhotoId")),
+        "newest_sync": newest_sync,
+    }
+
+
+@mcp.tool()
 async def mhphotos_instagram_posts(
     year: int | None = None,
     only_not_on_homepage: bool = True,
@@ -4217,7 +4241,7 @@ TOOLSETS: dict[str, set[str]] = {
     },
     "mhphotos": {
         "send_to_mhphotos_inbox", "mhphotos_galleries", "mhphotos_inbox", "mhphotos_analyze_inbox",
-        "mhphotos_publish", "mhphotos_update_site_photo", "mhphotos_link_instagram", "mhphotos_instagram_posts", "mhphotos_instagram_images",
+        "mhphotos_publish", "mhphotos_update_site_photo", "mhphotos_link_instagram", "mhphotos_sync_instagram", "mhphotos_instagram_posts", "mhphotos_instagram_images",
         "mhphotos_schedule_instagram", "mhphotos_instagram_queue", "mhphotos_cancel_instagram",
         "mhphotos_inbox_images", "mhphotos_inbox_contact_sheet", "mhphotos_edit_preview",
         "mhphotos_best_times", "instagram_candidates", "mhphotos_site_photos", "mhphotos_reel_jobs",

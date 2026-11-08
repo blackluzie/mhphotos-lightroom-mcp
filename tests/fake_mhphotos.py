@@ -282,6 +282,10 @@ class FakeMHPhotos:
                     photo.update(body)
                     return self._reply(200, {"ok": True, "photo": photo})
                 if method == "POST" and path == "/api/admin/instagram-library":
+                    if body.get("action") == "sync":
+                        for item in outer.instagram:
+                            item["syncedAt"] = "2026-11-08T20:30:00.000Z"
+                        return self._reply(200, {"ok": True, "items": outer.instagram, "synced": len(outer.instagram)})
                     if body.get("action") == "link":
                         return self._reply(200, {"ok": True, "item": {"id": body["instagramId"],
                                                                       "homepagePhotoId": body["photoId"]}})

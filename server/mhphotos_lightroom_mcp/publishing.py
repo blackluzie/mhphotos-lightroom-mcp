@@ -279,6 +279,11 @@ def link_instagram(cfg: InboxConfig, instagram_id: str, photo_id: str) -> tuple[
                {"action": "link", "instagramId": instagram_id, "photoId": photo_id})
 
 
+def sync_instagram_library(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    """Re-read the Instagram posts from Meta into the app's library (same as „Instagram jetzt abgleichen“)."""
+    return api(cfg, "POST", "/api/admin/instagram-library", {"action": "sync"}, timeout=180.0)
+
+
 def instagram_library(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
     return api(cfg, "GET", "/api/admin/instagram-library", timeout=120.0)
 

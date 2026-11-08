@@ -18,7 +18,8 @@ then also offers `mhphotos_instagram_posts`, `mhphotos_instagram_images` and `mh
 token is read from the Keychain entry `mhphotos-admin-token`, never from the client). `export_photos` accepts
 `instagram_post_id` for a single photo; it travels into the inbox and lets the app link the post when published.
 With the site configured the service also offers `mhphotos_instagram_queue`, `mhphotos_best_times`,
-`instagram_candidates`, `mhphotos_site_photos` and `mhphotos_reel_jobs` (reads).
+`instagram_candidates`, `mhphotos_site_photos` and `mhphotos_reel_jobs` (reads). `mhphotos_sync_instagram` refreshes the app's Instagram library from
+Instagram (like „Instagram jetzt abgleichen“ in the app: new posts, fresh image links; posts nothing).
 
 **Instagram comments.** With the site configured the service also offers `mhphotos_comments` (the comment inbox
 of the social hub: new comments every 10 minutes, classified, with an AI reply draft) and `mhphotos_comment_draft`
