@@ -2112,6 +2112,115 @@ async def mhphotos_publish(
     return {"applied": True, "change_id": change_id, "published": published, "items": plan}
 
 
+_SITE_PHOTO_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
+
+
+@mcp.tool()
+async def mhphotos_update_site_photo(
+    photo_id: str,
+    title: str | None = None,
+    description: str | None = None,
+    alt: str | None = None,
+    location: str | None = None,
+    categories: list[str] | None = None,
+    confirm: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Correct a photo that is already PUBLIC on mhphotos.de: title, description, alt text, place, galleries.
+
+    photo_id from mhphotos_site_photos. Only the fields you pass change. categories are gallery ids
+    (mhphotos_galleries). Dry run shows old and new values; confirm=true saves it on the public site.
+    Needs MHPHOTOS_ALLOW_PUBLISH=1.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    if not publishing.publishing_enabled():
+        return {"error": publishing.publish_disabled_message(), "code": "disabled"}
+    if not _SITE_PHOTO_ID.match(photo_id or ""):
+        return {"error": "photo_id looks like hafen-von-tossa-ab12cd; see mhphotos_site_photos"}
+    fields: dict[str, Any] = {}
+    for key, value in (("title", title), ("description", description), ("alt", alt), ("location", location)):
+        if value is not None:
+            value = str(value).strip()
+            if len(value) > _OVERRIDE_KEYS[key]:
+                return {"error": f"{key} is longer than {_OVERRIDE_KEYS[key]} characters"}
+            if key == "title" and not value:
+                return {"error": "title must not be empty"}
+            fields[key] = value
+    if categories is not None:
+        if not categories or not all(isinstance(c, str) and c.strip() for c in categories):
+            return {"error": "categories must be a non-empty list of gallery ids (mhphotos_galleries)"}
+        fields["categories"] = [c.strip() for c in categories]
+    if not fields:
+        return {"error": "Nothing to change: pass title, description, alt, location or categories"}
+    code, data = await anyio.to_thread.run_sync(publishing.site_photos, cfg)
+    if code != 200:
+        return _app_error(code, data)
+    photo = next((p for p in data.get("photos") or [] if p.get("id") == photo_id), None)
+    if photo is None:
+        return {"error": f"Photo not on the site: {photo_id}. Use mhphotos_site_photos."}
+    if "categories" in fields:
+        code, gal = await anyio.to_thread.run_sync(publishing.galleries, cfg)
+        if code != 200:
+            return _app_error(code, gal)
+        unknown = set(fields["categories"]) - {g.get("id") for g in gal.get("galleries", [])}
+        if unknown:
+            return {"error": "unknown category: " + ", ".join(sorted(unknown))}
+    changes = {k: {"old": photo.get(k), "new": v} for k, v in fields.items() if photo.get(k) != v}
+    if not changes:
+        return {"applied": False, "photo_id": photo_id, "hint": "Everything already has these values."}
+    if not confirm:
+        return {"dry_run": True, "will_be_public": True, "photo_id": photo_id, "changes": changes,
+                "hint": "Nothing changed yet. Call again with confirm=true to save it on mhphotos.de."}
+    approved, how = await gate.approve(ctx, f"Foto auf mhphotos.de ändern: {photo.get('title')} ({', '.join(changes)})")
+    if not approved:
+        return gate.refusal(how)
+    code, resp = await anyio.to_thread.run_sync(publishing.update_site_photo, cfg, photo_id,
+                                                {k: fields[k] for k in changes})
+    if code != 200 or not resp.get("ok"):
+        return _app_error(code, resp)
+    change_id = audit.record("mhphotos_update_site_photo", [], {"photo_id": photo_id, "changes": changes}, approved_by=how)
+    return {"applied": True, "change_id": change_id, "photo_id": photo_id, "changes": changes}
+
+
+@mcp.tool()
+async def mhphotos_link_instagram(
+    instagram_post_id: str, photo_id: str, confirm: bool = False, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Link an Instagram post to the photo on mhphotos.de that it shows (after the fact).
+
+    instagram_post_id from mhphotos_instagram_posts, photo_id from mhphotos_site_photos. Afterwards the post no
+    longer counts as "not on the homepage". Dry run unless confirm=true; needs MHPHOTOS_ALLOW_PUBLISH=1.
+    """
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    if not publishing.publishing_enabled():
+        return {"error": publishing.publish_disabled_message(), "code": "disabled"}
+    if not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", instagram_post_id or ""):
+        return {"error": "instagram_post_id is the id from mhphotos_instagram_posts"}
+    if not _SITE_PHOTO_ID.match(photo_id or ""):
+        return {"error": "photo_id looks like hafen-von-tossa-ab12cd; see mhphotos_site_photos"}
+    code, data = await anyio.to_thread.run_sync(publishing.site_photos, cfg)
+    if code != 200:
+        return _app_error(code, data)
+    photo = next((p for p in data.get("photos") or [] if p.get("id") == photo_id), None)
+    if photo is None:
+        return {"error": f"Photo not on the site: {photo_id}. Use mhphotos_site_photos."}
+    summary = {"instagram_post_id": instagram_post_id, "photo_id": photo_id, "photo_title": photo.get("title")}
+    if not confirm:
+        return {"dry_run": True, **summary, "hint": "Call again with confirm=true to link them."}
+    approved, how = await gate.approve(ctx, f"Instagram-Post mit Foto „{photo.get('title')}“ auf mhphotos.de verknüpfen")
+    if not approved:
+        return gate.refusal(how)
+    code, resp = await anyio.to_thread.run_sync(publishing.link_instagram, cfg, instagram_post_id, photo_id)
+    if code != 200 or not resp.get("ok"):
+        return _app_error(code, resp)
+    change_id = audit.record("mhphotos_link_instagram", [], summary, approved_by=how)
+    return {"applied": True, "change_id": change_id, **summary}
+
+
 @mcp.tool()
 async def mhphotos_instagram_posts(
     year: int | None = None,
@@ -3724,7 +3833,7 @@ TOOLSETS: dict[str, set[str]] = {
     },
     "mhphotos": {
         "send_to_mhphotos_inbox", "mhphotos_galleries", "mhphotos_inbox", "mhphotos_analyze_inbox",
-        "mhphotos_publish", "mhphotos_instagram_posts", "mhphotos_instagram_images",
+        "mhphotos_publish", "mhphotos_update_site_photo", "mhphotos_link_instagram", "mhphotos_instagram_posts", "mhphotos_instagram_images",
         "mhphotos_schedule_instagram", "mhphotos_instagram_queue", "mhphotos_cancel_instagram",
         "mhphotos_inbox_images", "mhphotos_inbox_contact_sheet", "mhphotos_edit_preview",
         "mhphotos_best_times", "instagram_candidates", "mhphotos_site_photos", "mhphotos_reel_jobs",

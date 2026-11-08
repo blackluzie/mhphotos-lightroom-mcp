@@ -27,6 +27,13 @@ Planned posts are published by the MHPhotos social queue at the planned time wit
 plan is a dry run until `confirm=true`, and in claude.ai these two tools should stay on "ask". The consent page
 names this right. `--no-allow-instagram` removes it again.
 
+**Publishing on the site (opt-in).** `rebuild-mac.sh --mhphotos-url https://<site> --allow-publish` stores
+`"allow_publish": true`; the service then offers `mhphotos_galleries`, `mhphotos_analyze_inbox`, `mhphotos_publish`
+(inbox item → public site with title, description, alt text, place and galleries), `mhphotos_update_site_photo`
+(correct a photo that is already online) and `mhphotos_link_instagram` (link an Instagram post to a site photo).
+Every change is a dry run until `confirm=true`; in claude.ai keep these on "ask". The consent page names this right.
+`--no-allow-publish` removes it again.
+
 **Catalog edits (opt-in).** `rebuild-mac.sh --allow-writes --apply --start` stores
 `"allow_writes": true` in `desktop.json`; the service then also offers `set_rating`, `set_flag`
 (`"rejected"` = Lightroom's *Abgelehnt*), `set_color_label`, `set_title_caption`, `add_keywords`,

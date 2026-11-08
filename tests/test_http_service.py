@@ -214,3 +214,20 @@ def test_mhphotos_url_is_a_plain_https_origin():
     for bad in ('http://mhphotos.de', 'https://mhphotos.de/admin', 'https://u:p@mhphotos.de'):
         with pytest.raises(ValueError):
             http_service.mhphotos_url(bad)
+
+
+def test_publishing_on_the_site_only_with_its_own_flag(monkeypatch):
+    monkeypatch.setenv('MHPHOTOS_INBOX_URL', 'https://mhphotos.example')
+    monkeypatch.delenv(http_service.PUBLISH_FLAG, raising=False)
+    app = FastMCP('a')
+    http_service.register_tools(app, writes=True)
+    assert not set(http_service.PUBLISH_TOOLS) & {t.name for t in asyncio.run(app.list_tools())}
+    monkeypatch.setenv(http_service.PUBLISH_FLAG, '1')
+    app = FastMCP('b')
+    http_service.register_tools(app, writes=False)
+    tools = {t.name: t for t in asyncio.run(app.list_tools())}
+    assert set(http_service.PUBLISH_TOOLS) <= set(tools)
+    assert tools['mhphotos_galleries'].annotations.readOnlyHint is True
+    assert tools['mhphotos_publish'].annotations.readOnlyHint is False
+    assert tools['mhphotos_update_site_photo'].annotations.destructiveHint is True
+    assert 'mhphotos_schedule_instagram' not in tools

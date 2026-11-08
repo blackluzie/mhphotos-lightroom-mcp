@@ -187,3 +187,21 @@ def test_allow_file_edits_needs_writes_and_is_kept(tmp_path):
     configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_file_edits=False)
     conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
     assert conf['allow_file_edits'] is False
+
+
+def test_allow_publish_needs_the_site_and_is_kept(tmp_path):
+    import pytest
+    home, secret = setup(tmp_path)
+    plan = configure(home, tmp_path, tmp_path / 'python', 'https://photos.example',
+        ['https://client.example/callback'], secret, True, GITHUB)
+    assert plan['allow_publish'] is False
+    with pytest.raises(ValueError, match='mhphotos-url'):
+        configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_publish=True)
+    plan = configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True,
+        mhphotos_site='https://mhphotos.example', allow_publish=True)
+    assert plan['allow_publish'] is True
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['allow_publish'] is True
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_publish=False)
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['allow_publish'] is False

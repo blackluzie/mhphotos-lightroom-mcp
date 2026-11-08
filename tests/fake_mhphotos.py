@@ -192,6 +192,17 @@ class FakeMHPhotos:
                     return self._reply(200, {"items": outer.instagram, "photos": []})
                 if method == "POST" and path.endswith("/analyze"):
                     return self._reply(202, {"ok": True, "status": "queued"})
+                if method == "PATCH" and path.startswith("/api/admin/photos/"):
+                    photo = next((p for p in outer.site_photos if p["id"] == path.rsplit("/", 1)[1]), None)
+                    if photo is None:
+                        return self._reply(404, {"error": "nicht gefunden"})
+                    photo.update(body)
+                    return self._reply(200, {"ok": True, "photo": photo})
+                if method == "POST" and path == "/api/admin/instagram-library":
+                    if body.get("action") == "link":
+                        return self._reply(200, {"ok": True, "item": {"id": body["instagramId"],
+                                                                      "homepagePhotoId": body["photoId"]}})
+                    return self._reply(400, {"error": "Ungültige Aktion"})
                 if method == "PATCH" and path.startswith("/api/admin/lightroom-import/"):
                     item = outer.items[path.rsplit("/", 1)[1]]
                     item["status"] = "uebernommen"

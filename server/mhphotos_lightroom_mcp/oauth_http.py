@@ -100,6 +100,10 @@ def consent_text():
         text += ("<p><strong>Instagram:</strong> Der Client darf au&szlig;erdem nach Best&auml;tigung Beitr&auml;ge in die "
                  "MHPhotos-Warteschlange einplanen, die dort zur geplanten Zeit automatisch auf Instagram erscheinen, "
                  "und geplante Beitr&auml;ge wieder entfernen.</p>")
+    if os.environ.get("MHPHOTOS_HTTP_PUBLISH") == "1":
+        text += ("<p><strong>mhphotos.de:</strong> Der Client darf au&szlig;erdem nach Best&auml;tigung Fotos aus der "
+                 "MHPhotos-Inbox &ouml;ffentlich auf der Seite ver&ouml;ffentlichen, Titel, Texte und Galerien bereits "
+                 "ver&ouml;ffentlichter Fotos &auml;ndern und Instagram-Posts mit ihnen verkn&uuml;pfen.</p>")
     return text
 
 
