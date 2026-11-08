@@ -20,9 +20,20 @@ token is read from the Keychain entry `mhphotos-admin-token`, never from the cli
 With the site configured the service also offers `mhphotos_instagram_queue`, `mhphotos_best_times`,
 `instagram_candidates`, `mhphotos_site_photos` and `mhphotos_reel_jobs` (reads).
 
+**Instagram comments.** With the site configured the service also offers `mhphotos_comments` (the comment inbox
+of the social hub: new comments every 10 minutes, classified, with an AI reply draft) and `mhphotos_comment_draft`
+(a new draft or another tone; stored in the inbox, posts nothing). For comment ideas on other people's posts it
+offers `mhphotos_friend_posts` (new posts of the hub's watch list with an idea and `closeness`: eng, nicht eng or
+unbekannt), `mhphotos_friend_post` (done, ignore, regenerate), `mhphotos_friends` and `mhphotos_set_friend` (close
+friend or not, stored as a personal contact in the hub, so replies in the inbox use the same tone). Instagram's API
+cannot like or comment on other people's posts and sees only public business/creator accounts, so those comments
+are text to paste in the Instagram app.
+
 **Instagram planning (opt-in).** `rebuild-mac.sh --mhphotos-url https://<site> --allow-instagram` stores
 `"allow_instagram": true`; the service then offers `mhphotos_schedule_instagram` (single photo or carousel),
-`mhphotos_cancel_instagram` and `mhphotos_create_reel` (orders a reel video, publishes nothing).
+`mhphotos_cancel_instagram`, `mhphotos_create_reel` (orders a reel video, publishes nothing) and
+`mhphotos_comment_respond` (reply under a comment on an own post and/or like it; publicly visible, dry run until
+`confirm=true`, only after the user approved the exact text).
 By default (`needs_approval=true`) a planned post waits as "wartet auf Freigabe" in the MHPhotos queue
 (*Admin › Social › Warteschlange*) and is only published at the planned time after the owner approves it there; with
 `needs_approval=false` the queue publishes it by itself. If the MHPhotos app does not know approval yet, the connector
