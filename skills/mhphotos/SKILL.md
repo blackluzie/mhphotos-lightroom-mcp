@@ -117,17 +117,25 @@ Zeiten in Europe/Berlin mit Offset angeben (Winter `+01:00`, Sommer `+02:00`). K
      nachschlagen, nichts erfinden), **Beschreibung** (1 bis 3 Sätze, SEO: Ort, Motiv, Anlass natürlich formuliert),
      **Alt-Text** (was zu sehen ist, für Barrierefreiheit und Bildersuche), **Ort**, 5 bis 12 deutsche **Stichwörter**.
    - In Lightroom schreiben: `set_title_caption` (Titel, Beschreibung) und `add_keywords`, Trockenlauf, dann `confirm=true`.
-   - Über den Connector: `export_photos(photo_ids, confirm=true)` schickt die Fotos in die MHPhotos-Inbox (Status „wartet“).
-     Titel, Beschreibung, Ort und Stichwörter aus Lightroom stehen über die JPEG-Metadaten schon im Inbox-Eintrag (die
-     MHPhotos-Inbox liest IPTC/XMP). Kategorie und Alt-Text nicht: die kommen in den Copy-und-Paste-Block (Schritt 9).
-     Der Connector kann nicht selbst veröffentlichen, der Eigentümer übernimmt die Fotos in der MHPhotos-App.
-     Mit `mhphotos_inbox(status="wartet")` prüfen, dass sie angekommen sind.
-   - Mit dem lokalen Server (Claude Code mit allen Tools): `send_to_mhphotos_inbox`, `mhphotos_analyze_inbox`, dann
-     `mhphotos_publish(item_ids, overrides={id: {title, description, alt, location, categories}})` als Trockenlauf und nach
-     Freigabe mit `confirm=true`.
+   - `export_photos(photo_ids, confirm=true)` schickt die Originale in die MHPhotos-Inbox (Status „wartet“; Titel,
+     Beschreibung, Ort und Stichwörter kommen über die JPEG-Metadaten mit). Mit `mhphotos_inbox(status="wartet")` die
+     Inbox-IDs holen (dauert ggf. ein, zwei Minuten).
+   - **Selbst veröffentlichen** (Connector mit `--allow-publish`): `mhphotos_galleries` für gültige Kategorien, dann
+     `mhphotos_publish(item_ids, overrides={id: {title, description, alt, location, categories}})` als Trockenlauf;
+     ist der Wochenplan freigegeben, mit `confirm=true` veröffentlichen. Die Seite kennt keine Stichwörter: SEO steckt in
+     Titel, Beschreibung und Alt-Text.
+   - Schon veröffentlichte Fotos korrigieren: `mhphotos_update_site_photo(photo_id, title=…, description=…, alt=…,
+     categories=[…])`; einen Instagram-Post nachträglich verknüpfen: `mhphotos_link_instagram(instagram_post_id, photo_id)`.
+   - Fehlen die Tools (`mhphotos_publish` nicht da), übernimmt der Eigentümer die Fotos in der MHPhotos-App; dann Titel,
+     Kategorie, Beschreibung und Alt-Text in den Copy-und-Paste-Block (Schritt 9).
    - Das passiert **vor** den Posts, dann gibt es die Fotos am Sonntag für das Reel.
-6. **Posts einplanen:** `mhphotos_schedule_instagram(caption, scheduled_at, photo_ids=[…Insta-Kopien in Reihenfolge…])`
-   (Karussell, 2 bis 10 Fotos; ein Einzelfoto mit `photo_id`), zuerst ohne `confirm`, nach Freigabe mit `confirm=true`.
+6. **Posts einplanen:** `mhphotos_schedule_instagram(caption, scheduled_at, photo_ids=[…Insta-Kopien in Reihenfolge…],
+   mentions=[…], location_name=…)` (Karussell, 2 bis 10 Fotos; ein Einzelfoto mit `photo_id`), zuerst ohne `confirm`,
+   nach dem Ok zum Plan mit `confirm=true`. Standard `needs_approval=true`: der Beitrag wartet in der MHPhotos-Warteschlange
+   als „wartet auf Freigabe“, bis der Eigentümer ihn unter Admin › Social › Warteschlange freigibt; erst dann geht er zur
+   geplanten Zeit raus. `mentions` markiert Konten im Bild, aber nur solche auf der MHPhotos-Liste vertrauter Konten;
+   andere gehen nur als @Erwähnung in den Text. Meldet das Tool `approval_unsupported`, ist die MHPhotos-App noch nicht
+   aktualisiert: dann nichts einplanen und dem Eigentümer Bescheid geben.
 7. **Stories am Abend** (z. B. 19 Uhr, besser nach `mhphotos_best_times`): `mhphotos_schedule_instagram(post_type="story",
    photo_id=<Story-9:16-Kopie>, caption=…, scheduled_at=…)`. Einen anklickbaren Link oder Sticker zum Post vom Morgen kann der
    Connector nicht setzen: dem Eigentümer sagen, dass er den Post in der Instagram-App in die Story teilt oder den Link-Sticker
@@ -138,13 +146,14 @@ Zeiten in Europe/Berlin mit Offset angeben (Winter `+01:00`, Sommer `+02:00`). K
    auf Sonntagabend planen macht der Eigentümer im Content Studio. Musik nur, wenn er das MP4 dort lädt und in der App postet.
 9. **Abschluss:** `mhphotos_instagram_queue` zeigen (alles mit Zeit). Dann ein **Copy-und-Paste-Block** pro Tag, jeweils als
    eigener Codeblock, damit er sich am Handy mit einem Tipp kopieren lässt:
-   - mhphotos.de pro Foto: Dateiname, Titel, Kategorie, Beschreibung, Alt-Text (zum Abgleich beim Übernehmen in der App).
-   - Instagram-Post: Konten für die Bild-Markierungen (`@…`, pro Foto des Karussells), Ort für den Standort-Tag.
+   - mhphotos.de pro Foto: Titel und Link bzw. Kategorie (nur zum Nachsehen; ohne `mhphotos_publish` zum Übernehmen in der App).
+   - Instagram-Post: Konten, die nicht markiert werden konnten (nicht auf der Liste vertrauter Konten), zum Nachtragen in der App.
    - Story: Text für die Story, Link-Sticker-Hinweis („Post von heute früh teilen“), Konten zum Erwähnen.
    - Reel: Titel und Text, Hinweis „im Content Studio freigeben, Sonntag 19 Uhr“.
    Texte, Hashtags und @Erwähnungen stehen bereits im geplanten Post; der Block ist nur für das, was der Connector nicht
    setzen kann. Nach dem Posten `add_keywords([ids], ["Instagram"])`.
-Instagram-Beiträge erscheinen automatisch zur geplanten Zeit; rechtzeitig abbrechen mit `mhphotos_cancel_instagram`.
+Freigegebene Instagram-Beiträge erscheinen automatisch zur geplanten Zeit; rechtzeitig abbrechen mit `mhphotos_cancel_instagram`.
+Im Abschlussbericht erinnern: „Bitte unter Admin › Social › Warteschlange freigeben (Filter „Zur Freigabe“).“
 
 ## Ganzes Jahr („/mhphotos 2026“)
 Reise- und Monatssammlungen des Jahres über `list_collections` finden, **eine nach der anderen** mit den Phasen 1 bis 5
