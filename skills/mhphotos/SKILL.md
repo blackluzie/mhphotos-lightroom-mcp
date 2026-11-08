@@ -118,8 +118,9 @@ Zeiten in Europe/Berlin mit Offset angeben (Winter `+01:00`, Sommer `+02:00`). K
      **Alt-Text** (was zu sehen ist, für Barrierefreiheit und Bildersuche), **Ort**, 5 bis 12 deutsche **Stichwörter**.
    - In Lightroom schreiben: `set_title_caption` (Titel, Beschreibung) und `add_keywords`, Trockenlauf, dann `confirm=true`.
    - Über den Connector: `export_photos(photo_ids, confirm=true)` schickt die Fotos in die MHPhotos-Inbox (Status „wartet“).
-     Der Connector kann nicht selbst veröffentlichen: dem Eigentümer pro Foto Titel, Kategorie, Beschreibung und Alt-Text
-     als Liste geben, die er beim Übernehmen in der MHPhotos-App einträgt bzw. mit dem KI-Vorschlag abgleicht.
+     Titel, Beschreibung, Ort und Stichwörter aus Lightroom stehen über die JPEG-Metadaten schon im Inbox-Eintrag (die
+     MHPhotos-Inbox liest IPTC/XMP). Kategorie und Alt-Text nicht: die kommen in den Copy-und-Paste-Block (Schritt 9).
+     Der Connector kann nicht selbst veröffentlichen, der Eigentümer übernimmt die Fotos in der MHPhotos-App.
      Mit `mhphotos_inbox(status="wartet")` prüfen, dass sie angekommen sind.
    - Mit dem lokalen Server (Claude Code mit allen Tools): `send_to_mhphotos_inbox`, `mhphotos_analyze_inbox`, dann
      `mhphotos_publish(item_ids, overrides={id: {title, description, alt, location, categories}})` als Trockenlauf und nach
@@ -135,8 +136,14 @@ Zeiten in Europe/Berlin mit Offset angeben (Winter `+01:00`, Sommer `+02:00`). K
    6 bis 12 der Woche in guter Reihenfolge (starkes erstes und letztes Bild), `mhphotos_create_reel(photo_ids, title, caption)`
    als Trockenlauf, dann `confirm=true`. `mhphotos_reel_jobs` zeigt „bereit“. Das Reel ist eine stumme Diashow; freigeben und
    auf Sonntagabend planen macht der Eigentümer im Content Studio. Musik nur, wenn er das MP4 dort lädt und in der App postet.
-9. **Abschluss:** `mhphotos_instagram_queue` zeigen (alles mit Zeit), offene Handgriffe für den Eigentümer auflisten
-   (Story-Links, Bild-Markierungen, Reel freigeben, Inbox übernehmen). Nach dem Posten `add_keywords([ids], ["Instagram"])`.
+9. **Abschluss:** `mhphotos_instagram_queue` zeigen (alles mit Zeit). Dann ein **Copy-und-Paste-Block** pro Tag, jeweils als
+   eigener Codeblock, damit er sich am Handy mit einem Tipp kopieren lässt:
+   - mhphotos.de pro Foto: Dateiname, Titel, Kategorie, Beschreibung, Alt-Text (zum Abgleich beim Übernehmen in der App).
+   - Instagram-Post: Konten für die Bild-Markierungen (`@…`, pro Foto des Karussells), Ort für den Standort-Tag.
+   - Story: Text für die Story, Link-Sticker-Hinweis („Post von heute früh teilen“), Konten zum Erwähnen.
+   - Reel: Titel und Text, Hinweis „im Content Studio freigeben, Sonntag 19 Uhr“.
+   Texte, Hashtags und @Erwähnungen stehen bereits im geplanten Post; der Block ist nur für das, was der Connector nicht
+   setzen kann. Nach dem Posten `add_keywords([ids], ["Instagram"])`.
 Instagram-Beiträge erscheinen automatisch zur geplanten Zeit; rechtzeitig abbrechen mit `mhphotos_cancel_instagram`.
 
 ## Ganzes Jahr („/mhphotos 2026“)
