@@ -27,6 +27,26 @@ class FakeMHPhotos:
              "permalink": "https://instagram.com/p/old"},
         ]
         self.social_uploads: list[dict] = []
+        self.comments: list[dict] = [
+            {"id": "17900000000000001", "account_id": "mhphotos", "username": "anna.k", "text": "Wo ist das?",
+             "media_caption": "Abendlicht am Aasee", "media_id": "m1", "classification": "frage",
+             "status": "entwurf", "draft_reply": "Am Aasee in Münster!", "reply_text": "", "liked_at": None},
+            {"id": "17900000000000002", "account_id": "mhphotos", "username": "ben", "text": "Wow 😍",
+             "media_caption": "Hafen", "media_id": "m2", "classification": "lob", "status": "beantwortet",
+             "draft_reply": "", "reply_text": "Danke!", "liked_at": "2026-11-01 10:00:00"},
+            {"id": "17900000000000003", "account_id": "malou", "username": "cara", "text": "Schön",
+             "media_caption": "", "media_id": "m3", "classification": "lob", "status": "neu",
+             "draft_reply": "", "reply_text": "", "liked_at": None},
+        ]
+        self.comment_actions: list[dict] = []
+        self.watch_posts: list[dict] = [
+            {"id": "wp-1", "ig_username": "Tom.Berg", "caption": "Gipfel!", "permalink": "https://instagram.com/p/t1",
+             "posted_at": "2026-11-07", "status": "neu", "suggested_comment": "Starker Blick!"},
+            {"id": "wp-2", "ig_username": "fremd_cafe", "caption": "Neue Torte", "permalink": "https://instagram.com/p/f1",
+             "posted_at": "2026-11-06", "status": "neu", "suggested_comment": ""},
+            {"id": "wp-3", "ig_username": "tom.berg", "caption": "alt", "status": "kommentiert", "suggested_comment": "x"},
+        ]
+        self.contacts: list[dict] = [{"id": "pc-1", "username": "tom.berg", "note": "Schulfreund", "close_friend": 1}]
         self.duplicate: dict | None = None  # set to simulate "already planned"
         self.duplicate_after: int | None = None
         self.reel_jobs: list[dict] = []
@@ -117,6 +137,66 @@ class FakeMHPhotos:
                 if self.headers.get("X-Admin-Token") != TOKEN:
                     return self._reply(401, {"error": "unauthorized"})
                 path = self.path
+                if method == "GET" and path.startswith("/api/admin/social-hub-comments?"):
+                    from urllib.parse import parse_qs, urlsplit
+                    q = {k: v[0] for k, v in parse_qs(urlsplit(path).query, keep_blank_values=True).items()}
+                    if q.get("accountId") not in ("mhphotos", "malou"):
+                        return self._reply(400, {"error": "invalid_account"})
+                    rows = [c for c in outer.comments if c["account_id"] == q["accountId"]]
+                    wanted = q.get("filter", "entwurf")
+                    if wanted == "unliked":
+                        rows = [c for c in rows if not c["liked_at"] and c["status"] != "ignoriert"]
+                    elif wanted:
+                        rows = [c for c in rows if c["status"] == wanted]
+                    return self._reply(200, rows)
+                if method == "POST" and path == "/api/admin/social-hub-comments":
+                    outer.comment_actions.append(body)
+                    row = next((c for c in outer.comments if c["id"] == body.get("id")), None)
+                    if row is None:
+                        return self._reply(502, {"error": "Kommentar nicht gefunden."})
+                    action = body.get("action")
+                    if action == "reply":
+                        row.update(status="beantwortet", reply_text=body["text"])
+                        return self._reply(200, {"ok": True, "replyId": "r-1"})
+                    if action == "like":
+                        row["liked_at"] = "now"
+                        return self._reply(200, {"ok": True, "liked": True})
+                    if action == "ignore":
+                        row["status"] = "ignoriert"
+                        return self._reply(200, {"ok": True})
+                    if action in ("draft", "tone"):
+                        row.update(status="entwurf", draft_reply=f"Neu ({body.get('tone', 'draft')})")
+                        return self._reply(200, {"ok": True, "draft_reply": row["draft_reply"], "classification": "frage"})
+                    return self._reply(400, {"error": "invalid_action"})
+                if path.startswith("/api/admin/social-hub/watchlist/posts"):
+                    from urllib.parse import parse_qs, urlsplit
+                    parts = urlsplit(path)
+                    if method == "GET":
+                        wanted = parse_qs(parts.query).get("status", [""])[0]
+                        return self._reply(200, [p for p in outer.watch_posts if not wanted or p["status"] == wanted])
+                    pid, action = parts.path.split("/")[-2:]
+                    post = next((p for p in outer.watch_posts if p["id"] == pid), None)
+                    if post is None:
+                        return self._reply(404, {"error": "Eintrag nicht gefunden."})
+                    if action == "regenerate":
+                        post["suggested_comment"] = "Neue Idee"
+                        return self._reply(200, {"ok": True, "suggested_comment": "Neue Idee"})
+                    post["status"] = {"done": "kommentiert", "ignore": "ignoriert"}[action]
+                    return self._reply(200, {"ok": True})
+                if path == "/api/admin/social-hub/contacts":
+                    if method == "GET":
+                        return self._reply(200, outer.contacts)
+                    if not any(c["username"] == body["username"] for c in outer.contacts):
+                        outer.contacts.append({"id": f"pc-{len(outer.contacts) + 1}", "username": body["username"],
+                                               "note": body.get("note", ""), "close_friend": 0 if body.get("close_friend") is False else 1})
+                    return self._reply(200, {"ok": True})
+                if method == "PATCH" and path.startswith("/api/admin/social-hub/contacts/"):
+                    row = next(c for c in outer.contacts if c["id"] == path.rsplit("/", 1)[1])
+                    if "close_friend" in body:
+                        row["close_friend"] = 1 if body["close_friend"] else 0
+                    if "note" in body:
+                        row["note"] = body["note"]
+                    return self._reply(200, {"ok": True})
                 if path == "/api/admin/social-hub-queue":
                     if method == "GET":
                         return self._reply(200, outer.social_queue)

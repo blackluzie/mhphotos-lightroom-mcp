@@ -410,6 +410,88 @@ def social_schedule(
         return 0, {"error": "MHPhotos app not reachable"}
 
 
+# --- Instagram comments via the comment inbox of the MHPhotos app ---------------------------
+# The social hub polls the comments every 10 minutes, classifies them and writes an AI reply draft;
+# MHPhotos relays that inbox under /api/admin/social-hub-comments (accounts mhphotos and malou).
+SOCIAL_COMMENTS = "/api/admin/social-hub-comments"
+COMMENT_ACCOUNTS = ("mhphotos", "malou")
+COMMENT_STATUSES = ("neu", "entwurf", "wiedervorlage", "beantwortet", "ignoriert")
+COMMENT_TONES = ("freundlich", "knapp", "humorvoll")
+COMMENT_MAX_CHARS = 2200  # Instagram's limit for one comment
+_COMMENT_ID = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
+
+
+def valid_comment_id(comment_id: str) -> bool:
+    return bool(_COMMENT_ID.match(comment_id))
+
+
+def social_comments(cfg: InboxConfig, account: str, status: str = "") -> tuple[int, dict[str, Any]]:
+    """Comments of one account (urgent first: criticism and questions before praise), at most 200."""
+    query = urllib.parse.urlencode({"accountId": account, "filter": status})
+    return api(cfg, "GET", f"{SOCIAL_COMMENTS}?{query}")
+
+
+def social_comment_action(
+    cfg: InboxConfig, comment_id: str, action: str, text: str | None = None, tone: str | None = None
+) -> tuple[int, dict[str, Any]]:
+    """draft | tone | reply | like | ignore on one comment (reply and like are visible on Instagram)."""
+    if not valid_comment_id(comment_id):
+        return 400, {"error": "invalid comment id"}
+    body: dict[str, Any] = {"id": comment_id, "action": action}
+    if text is not None:
+        body["text"] = text
+    if tone is not None:
+        body["tone"] = tone
+    return api(cfg, "POST", SOCIAL_COMMENTS, body, timeout=90.0)
+
+
+# --- Friends' posts (watch list of the social hub) and how close each person is --------------
+# Reached through the generic hub proxy. Instagram's API cannot like or comment on other people's
+# posts, so suggestions are only text for Martin to paste in the Instagram app.
+WATCH_POST_ACTIONS = ("done", "ignore", "regenerate")
+_WATCH_POST_ID = re.compile(r"^[a-z0-9-]{1,40}$")
+_IG_USERNAME = re.compile(r"^[a-z0-9._]{1,30}$")
+
+
+def normalize_username(raw: str) -> str | None:
+    name = (raw or "").strip().lstrip("@").lower()
+    return name if _IG_USERNAME.match(name) else None
+
+
+def watch_posts(cfg: InboxConfig, status: str = "") -> tuple[int, dict[str, Any]]:
+    query = f"?{urllib.parse.urlencode({'status': status})}" if status else ""
+    return api(cfg, "GET", f"{SOCIAL_PROXY}/watchlist/posts{query}")
+
+
+def watch_post_action(cfg: InboxConfig, post_id: str, action: str) -> tuple[int, dict[str, Any]]:
+    if not _WATCH_POST_ID.match(post_id) or action not in WATCH_POST_ACTIONS:
+        return 400, {"error": "invalid post id or action"}
+    return api(cfg, "POST", f"{SOCIAL_PROXY}/watchlist/posts/{post_id}/{action}", {}, timeout=90.0)
+
+
+def contacts(cfg: InboxConfig) -> tuple[int, dict[str, Any]]:
+    return api(cfg, "GET", f"{SOCIAL_PROXY}/contacts")
+
+
+def save_contact(
+    cfg: InboxConfig, username: str, close_friend: bool, note: str | None
+) -> tuple[int, dict[str, Any]]:
+    """Create or update one person (close friend or not) in the hub's personal contacts."""
+    code, data = contacts(cfg)
+    if code != 200:
+        return code, data
+    row = next((c for c in data.get("items", []) if normalize_username(str(c.get("username", ""))) == username), None)
+    if row is None:
+        return api(cfg, "POST", f"{SOCIAL_PROXY}/contacts",
+                   {"username": username, "note": note or "", "close_friend": close_friend})
+    body: dict[str, Any] = {"close_friend": close_friend}
+    if note is not None:
+        body["note"] = note
+    if not _WATCH_POST_ID.match(str(row.get("id", ""))):
+        return 502, {"error": "unexpected contact id from the hub"}
+    return api(cfg, "PATCH", f"{SOCIAL_PROXY}/contacts/{row['id']}", body)
+
+
 def inbox_image(cfg: InboxConfig, item_id: str) -> tuple[int, bytes | None]:
     """The stored original of an inbox item (JPEG/PNG/WebP/AVIF)."""
     return api_bytes(cfg, f"{ENDPOINT}/{_quote(item_id)}/image")
