@@ -344,6 +344,14 @@ eq(#coll.added, 2)
 coll.isSmartCollection = function() return true end
 eq(pcall(Commands.run, 'add_to_collection', { collection_id = '7', photo_ids = { 'u1' } }), false)
 eq(select(2, pcall(Commands.run, 'add_to_collection', { collection_id = '55', photo_ids = { 'u1' } })).code, 'not_found')
+coll.removePhotos = function(self, ps) self.removed = ps end
+coll.isSmartCollection = function() return false end
+eq(Commands.run('remove_from_collection', { collection_id = '7', photo_ids = { 'u1', 'u2' } }).updated, 2)
+eq(#coll.removed, 2)
+coll.isSmartCollection = function() return true end
+eq(pcall(Commands.run, 'remove_from_collection', { collection_id = '7', photo_ids = { 'u1' } }), false)
+eq(select(2, pcall(Commands.run, 'remove_from_collection', { collection_id = '55', photo_ids = { 'u1' } })).code, 'not_found')
+coll.isSmartCollection = function() return false end
 Commands.run('set_color_label', { photo_ids = { 'u1' }, label = 'green' })
 eq(p1.raw.colorNameForLabel, 'green')
 eq(pcall(Commands.run, 'set_color_label', { photo_ids = { 'u1' }, label = 'pink' }), false)

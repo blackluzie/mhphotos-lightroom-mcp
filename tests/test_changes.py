@@ -47,6 +47,23 @@ async def test_add_to_collection(writes):
     assert "error" in await server.add_to_collection(made["id"], ["p4", "ghost"], confirm=True)
 
 
+async def test_remove_from_collection(writes):
+    made = await server.create_collection("Nächste Insta-Woche", confirm=True)
+    await server.add_to_collection(made["id"], ["p4", "p5"], confirm=True)
+    assert "error" in await server.remove_from_collection(made["id"])  # neither ids nor all_photos
+    assert "error" in await server.remove_from_collection(made["id"], ["p4"], all_photos=True)
+    dry = await server.remove_from_collection(made["id"], ["p4"])
+    assert dry["dry_run"] and server._adapter._collections[-1].photo_ids == ("p4", "p5")
+    done = await server.remove_from_collection(made["id"], ["p4"], confirm=True)
+    assert done["applied"] and server._adapter._collections[-1].photo_ids == ("p5",)
+    assert "p4" in server._adapter._photos  # still in the catalog
+    emptied = await server.remove_from_collection(made["id"], all_photos=True, confirm=True)
+    assert emptied["applied"] and server._adapter._collections[-1].photo_ids == ()
+    again = await server.remove_from_collection(made["id"], all_photos=True, confirm=True)
+    assert again["updated"] == 0
+    assert "error" in await server.remove_from_collection("nope", ["p5"], confirm=True)
+
+
 # ---- label / title / caption ----------------------------------------------
 async def test_color_label(writes):
     assert "error" in await server.set_color_label(["p4"], "pink", confirm=True)

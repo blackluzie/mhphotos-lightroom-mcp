@@ -748,6 +748,49 @@ async def add_to_collection(
 
 
 @mcp.tool()
+async def remove_from_collection(
+    collection_id: str,
+    photo_ids: list[str] | None = None,
+    all_photos: bool = False,
+    confirm: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Take photos out of a (non-smart) collection. Nothing is deleted: the photos stay in the catalog.
+
+    photo_ids: the photos to take out; all_photos=true empties the album instead (e.g. to refill
+    "Nächste Insta-Woche" for the next week). Dry run unless confirm=true; needs operator opt-in.
+    Not undoable here: add the photos back with add_to_collection.
+    """
+    if not permissions.writes_enabled():
+        return {"error": permissions.writes_disabled_message(), "code": "disabled"}
+    if bool(photo_ids) == bool(all_photos):
+        return {"error": "Give either photo_ids or all_photos=true"}
+    existing = await _run(_adapter.list_collections)
+    if _is_error(existing):
+        return existing
+    target = next((c for c in existing if c.id == collection_id), None)
+    if target is None:
+        return {"error": f"Collection not found: {collection_id}. Use list_collections."}
+    if all_photos:
+        res = await _run(_adapter.list_photos, collection_id, MAX_PAGE_SIZE, 0, None)
+        if _is_error(res):
+            return res
+        photos, total = res
+        if total == 0:
+            return {"applied": False, "updated": 0, "hint": f"'{target.name}' is already empty."}
+        if total > MAX_PAGE_SIZE:
+            return {"error": f"'{target.name}' holds {total} photos; take them out in parts of {MAX_PAGE_SIZE} with photo_ids"}
+        photo_ids = [p.id for p in photos]
+    return await _edit(
+        photo_ids or [],
+        {"remove_from_collection": target.name, "collection_id": collection_id, "all_photos": all_photos},
+        lambda: _adapter.remove_from_collection(collection_id, photo_ids or []),
+        confirm, ctx=ctx, tool="remove_from_collection",
+        summary=f"Aus der Sammlung '{target.name}' nehmen (Fotos bleiben im Katalog)",
+    )
+
+
+@mcp.tool()
 async def create_virtual_copies(
     photo_ids: list[str], copy_name: str | None = None, confirm: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
@@ -4230,7 +4273,7 @@ TOOLSETS: dict[str, set[str]] = {
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
         "create_collection", "move_collection", "create_smart_collection", "create_keyword", "import_photo",
-        "set_custom_metadata", "send_webhook", "add_to_collection", "export_photos", "undo_last_change",
+        "set_custom_metadata", "send_webhook", "add_to_collection", "remove_from_collection", "export_photos", "undo_last_change",
         "catalog_audit_collections", "set_location", "rotate_photos", "write_name_dates_to_files",
         "archive_candidates_collections", "presort_apply", "merge_keywords", "mark_online_in_lightroom",
         "spot_photos_collections", "fill_gps_gaps", "print_candidates_collections", "calendar_collections",
