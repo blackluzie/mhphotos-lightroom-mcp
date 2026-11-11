@@ -70,6 +70,7 @@ not yet checked, or checked with a note:
       with *Metadata > Purge Unused Keywords*
 - [ ] 0.1.27: after `catalog_audit_start()` `print_candidates` answers (no `old_snapshot`): `croppedDimensions` is not in
       `unsupported_keys`, a cropped photo shows its smaller size
+- [ ] 0.1.29: after `catalog_audit_start()` (whole catalog) `photo_stats()` writes `stats/foto-statistik.html` in the config folder; the page opens offline, switches years, language and light/dark, and shows aperture, ISO and shutter (they are empty with an older snapshot).
 - [ ] 0.1.28 watchdog: Status shows "Selbstheilung" only after a takeover. Provoke one (e.g. a contact sheet of 30
       uncached photos, or `set_title_caption` on 100 photos): the bridge must come back by itself within about 1-2
       minutes, without reloading the plug-in; `plugin-status.json` then has `takeovers` > 0

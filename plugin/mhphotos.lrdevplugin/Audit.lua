@@ -16,7 +16,7 @@ local BASE_RAW = { 'uuid', 'path', 'fileSize', 'fileFormat', 'dimensions', 'date
   'isVirtualCopy', 'rating', 'pickStatus' }
 -- Keys that may not exist in every Lightroom version: asked one by one, failures are reported.
 local OPTIONAL_RAW = { 'dateTimeOriginalISO8601', 'keywords', 'colorNameForLabel', 'lastEditTime',
-  'countVirtualCopies', 'isoSpeedRating', 'aperture', 'gps', 'focalLength', 'croppedDimensions' }
+  'countVirtualCopies', 'isoSpeedRating', 'aperture', 'gps', 'focalLength', 'croppedDimensions', 'shutterSpeed' }
 local FORMATTED = { 'cameraModel', 'cameraSerialNumber' }
 -- asked on their own, so a Lightroom without them still reports camera and serial number (since 0.1.26)
 local OPTIONAL_FORMATTED = { 'lens' }
@@ -214,6 +214,10 @@ function Audit.page(args)
       -- since 0.1.27: size after cropping (print sizes, calendar: landscape or portrait)
       cw = crop.width and math.floor(crop.width + 0.5) or nil,
       ch = crop.height and math.floor(crop.height + 0.5) or nil,
+      -- since 0.1.29: exposure data for the photo statistics (aperture f-number, ISO, shutter seconds)
+      iso = tonumber(opt('isoSpeedRating')) and math.floor(tonumber(opt('isoSpeedRating')) + 0.5) or nil,
+      ap = tonumber(opt('aperture')) and math.floor(tonumber(opt('aperture')) * 10 + 0.5) / 10 or nil,
+      ss = tonumber(opt('shutterSpeed')) and round5(tonumber(opt('shutterSpeed'))) or nil,
     }
   end
   return out
