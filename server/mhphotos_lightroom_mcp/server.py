@@ -37,6 +37,7 @@ from . import (
     social_crop,
     trip_story,
 )
+from . import photo_stats as stats_page
 from .adapters import (
     COLOR_LABELS,
     FLAGS,
@@ -52,6 +53,7 @@ from .bridge import (
     BridgeAdapter,
     BridgeError,
     BridgeUnavailable,
+    config_dir,
     write_plugin_config,
 )
 
@@ -4212,6 +4214,48 @@ async def weekly_report(days: int = 7) -> dict[str, Any]:
     return out
 
 
+@mcp.tool()
+async def photo_stats(year: int | None = None, name: str | None = None) -> dict[str, Any]:
+    """Your photo statistics as one offline HTML page (0.1.29): photos and shooting days, strongest month,
+    weekday x hour heatmap, cameras and lenses, focal lengths, aperture, ISO, shutter, format and crop share, hit
+    rate, light (golden hour from time and place), lenses unused for a year, prime-lens suggestion, is the widest
+    aperture worth it, never-touched storage and short conclusions. German and English, light and dark.
+
+    Read-only, from the catalog snapshot (run catalog_audit_start without year first; aperture, ISO and shutter
+    need plug-in 0.1.29+). Nothing is uploaded: the page is written to the config folder on the Mac
+    (stats/foto-statistik.html) and its path returned together with the main numbers. year limits the numbers
+    in the result; the page always contains every year and switches between them.
+    """
+    if year is not None and not 1900 <= year <= 2200:
+        return {"error": "year must be four digits"}
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+
+    def build() -> dict[str, Any]:
+        full = stats_page.compute_all(snap["photos"])
+        target = config_dir() / "stats"
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / "foto-statistik.html"
+        tmp = path.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(stats_page.render_html(full, name))
+        os.replace(tmp, path)
+        main = (full.get("by_year_stats") or {}).get(str(year)) if year else full
+        main = dict(main or {})
+        main.pop("by_year_stats", None)
+        main.pop("heatmap", None)
+        return {"page": str(path), "stats": main}
+
+    out = await anyio.to_thread.run_sync(build)
+    res = {**_scope_note(snap), **out}
+    if not any(p.get("ap") or p.get("iso") for p in snap["photos"][:5000]):
+        res["note"] = ("No aperture/ISO/shutter data in the snapshot: install plug-in 0.1.29+ and run "
+                       "catalog_audit_start again.")
+    return res
+
+
 # ---------------------------------------------------------------- toolsets
 # MHPHOTOS_TOOLSETS="read,develop" limits which tools are offered (fewer tools = fewer tokens,
 # smaller blast radius). Default: all. "read" is always on.
@@ -4225,7 +4269,7 @@ TOOLSETS: dict[str, set[str]] = {
         "catalog_audit_overview", "catalog_folder_moves", "archive_candidates", "presort_status", "presort_month",
         "keyword_check_start", "keyword_check_status", "keyword_check_results", "gear_usage", "trip_outline",
         "duplicate_folders", "missing_files_by_drive", "gps_gaps", "print_candidates", "calendar_candidates",
-        "weekly_report",
+        "weekly_report", "photo_stats",
     },
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
