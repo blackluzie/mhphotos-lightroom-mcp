@@ -29,6 +29,21 @@ MAX_BODY = 24_000_000  # previews arrive base64-encoded (get_previews: up to 30 
 DEFAULT_PORT = 47831
 
 
+TIMEOUT_ENV = "MHPHOTOS_BRIDGE_TIMEOUT"
+
+
+def timeout_floor() -> float:
+    """Minimum seconds to wait for Lightroom per command (env MHPHOTOS_BRIDGE_TIMEOUT).
+
+    Default 0 = every command keeps its own limit. A busy Mac can set e.g. 120 so that
+    no command gives up earlier (never shortens a longer limit, capped at 900 s).
+    """
+    try:
+        return min(max(float(os.environ.get(TIMEOUT_ENV, "0")), 0.0), 900.0)
+    except ValueError:
+        return 0.0
+
+
 class BridgeUnavailable(RuntimeError):
     """Lightroom plugin is not connected or did not answer in time."""
 
@@ -121,6 +136,7 @@ class Bridge:
                     f" (Waited {self._reconnect_wait:.0f}s for it to reconnect.)" if self._reconnect_wait else ""
                 )
             )
+        timeout = max(timeout, timeout_floor())
         cmd = _Command(name, args or {}, timeout)
         self._queue.put(cmd)
         if not cmd.done.wait(timeout):
