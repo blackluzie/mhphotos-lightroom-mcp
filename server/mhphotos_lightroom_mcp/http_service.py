@@ -52,14 +52,25 @@ WRITES_FLAG = 'MHPHOTOS_HTTP_WRITES'
 # names the MHPhotos site ("mhphotos_url"); the admin token stays in the macOS Keychain.
 MHPHOTOS_TOOLS = ('mhphotos_instagram_posts', 'mhphotos_instagram_images', 'mhphotos_inbox',
     'mhphotos_instagram_queue', 'mhphotos_best_times', 'instagram_candidates', 'mhphotos_site_photos',
-    'mhphotos_reel_jobs', 'spot_photos')
+    'mhphotos_reel_jobs', 'spot_photos', 'mhphotos_comments', 'mhphotos_friend_posts', 'mhphotos_friends')
+# Internal changes in the MHPhotos app that post nothing: a new AI reply draft, a watched post marked
+# done/ignored, whether someone is a close friend, refreshing the Instagram library from Instagram.
+COMMENT_DRAFT_TOOLS = ('mhphotos_comment_draft', 'mhphotos_friend_post', 'mhphotos_set_friend',
+    'mhphotos_sync_instagram')
 # Admin-only data written to the MHPhotos app (gear statistics, own photos per spot, an UNPUBLISHED blog draft):
 # offered with an MHPhotos site and writes; nothing here becomes public.
 MHPHOTOS_WRITE_TOOLS = ('mhphotos_sync_gear_usage', 'mhphotos_sync_spot_photos', 'mhphotos_create_blog_draft')
 # Planning posts that the MHPhotos social queue later publishes on Instagram by itself. Offered only
 # when desktop.json has "allow_instagram": true (and an MHPhotos site); each post is a dry run first.
-INSTAGRAM_TOOLS = ('mhphotos_schedule_instagram', 'mhphotos_cancel_instagram', 'mhphotos_create_reel')
+# mhphotos_comment_respond posts a reply / sets a heart under a comment, visibly; dry run until confirm=true.
+INSTAGRAM_TOOLS = ('mhphotos_schedule_instagram', 'mhphotos_cancel_instagram', 'mhphotos_create_reel',
+    'mhphotos_comment_respond')
 INSTAGRAM_FLAG = 'MHPHOTOS_HTTP_INSTAGRAM'
+# Putting inbox items on the PUBLIC MHPhotos site and correcting photos that are already online. Offered only
+# when desktop.json has "allow_publish": true (and an MHPhotos site); each change is a dry run first.
+PUBLISH_TOOLS = ('mhphotos_galleries', 'mhphotos_analyze_inbox', 'mhphotos_publish', 'mhphotos_update_site_photo',
+    'mhphotos_link_instagram')
+PUBLISH_FLAG = 'MHPHOTOS_HTTP_PUBLISH'
 # Writing a capture time into the JPEG files themselves (exiftool, with backups). Offered only when
 # desktop.json has "allow_file_edits": true together with "allow_writes": true.
 FILES_TOOLS = ('write_name_dates_to_files',)
@@ -190,20 +201,22 @@ def register_tools(app, writes=None):
     writes = os.environ.get(WRITES_FLAG) == '1' if writes is None else writes
     mhphotos = bool(os.environ.get('MHPHOTOS_INBOX_URL'))
     instagram = mhphotos and os.environ.get(INSTAGRAM_FLAG) == '1'
+    publish = mhphotos and os.environ.get(PUBLISH_FLAG) == '1'
     files = writes and os.environ.get(FILES_FLAG) == '1'
-    names = (READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ()) + (MHPHOTOS_TOOLS if mhphotos else ())
+    names = (READ_TOOLS + LOCAL_TOOLS + (WRITE_TOOLS if writes else ()) + (MHPHOTOS_TOOLS + COMMENT_DRAFT_TOOLS if mhphotos else ())
         + (MHPHOTOS_WRITE_TOOLS if mhphotos and writes else ())
-        + (INSTAGRAM_TOOLS if instagram else ()) + (FILES_TOOLS if files else ()))
+        + (INSTAGRAM_TOOLS if instagram else ()) + (PUBLISH_TOOLS if publish else ()) + (FILES_TOOLS if files else ()))
     for name in names:
         function = export_photos if name == 'export_photos' else getattr(server, name)
         overwrites = ((name in WRITE_TOOLS and name not in ADDITIVE_TOOLS) or name == 'mhphotos_cancel_instagram'
-            or name in FILES_TOOLS)
-        reads = name in READ_TOOLS or name in MHPHOTOS_TOOLS or name in STATUS_TOOLS
+            or name in FILES_TOOLS or name == 'mhphotos_update_site_photo')
+        reads = name in READ_TOOLS or name in MHPHOTOS_TOOLS or name in STATUS_TOOLS or name == 'mhphotos_galleries'
         app.add_tool(function,
             structured_output=False if name in {'get_photo_previews', 'get_contact_sheet', 'mhphotos_instagram_images'} else None,
             annotations=ToolAnnotations(readOnlyHint=reads,
                 destructiveHint=overwrites, idempotentHint=reads,
-                openWorldHint=name in MHPHOTOS_TOOLS or name in INSTAGRAM_TOOLS or name in MHPHOTOS_WRITE_TOOLS),
+                openWorldHint=name in MHPHOTOS_TOOLS or name in INSTAGRAM_TOOLS or name in MHPHOTOS_WRITE_TOOLS
+                or name in COMMENT_DRAFT_TOOLS or name in PUBLISH_TOOLS),
             meta={'securitySchemes': [{'type': 'oauth2', 'scopes': [SCOPE]}]})
 
 
@@ -216,7 +229,7 @@ def create_app():
 def main():
     # Never inherit an accidental write/publish opt-in from another launch context.
     for key in ('MHPHOTOS_ALLOW_WRITES', 'MHPHOTOS_ALLOW_PUBLISH', 'MHPHOTOS_ALLOW_INSTAGRAM', WRITES_FLAG,
-            'MHPHOTOS_INBOX_URL', INSTAGRAM_FLAG, FILES_FLAG, 'MHPHOTOS_ALLOW_FILE_EDITS'):
+            'MHPHOTOS_INBOX_URL', INSTAGRAM_FLAG, FILES_FLAG, 'MHPHOTOS_ALLOW_FILE_EDITS', PUBLISH_FLAG):
         os.environ.pop(key, None)
     if not server.permissions.export_dir():
         raise ValueError('An operator-controlled export directory is required')
@@ -236,6 +249,10 @@ def main():
     if config.get('allow_instagram') is True and config.get('mhphotos_url'):
         os.environ[INSTAGRAM_FLAG] = '1'
         os.environ['MHPHOTOS_ALLOW_INSTAGRAM'] = '1'
+        os.environ['MHPHOTOS_CONFIRMATION'] = 'flag'
+    if config.get('allow_publish') is True and config.get('mhphotos_url'):
+        os.environ[PUBLISH_FLAG] = '1'
+        os.environ['MHPHOTOS_ALLOW_PUBLISH'] = '1'
         os.environ['MHPHOTOS_CONFIRMATION'] = 'flag'
     if config.get('allow_writes') is True:
         os.environ[WRITES_FLAG] = '1'
@@ -263,7 +280,7 @@ def main():
     token = bridge_config.get('token')
     if not isinstance(token, str) or len(token) < 32:
         raise ValueError('Invalid bridge token')
-    bridge = Bridge(token=token, port=47831)
+    bridge = Bridge(token=token, port=47831, reconnect_wait=60.0)
     server.set_adapter(BridgeAdapter(bridge))
     app = create_app()
     bridge.start()

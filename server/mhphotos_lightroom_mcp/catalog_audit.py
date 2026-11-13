@@ -435,7 +435,7 @@ class Analysis:
 # One compact row per photo of the last run (virtual copies left out), so archive candidates, gear statistics,
 # spots and the folder move list can be computed later without asking Lightroom again. Stays on the Mac.
 SNAPSHOT_FIELDS = ("id", "t", "r", "pick", "kw", "edited", "label", "copies", "size", "fmt", "cam", "lens", "fl",
-                   "lat", "lon", "folder", "file", "w", "h", "cw", "ch")
+                   "lat", "lon", "folder", "file", "w", "h", "cw", "ch", "iso", "ap", "ss")
 
 
 def snapshot_row(rec: dict[str, Any]) -> list[Any]:

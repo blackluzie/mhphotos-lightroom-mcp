@@ -226,6 +226,22 @@ eq(Commands.run('get_preview', { photo_id = 'u1', size = 99999 }).image_base64, 
 eq(Commands.run('get_preview', { photo_id = 'u1', size = 1 }).image_base64, 'B64(IMG_1.dng:256x256)')
 eq(select(2, pcall(Commands.run, 'get_preview', { photo_id = 'zzz' })).code, 'not_found')
 
+-- 0.1.28 batch reads: one round for many photos, unknown ids do not fail the call
+local batch = Commands.run('get_photos', { photo_ids = { 'u1', 'zzz', 'u2' } }).photos
+eq(#batch, 3); eq(batch[1].id, 'u1'); eq(batch[1].location, 'Brixen, Südtirol, Italien')
+eq(batch[2].id, 'zzz'); eq(batch[2].error, 'not_found'); eq(batch[3].id, 'u2')
+eq(pcall(Commands.run, 'get_photos', { photo_ids = {} }), false)
+local pv = Commands.run('get_previews', { photo_ids = { 'u1', 'zzz' }, size = 300 }).previews
+eq(pv[1].image_base64, 'B64(IMG_1.dng:300x300)'); eq(pv[2].error, 'not_found')
+-- a thumbnail whose callback never comes: the others are delivered, the call ends after `wait` seconds
+local saved = p2.requestJpegThumbnail
+function p2:requestJpegThumbnail() return {} end
+local t0 = fakeNow
+pv = Commands.run('get_previews', { photo_ids = { 'u1', 'u2' }, size = 300, wait = 8 }).previews
+p2.requestJpegThumbnail = saved
+eq(pv[1].image_base64, 'B64(IMG_1.dng:300x300)'); assert(pv[2].error:find('timeout'), pv[2].error)
+assert(fakeNow - t0 <= 8.5, 'waited ' .. (fakeNow - t0))
+
 -- develop settings: scalars only (the ToneCurve table is dropped)
 local ds = Commands.run('get_develop_settings', { photo_id = 'u1' }).settings
 eq(ds.Exposure2012, 0.5); eq(ds.CameraProfile, 'Adobe Color'); eq(ds.ToneCurve, nil)

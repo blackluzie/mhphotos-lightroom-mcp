@@ -232,3 +232,48 @@ async def test_instagram_images_validation(app):
 
 async def test_instagram_images_disabled_without_config():
     assert (await server.mhphotos_instagram_images(["ig1"]))[0]["code"] == "disabled"
+
+
+async def test_update_site_photo_dry_run_then_confirm(app, can_publish):
+    dry = await server.mhphotos_update_site_photo("hp-2", title="Hafen von Palma", categories=["unterwegs/staedte"])
+    assert dry["dry_run"] is True and dry["will_be_public"] is True
+    assert dry["changes"] == {"title": {"old": "Hafen", "new": "Hafen von Palma"}}  # unchanged gallery left out
+    assert not any(c[0] == "PATCH" for c in app.calls)
+    done = await server.mhphotos_update_site_photo("hp-2", title="Hafen von Palma", alt="Boote im Hafen", confirm=True)
+    assert done["applied"] is True
+    patch = next(c for c in app.calls if c[0] == "PATCH")
+    assert patch[1] == "/api/admin/photos/hp-2" and patch[2] == {"title": "Hafen von Palma", "alt": "Boote im Hafen"}
+
+
+async def test_update_site_photo_checks_input(app, can_publish):
+    assert "Nothing to change" in (await server.mhphotos_update_site_photo("hp-1"))["error"]
+    assert "not on the site" in (await server.mhphotos_update_site_photo("hp-9", title="x"))["error"]
+    assert "unknown category" in (await server.mhphotos_update_site_photo("hp-1", categories=["gibt/es/nicht"]))["error"]
+    assert "photo_id" in (await server.mhphotos_update_site_photo("../x", title="x"))["error"]
+    assert "empty" in (await server.mhphotos_update_site_photo("hp-1", title=" "))["error"]
+
+
+async def test_update_and_link_need_publish_optin(app):
+    assert (await server.mhphotos_update_site_photo("hp-1", title="x", confirm=True))["code"] == "disabled"
+    assert (await server.mhphotos_link_instagram("17900", "hp-1", confirm=True))["code"] == "disabled"
+
+
+async def test_link_instagram(app, can_publish):
+    dry = await server.mhphotos_link_instagram("17900", "hp-1")
+    assert dry["dry_run"] is True and dry["photo_title"] == "Dom im Nebel"
+    assert not any(c[0] == "POST" and c[1] == "/api/admin/instagram-library" for c in app.calls)
+    done = await server.mhphotos_link_instagram("17900", "hp-1", confirm=True)
+    assert done["applied"] is True
+    assert ("POST", "/api/admin/instagram-library", {"action": "link", "instagramId": "17900", "photoId": "hp-1"}) in app.calls
+    assert "not on the site" in (await server.mhphotos_link_instagram("17900", "hp-9"))["error"]
+
+
+async def test_sync_instagram(app):
+    res = await server.mhphotos_sync_instagram()
+    assert res["synced"] == len(app.instagram) and res["library_total"] == len(app.instagram)
+    assert res["newest_sync"] == "2026-11-08T20:30:00.000Z"
+    assert ("POST", "/api/admin/instagram-library", {"action": "sync"}) in app.calls
+
+
+async def test_sync_instagram_disabled_without_config():
+    assert (await server.mhphotos_sync_instagram())["code"] == "disabled"

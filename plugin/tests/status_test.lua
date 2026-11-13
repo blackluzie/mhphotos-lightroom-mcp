@@ -26,4 +26,8 @@ assert(text:find('Letzte Fehler:'), text)
 assert(text:find('vor 90 s') or text:find('vor 1 min'), text)
 local fresh = StatusText.format(Stats.new('0.1.18', 50), { now = 60 })
 assert(fresh:find('noch nie'), fresh)
+assert(not text:find('Selbstheilung'), 'no watchdog line without takeovers')
+s.takeovers, s.last_takeover_at, s.last_takeover = 2, 1040, 'runner-1 hing bei get_preview'
+text = StatusText.format(s, { now = 1100 })
+assert(text:find('Selbstheilung: 2x neu verbunden %(zuletzt vor 60 s, runner%-1 hing bei get_preview%)'), text)
 print('status ok')

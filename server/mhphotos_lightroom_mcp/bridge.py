@@ -25,8 +25,23 @@ from typing import Any
 
 from .adapters import Collection, NotFoundError, Photo, PhotoFilter
 
-MAX_BODY = 4_000_000  # previews arrive base64-encoded
+MAX_BODY = 24_000_000  # previews arrive base64-encoded (get_previews: up to 30 at once)
 DEFAULT_PORT = 47831
+
+
+TIMEOUT_ENV = "MHPHOTOS_BRIDGE_TIMEOUT"
+
+
+def timeout_floor() -> float:
+    """Minimum seconds to wait for Lightroom per command (env MHPHOTOS_BRIDGE_TIMEOUT).
+
+    Default 0 = every command keeps its own limit. A busy Mac can set e.g. 120 so that
+    no command gives up earlier (never shortens a longer limit, capped at 900 s).
+    """
+    try:
+        return min(max(float(os.environ.get(TIMEOUT_ENV, "0")), 0.0), 900.0)
+    except ValueError:
+        return 0.0
 
 
 class BridgeUnavailable(RuntimeError):
@@ -58,12 +73,17 @@ class Bridge:
         port: int = 0,
         poll_wait: float = 10.0,
         connected_ttl: float = 30.0,
+        reconnect_wait: float = 0.0,
     ) -> None:
         if host not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("Bridge must bind to loopback only")
         self.token = token or secrets.token_urlsafe(32)
         self._poll_wait = poll_wait
         self._ttl = connected_ttl
+        # How long call() waits for the plug-in to come back before it reports "not connected". Since plug-in
+        # 0.1.28 a watchdog in Lightroom replaces a polling task that hangs in a Lightroom call; waiting here
+        # turns such a hiccup into a slower answer instead of an error the user has to fix by hand.
+        self._reconnect_wait = reconnect_wait
         self._queue: queue.Queue[_Command] = queue.Queue()
         self._inflight: dict[str, _Command] = {}
         self._lock = threading.Lock()
@@ -100,12 +120,23 @@ class Bridge:
         self._last_seen = time.monotonic()
 
     # --- calls from the MCP side ---
+    def wait_connected(self, seconds: float) -> bool:
+        deadline = time.monotonic() + seconds
+        while not self.is_connected():
+            if time.monotonic() >= deadline or self._stop.is_set():
+                return False
+            time.sleep(0.25)
+        return True
+
     def call(self, name: str, args: dict[str, Any] | None = None, timeout: float = 30.0) -> Any:
-        if not self.is_connected():
+        if not self.is_connected() and not self.wait_connected(self._reconnect_wait):
             raise BridgeUnavailable(
                 "Lightroom plugin is not connected. Start Lightroom Classic and enable "
-                "the MHPhotos plugin."
+                "the MHPhotos plugin." + (
+                    f" (Waited {self._reconnect_wait:.0f}s for it to reconnect.)" if self._reconnect_wait else ""
+                )
             )
+        timeout = max(timeout, timeout_floor())
         cmd = _Command(name, args or {}, timeout)
         self._queue.put(cmd)
         if not cmd.done.wait(timeout):
@@ -259,8 +290,21 @@ def write_plugin_config(bridge: Bridge) -> Path:
     return path
 
 
+def _chunks(items: list[Any], size: int) -> list[list[Any]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _unknown_command(exc: Exception) -> bool:
+    return "unknown command" in str(exc)
+
+
 class BridgeAdapter:
     """CatalogAdapter that forwards every operation to the Lightroom plugin."""
+
+    # Writes on many photos go to Lightroom in parts of this size, each with its own time limit: one call with
+    # 100 photos ran past the 30 s limit (45 worked), and the bridge then looked disconnected.
+    write_chunk = 25
+    preview_chunk = 10
 
     name = "bridge"
 
@@ -309,6 +353,56 @@ class BridgeAdapter:
     def get_photo(self, photo_id: str) -> Photo:
         return Photo.from_dict(self._call("get_photo", {"photo_id": photo_id}))
 
+    def get_photos(self, photo_ids: list[str]) -> list[Photo | None]:
+        """Metadata of many photos in one bridge round per 100 (plug-in 0.1.28+); None = not found.
+
+        Raises NotImplementedError for an older plug-in, so callers fall back to get_photo.
+        """
+        out: list[Photo | None] = []
+        for chunk in _chunks(photo_ids, 100):
+            try:
+                data = self._call("get_photos", {"photo_ids": chunk}, timeout=30.0 + 0.5 * len(chunk))
+            except BridgeError as exc:
+                if _unknown_command(exc):
+                    raise NotImplementedError("plug-in before 0.1.28") from None
+                raise
+            for item in data["photos"]:
+                out.append(None if item.get("error") else Photo.from_dict(item))
+        return out
+
+    def get_previews(self, photo_ids: list[str], size: int) -> list[bytes | None]:
+        """JPEG previews, rendered in parallel by Lightroom (plug-in 0.1.28+); None = not rendered in time."""
+        out: list[bytes | None] = []
+        for chunk in _chunks(photo_ids, self.preview_chunk):
+            try:
+                data = self._call("get_previews", {"photo_ids": chunk, "size": size, "wait": 25}, timeout=45.0)
+            except BridgeError as exc:
+                if _unknown_command(exc):
+                    raise NotImplementedError("plug-in before 0.1.28") from None
+                raise
+            for item in data["previews"]:
+                b64 = item.get("image_base64")
+                out.append(base64.b64decode(b64) if b64 else None)
+        return out
+
+    def _write(self, name: str, photo_ids: list[str], args: dict[str, Any]) -> dict[str, Any]:
+        """A write on photo_ids, sent in parts of write_chunk photos; sums the parts' "updated"."""
+        done: list[str] = []
+        updated = 0
+        for chunk in _chunks(photo_ids, self.write_chunk):
+            try:
+                res = self._call(name, {"photo_ids": chunk, **args}, timeout=self._timeout + 0.5 * len(chunk))
+            except (BridgeError, BridgeUnavailable) as exc:
+                if not done:
+                    raise
+                raise type(exc)(
+                    f"{exc} (the first {len(done)} of {len(photo_ids)} photos were already changed: "
+                    f"{', '.join(done)}; the rest is unchanged)"
+                ) from None
+            done.extend(chunk)
+            updated += int((res or {}).get("updated", len(chunk))) if isinstance(res, dict) else len(chunk)
+        return {"updated": updated}
+
     def get_preview(self, photo_id, size):
         data = self._call("get_preview", {"photo_id": photo_id, "size": size}, timeout=60.0)
         return base64.b64decode(data["image_base64"])
@@ -348,21 +442,21 @@ class BridgeAdapter:
         return self._call("add_photo", {"path": path, **({"collection_id": collection_id} if collection_id else {})})
 
     def add_to_collection(self, collection_id, photo_ids):
-        return self._call("add_to_collection", {"collection_id": collection_id, "photo_ids": photo_ids})
+        return self._write("add_to_collection", photo_ids, {"collection_id": collection_id})
 
     def set_color_label(self, photo_ids, label):
-        return self._call("set_color_label", {"photo_ids": photo_ids, "label": label})
+        return self._write("set_color_label", photo_ids, {"label": label})
 
     def set_title_caption(self, photo_ids, title, caption):
-        args: dict[str, Any] = {"photo_ids": photo_ids}
+        args: dict[str, Any] = {}
         if title is not None:
             args["title"] = title
         if caption is not None:
             args["caption"] = caption
-        return self._call("set_title_caption", args)
+        return self._write("set_title_caption", photo_ids, args)
 
     def remove_keywords(self, photo_ids, keywords):
-        return self._call("remove_keywords", {"photo_ids": photo_ids, "keywords": keywords})
+        return self._write("remove_keywords", photo_ids, {"keywords": keywords})
 
     # Since plug-in 0.1.25 create_virtual_copies only starts a job in Lightroom and answers at once; the copies are
     # made in a task of their own (Lightroom's call never comes back, and new copies read slowly for minutes). The
@@ -389,13 +483,13 @@ class BridgeAdapter:
         return self._call("photo_dimensions", {"photo_ids": photo_ids})
 
     def set_rating(self, photo_ids, rating):
-        return self._call("set_rating", {"photo_ids": photo_ids, "rating": rating})
+        return self._write("set_rating", photo_ids, {"rating": rating})
 
     def set_flag(self, photo_ids, flag):
-        return self._call("set_flag", {"photo_ids": photo_ids, "flag": flag})
+        return self._write("set_flag", photo_ids, {"flag": flag})
 
     def add_keywords(self, photo_ids, keywords):
-        return self._call("add_keywords", {"photo_ids": photo_ids, "keywords": keywords})
+        return self._write("add_keywords", photo_ids, {"keywords": keywords})
 
     def audit_page(self, offset, limit, refresh=False, year=None):
         # the first page also reads the catalog's photo list (seconds for 250k+ photos); with a year the
@@ -444,12 +538,12 @@ class BridgeAdapter:
         return self._call("webhook_send", {"name": name, "payload": payload}, timeout=40)
 
     def set_custom_metadata(self, photo_ids, status, note):
-        args = {"photo_ids": photo_ids}
+        args = {}
         if status is not None:
             args["status"] = status
         if note is not None:
             args["note"] = note
-        return self._call("set_custom_metadata", args)
+        return self._write("set_custom_metadata", photo_ids, args)
 
     def auto_tone(self, photo_ids, white_balance):
         return self._call("auto_tone", {"photo_ids": photo_ids, "white_balance": white_balance}, timeout=120)

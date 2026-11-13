@@ -15,7 +15,9 @@ catalog: see the ticked list below.**
    ```
    For an MCP client, put the same environment into its server config.
 3. The plugin starts its polling loop by itself when Lightroom loads it (`LrForceInitPlugin`); after a server restart it
-   reconnects within about 10 seconds. *Library → Plug-in Extras → MHPhotos MCP: Status* shows the loop state and the
+   reconnects within about 10 seconds. Since 0.1.28 a watchdog also covers a Lightroom call that never comes back:
+   the plug-in runs three bridge tasks, one polls, the others watch; if the polling one does not report back within
+   the command's time limit plus 45 s, another one takes over. No reload in the Plug-in Manager is needed then. *Library → Plug-in Extras → MHPhotos MCP: Status* shows the loop state and the
    same text is in `~/.mhphotos-lightroom-mcp/plugin-status.txt` (start/failure trace: `plugin-init.log`).
 
 ## First test (use a disposable catalog with ~10 photos, never your production catalog)
@@ -68,6 +70,12 @@ not yet checked, or checked with a note:
       with *Metadata > Purge Unused Keywords*
 - [ ] 0.1.27: after `catalog_audit_start()` `print_candidates` answers (no `old_snapshot`): `croppedDimensions` is not in
       `unsupported_keys`, a cropped photo shows its smaller size
+- [ ] 0.1.29: after `catalog_audit_start()` (whole catalog) `photo_stats()` writes `stats/foto-statistik.html` in the config folder; the page opens offline, switches years, language and light/dark, and shows aperture, ISO and shutter (they are empty with an older snapshot).
+- [ ] 0.1.28 watchdog: Status shows "Selbstheilung" only after a takeover. Provoke one (e.g. a contact sheet of 30
+      uncached photos, or `set_title_caption` on 100 photos): the bridge must come back by itself within about 1-2
+      minutes, without reloading the plug-in; `plugin-status.json` then has `takeovers` > 0
+- [ ] 0.1.28: `get_contact_sheet` with 30 photos answers (previews are rendered in parallel, one `get_previews` per 10)
+- [ ] 0.1.28: a write on 100 photos (e.g. `set_title_caption`) goes through (the server sends it in parts of 25)
 - [x] `get_contact_sheet` with 6 photos: one numbered image
 - [ ] `list_collections(include_counts=true)` counts match; without it the call is fast
 - [ ] `apply_preset` (dry run, then confirm) on a test photo: preset visible in Develop, one history step "MHPhotos…", undoable

@@ -17,11 +17,19 @@ local ok, err = pcall(function()
   local State = require 'State'
   local Loop = require 'Loop'
   State.stop = false
-  trace('init: modules loaded, starting loop task')
-  LrTasks.startAsyncTask(function()
-    local ok2, err2 = LrTasks.pcall(Loop.run)
-    if not ok2 then trace('loop crashed: ' .. tostring(type(err2) == 'table' and err2.message or err2)) end
-  end)
+  State.active = nil
+  trace('init: modules loaded, starting ' .. Loop.RUNNERS .. ' bridge runner tasks (watchdog)')
+  -- All runners are started here, never from inside another task (in Lightroom such nested tasks stalled,
+  -- see Loop.lua). If the polling runner hangs in a Lightroom call, another one takes over.
+  for i = 1, Loop.RUNNERS do
+    local name = 'runner-' .. i
+    LrTasks.startAsyncTask(function()
+      local ok2, err2 = LrTasks.pcall(Loop.runner, name)
+      if not ok2 then trace(name .. ' crashed: ' .. tostring(type(err2) == 'table' and err2.message or err2)) end
+      -- a crashed runner gives up its turn, so a watching one takes over at once
+      if State.active == name then State.deadline = 0 end
+    end, 'MHPhotos: bridge ' .. name)
+  end
   -- Optional auto-export; does nothing unless ~/.mhphotos-lightroom-mcp/autoexport.json enables it.
   local AutoExport = require 'AutoExport'
   LrTasks.startAsyncTask(function()

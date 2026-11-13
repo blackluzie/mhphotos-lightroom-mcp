@@ -21,8 +21,10 @@ def _post(base, token, path, payload, timeout=15):
 
 
 class FakePlugin:
-    def __init__(self, bridge, backing=None):
+    def __init__(self, bridge, backing=None, legacy=False):
         self.bridge = bridge
+        self.legacy = legacy  # True: behaves like a plug-in before 0.1.28 (no get_photos/get_previews)
+        self.calls: list[tuple[str, dict]] = []
         self.backing = backing or MockAdapter()
         self.commands: list[str] = []
         self._stop = threading.Event()
@@ -46,11 +48,14 @@ class FakePlugin:
             if not cmd:
                 continue
             self.commands.append(cmd["name"])
+            self.calls.append((cmd["name"], cmd["args"]))
             try:
                 data = self._run(cmd["name"], cmd["args"])
                 result = {"id": cmd["id"], "ok": True, "data": data}
             except NotFoundError as exc:
                 result = {"id": cmd["id"], "ok": False, "error": f"not_found: {exc}"}
+            except LookupError as exc:  # like the real plug-in's Commands.run
+                result = {"id": cmd["id"], "ok": False, "error": str(exc)}
             _post(self.bridge.url, self.bridge.token, "/v1/result", result)
 
     def _run(self, name, a):
@@ -63,6 +68,22 @@ class FakePlugin:
             return {"total": total, "photos": [p.metadata() for p in photos]}
         if name == "get_photo":
             return b.get_photo(a["photo_id"]).metadata()
+        if name == "get_photos" and not self.legacy:
+            out = []
+            for pid in a["photo_ids"]:
+                try:
+                    out.append(b.get_photo(pid).metadata())
+                except NotFoundError:
+                    out.append({"id": pid, "error": "not_found"})
+            return {"photos": out}
+        if name == "get_previews" and not self.legacy:
+            out = []
+            for pid in a["photo_ids"]:
+                try:
+                    out.append({"id": pid, "image_base64": base64.b64encode(b.get_preview(pid, a["size"])).decode()})
+                except NotFoundError:
+                    out.append({"id": pid, "error": "not_found"})
+            return {"previews": out}
         if name == "selftest":
             return {"environment": "fake", "checks": [{"name": "fake plugin", "ok": True, "detail": ""}]}
         if name == "get_preview":
@@ -116,5 +137,5 @@ class FakePlugin:
         if name == "export_photos":
             opts = {k: a[k] for k in ("long_edge", "quality", "sharpen") if k in a}
             return b.export_photos(a["photo_ids"], a["dest_dir"], opts or None)
-        raise AssertionError(name)
+        raise LookupError(f"unknown command: {name}")
 
