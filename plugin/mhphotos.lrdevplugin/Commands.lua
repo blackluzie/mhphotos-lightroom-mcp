@@ -622,6 +622,19 @@ function Commands.add_to_collection(args)
   return { updated = #photos }
 end
 
+function Commands.remove_from_collection(args)
+  -- Takes photos out of an album only; the photos stay in the catalog and in every other album.
+  local coll = catalog():getCollectionByLocalIdentifier(tonumber(args.collection_id))
+  if not coll then notFound('Collection not found: ' .. tostring(args.collection_id)) end
+  if not coll.removePhotos then error('this id is a collection set; pick a collection inside it', 0) end
+  if coll.isSmartCollection and coll:isSmartCollection() then
+    error('smart collections are filled by their rules; change the rules instead', 0)
+  end
+  local photos = findAll(args.photo_ids)
+  writeAccess('MHPhotos: remove from collection', function() coll:removePhotos(photos) end)
+  return { updated = #photos }
+end
+
 function Commands.set_color_label(args)
   if not LABELS[args.label] then error('label must be none, red, yellow, green, blue or purple', 0) end
   local photos = findAll(args.photo_ids)
