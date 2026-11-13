@@ -205,3 +205,19 @@ def test_allow_publish_needs_the_site_and_is_kept(tmp_path):
     configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, allow_publish=False)
     conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
     assert conf['allow_publish'] is False
+
+
+def test_bridge_timeout_reaches_the_services_and_is_kept(tmp_path):
+    import pytest
+    home, secret = setup(tmp_path)
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example',
+        ['https://client.example/callback'], secret, True, GITHUB, bridge_timeout=120)
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['bridge_timeout'] == 120
+    plist = plistlib.loads((home / 'Library/LaunchAgents/de.mhphotos.lightroom.http.plist').read_bytes())
+    assert plist['EnvironmentVariables']['MHPHOTOS_BRIDGE_TIMEOUT'] == '120'
+    with pytest.raises(ValueError, match='bridge-timeout'):
+        configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True, bridge_timeout=5000)
+    configure(home, tmp_path, tmp_path / 'python', 'https://photos.example', [], secret, True)
+    conf = json.loads((home / '.config/mhphotos-lightroom/desktop.json').read_text())
+    assert conf['bridge_timeout'] == 120
