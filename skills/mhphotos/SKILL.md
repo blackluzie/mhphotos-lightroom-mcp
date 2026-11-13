@@ -178,6 +178,7 @@ Der Eigentümer sieht morgens „Vorsortieren › <Monat> › Kandidat 5★ / Ka
 - Was online ist: `mark_online_in_lightroom` (Trockenlauf, dann `confirm=true`), z. B. einmal pro Woche.
 - MHPhotos: `spot_photos` (Spots ohne gutes eigenes Foto für den Fotoplaner), `gear_usage`, `trip_outline` → `mhphotos_create_blog_draft` (bleibt Entwurf).
 - Ab 0.1.27: `duplicate_folders` (doppelt importierte Ordner), `missing_files_by_drive` (nach `catalog_audit_start(check_files=true)`), `gps_gaps` → `fill_gps_gaps` nach Freigabe, `print_candidates` → `print_candidates_collections`, `weekly_report`.
+- Wandbilder: `shop_export()` → `shop_export(confirm=true)` legt die Homepage-Fotos in Ordner nach Galerienamen (`Wandbilder/<Bereich>/<Galerie>`) für Pictrs-Autoimport oder Saal; danach Galerie-Links im MHPhotos-Admin eintragen.
 - Ab 0.1.29: `photo_stats` (Foto-Statistik als Offline-HTML-Seite aus dem Katalog-Schnappschuss: Kameras, Objektive, Brennweiten, Blende/ISO, Trefferquote, goldene Stunde, ungenutzte Objektive, Festbrennweiten-Tipp). Blende/ISO/Zeit brauchen Plugin 0.1.29 und eine neue `catalog_audit_start()`.
 
 ## 9. Fotokalender („Kalender 2027“, Plugin ab 0.1.27)
