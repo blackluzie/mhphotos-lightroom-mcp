@@ -3573,7 +3573,7 @@ async def merge_keywords(
 
 
 # ---------------------------------------------------------------- online on mhphotos.de / Instagram
-async def _online_plan() -> dict[str, Any]:
+async def _online_plan(live_check: bool = False) -> dict[str, Any]:
     cfg = _app_cfg()
     if isinstance(cfg, dict):
         return cfg
@@ -3581,18 +3581,38 @@ async def _online_plan() -> dict[str, Any]:
     if code != 200:
         return _app_error(code, data)
     items = [i for i in data.get("items", []) if online_marks.wanted(i)]
+    # The catalog snapshot answers in seconds; asking Lightroom day by day can take minutes on a busy Mac and
+    # outlast the client's tool timeout. A snapshot of one year only would miss photos, so then ask Lightroom.
+    snap = await anyio.to_thread.run_sync(catalog_audit.load_snapshot)
+    if not snap or snap.get("year"):
+        live = await _online_live(items)
+        return live if _is_error(live) else {"items": len(items), "source": "lightroom", **live}
+    res = await anyio.to_thread.run_sync(online_marks.match, items, snap["photos"])
+    out: dict[str, Any] = {"items": len(items), "source": "catalog snapshot", "checked_at": snap.get("finished_at")}
+    if live_check and res["unmatched"]:
+        open_ids = {u["item_id"] for u in res["unmatched"]}
+        rest = await _online_live([i for i in items if i.get("id") in open_ids])
+        if _is_error(rest):
+            return rest
+        res = {"matches": res["matches"] + rest["matches"], "unmatched": rest["unmatched"]}
+        out["live_checked"] = len(open_ids)
+    return {**out, **res}
+
+
+async def _online_live(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Match items against Lightroom itself, reading the capture days they need."""
     records: list[dict[str, Any]] = []
     for start, end in online_marks.days_needed(items):
         recs = await _range(start, end)
         if isinstance(recs, dict):
             return recs
         records += recs
-    return {"items": len(items), **online_marks.match(items, records)}
+    return online_marks.match(items, records)
 
 
 @mcp.tool()
 async def mark_online_in_lightroom(
-    smart_collections: bool = True, confirm: bool = False, ctx: Context | None = None
+    smart_collections: bool = True, confirm: bool = False, live_check: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Mark in Lightroom which photos are online: keyword "MHPhotos-Online" for photos on mhphotos.de and
     "Instagram" for photos of Instagram posts, plus smart collections "MHPhotos › Online auf mhphotos.de" and
@@ -3600,10 +3620,13 @@ async def mark_online_in_lightroom(
 
     Source: the MHPhotos Foto-Inbox (published items and items linked to an Instagram post), matched to Lightroom
     by Lightroom id (uploads since 0.1.26), else capture time + file name, file name ± 1 day, or capture time +
-    camera. The dry run lists matches and items that could not be matched. Keywords are only added (safe to run
-    again, e.g. weekly). Needs the MHPhotos app config and the operator opt-in for writes.
+    camera. The Lightroom side comes from the last whole-catalog check (catalog_audit_start), so the dry run
+    answers in seconds; photos imported after that check stay unmatched until the next check, or pass
+    live_check=true to look up just the unmatched ones in Lightroom (slower). Without such a snapshot Lightroom is
+    asked directly. The dry run lists matches and items that could not be matched. Keywords are only added (safe
+    to run again, e.g. weekly). Needs the MHPhotos app config and the operator opt-in for writes.
     """
-    plan = await _online_plan()
+    plan = await _online_plan(live_check)
     if _is_error(plan):
         return plan
     by_kw: dict[str, list[str]] = {}
@@ -3612,10 +3635,15 @@ async def mark_online_in_lightroom(
             if m["photo_id"] not in by_kw.setdefault(kw, []):
                 by_kw[kw].append(m["photo_id"])
     summary = {"inbox_items_online": plan["items"], "matched": len(plan["matches"]),
-               "not_matched": len(plan["unmatched"]), "photos_per_keyword": {k: len(v) for k, v in by_kw.items()}}
+               "not_matched": len(plan["unmatched"]), "photos_per_keyword": {k: len(v) for k, v in by_kw.items()},
+               **{k: plan[k] for k in ("source", "checked_at", "live_checked") if k in plan}}
     if not confirm:
+        hint = "Call again with confirm=true."
+        if plan["unmatched"] and plan.get("source") == "catalog snapshot" and "live_checked" not in plan:
+            hint += (" Photos imported after the catalog check stay unmatched: pass live_check=true or run "
+                     "catalog_audit_start again.")
         return {"dry_run": True, **summary, "matches_sample": plan["matches"][:20],
-                "not_matched_sample": plan["unmatched"][:20], "hint": "Call again with confirm=true."}
+                "not_matched_sample": plan["unmatched"][:20], "hint": hint}
     if not permissions.writes_enabled():
         return {"error": permissions.writes_disabled_message(), "code": "disabled"}
     approved, how = await gate.approve(

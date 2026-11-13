@@ -233,6 +233,29 @@ async def test_mark_online_in_lightroom(app, writes):
     assert "MHPhotos-Online" in server._adapter.get_photo("p3").keywords
     assert "Instagram" in server._adapter.get_photo("p4").keywords
     assert done["smart_collections_created"] == ["MHPhotos/Online auf mhphotos.de", "MHPhotos/Auf Instagram"]
+    assert done["source"] == "lightroom", "without a catalog snapshot Lightroom is asked directly"
+
+
+async def test_mark_online_uses_catalog_snapshot(app, writes, monkeypatch):
+    app.items["lr-3"]["captureDate"] = "2026-05-02T08:00:00.000Z"
+    app.items["lr-5"] = {"id": "lr-5", "originalFileName": "x.jpg", "status": "wartet", "instagramId": "ig9",
+                         "lightroomId": "p4", "captureDate": "2025-06-12T05:42:10.000Z"}
+    save_snapshot([row("p3", "2026-05-02T08:00:00", file="IMG_0003.dng")])  # p4 imported after the check
+
+    async def no_lightroom(*_a, **_k):
+        raise AssertionError("the dry run must not ask Lightroom when the snapshot has the photos")
+
+    with monkeypatch.context() as m:
+        m.setattr(server, "_range", no_lightroom)
+        dry = await server.mark_online_in_lightroom()
+    assert dry["source"] == "catalog snapshot" and dry["checked_at"] == "2026-11-07 10:00:00"
+    assert dry["matched"] == 1 and dry["not_matched"] == 1 and "live_check=true" in dry["hint"]
+
+    dry = await server.mark_online_in_lightroom(live_check=True)
+    assert dry["matched"] == 2 and dry["not_matched"] == 0 and dry["live_checked"] == 1
+
+    save_snapshot([row("p3", "2026-05-02T08:00:00", file="IMG_0003.dng")], year=2026)
+    assert (await server.mark_online_in_lightroom())["source"] == "lightroom", "a one-year snapshot is not enough"
 
 
 def test_upload_sends_lightroom_id(app, tmp_path):

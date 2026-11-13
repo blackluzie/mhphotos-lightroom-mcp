@@ -270,7 +270,9 @@ take presort_status().next[0] and work through up to 40 batches". Lightroom must
 ## 24. Mark in Lightroom what is online
 `mark_online_in_lightroom()` (dry run), then `confirm=true`: photos on mhphotos.de get the keyword "MHPhotos-Online", photos of
 Instagram posts "Instagram", and the smart collections "MHPhotos › Online auf mhphotos.de" / "MHPhotos › Auf Instagram" fill
-themselves. Matching uses the Lightroom id (uploads since 0.1.26), else capture time + file name or camera. Safe to repeat
+themselves. Matching uses the Lightroom id (uploads since 0.1.26), else capture time + file name or camera, against the
+last whole-catalog check (`catalog_audit_start`), so the dry run answers in seconds; photos imported after that check stay
+unmatched until the next check, or pass `live_check=true` to look just those up in Lightroom. Safe to repeat
 (e.g. weekly); `backlog_report` and `instagram_candidates` then skip what is already online.
 
 ## 25. Own photos at the MHPhotos spots
