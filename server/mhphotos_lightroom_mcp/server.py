@@ -3634,7 +3634,8 @@ async def mark_online_in_lightroom(
         for kw in m["keywords"]:
             if m["photo_id"] not in by_kw.setdefault(kw, []):
                 by_kw[kw].append(m["photo_id"])
-    summary = {"inbox_items_online": plan["items"], "matched": len(plan["matches"]),
+    summary = {"inbox_items_online": plan["items"], "matched": len({m["item_id"] for m in plan["matches"]}),
+               "lightroom_files": len({m["photo_id"] for m in plan["matches"]}),
                "not_matched": len(plan["unmatched"]), "photos_per_keyword": {k: len(v) for k, v in by_kw.items()},
                **{k: plan[k] for k in ("source", "checked_at", "live_checked") if k in plan}}
     if not confirm:

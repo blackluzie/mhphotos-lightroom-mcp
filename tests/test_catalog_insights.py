@@ -222,6 +222,27 @@ def test_online_matching_rules():
     assert online_marks.days_needed(items[:1]) == [("2026-04-30", "2026-05-02")]
 
 
+def test_online_matching_marks_every_file_of_a_shot():
+    items = [
+        {"id": "a", "status": "uebernommen", "originalFileName": "DT4A9803.jpg", "captureDate": "2026-04-25T20:05:19Z"},
+        {"id": "b", "status": "uebernommen", "originalFileName": "IMG_8493-113706907.jpg",
+         "captureDate": "2024-02-22T11:54:46Z", "camera": "Canon EOS R8"},
+        {"id": "c", "status": "uebernommen", "lightroomId": "r1"},
+    ]
+    t1, t2, t3 = "2026-04-25T20:05:19", "2024-02-22T11:54:46", "2023-01-01T09:00:00"
+    records = [{"id": "a1", "file": "DT4A9803.CR3", "t": t1}, {"id": "a2", "file": "DT4A9803.jpg", "t": t1},
+               {"id": "a3", "file": "DT4A9803-2.CR3", "t": t1}, {"id": "x", "file": "DT4A9804.CR3", "t": t1},
+               {"id": "b1", "file": "IMG_8493.CR3", "t": t2, "cam": "Canon EOS R8"},
+               {"id": "b2", "file": "IMG_8493-Bearbeitet.tif", "t": t2, "cam": "Canon EOS R8"},
+               {"id": "r1", "file": "R_1.CR3", "t": t3}, {"id": "r2", "file": "R_1.jpg", "t": t3}]
+    res = online_marks.match(items, records)
+    got: dict[str, set[str]] = {}
+    for m in res["matches"]:
+        got.setdefault(m["item_id"], set()).add(m["photo_id"])
+    assert got == {"a": {"a1", "a2", "a3"}, "b": {"b1", "b2"}, "c": {"r1", "r2"}}
+    assert res["unmatched"] == []
+
+
 async def test_mark_online_in_lightroom(app, writes):
     app.items["lr-3"]["captureDate"] = "2026-05-02T08:00:00.000Z"  # IMG_0003.jpg = p3 (IMG_0003.dng)
     app.items["lr-5"] = {"id": "lr-5", "originalFileName": "x.jpg", "status": "wartet", "instagramId": "ig9",

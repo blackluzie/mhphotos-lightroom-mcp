@@ -17,7 +17,8 @@ ONLINE_KEYWORD = "MHPhotos-Online"
 INSTAGRAM_KEYWORD = "Instagram"
 SMART_PARENT = "MHPhotos"
 SMART_COLLECTIONS = {ONLINE_KEYWORD: "Online auf mhphotos.de", INSTAGRAM_KEYWORD: "Auf Instagram"}
-_COPY = re.compile(r"(?:[ _-]\d{1,2}|\s*\(\d+\)|[ _-]?(?:kopie|copy|edit|bearbeitet))$")
+# Copy suffixes: "-2", " (3)", "-Bearbeitet", and the long number some exports append ("IMG_8493-113706907").
+_COPY = re.compile(r"(?:[ _-]\d{1,2}|[ _-]\d{7,}|\s*\(\d+\)|[ _-]?(?:kopie|copy|edit|bearbeitet))$")
 
 
 def file_stem(name: str | None) -> str:
@@ -67,7 +68,11 @@ def days_needed(items: list[dict[str, Any]]) -> list[tuple[str, str]]:
 
 def match(items: list[dict[str, Any]], records: list[dict[str, Any]]) -> dict[str, Any]:
     """Pair inbox items with Lightroom records. Best first: Lightroom id, same second + same file name,
-    same file name within a day, same second + same camera."""
+    same file name within a day, same second + same camera.
+
+    One shot often lives in several files (RAW + JPG, "-2" copies, "-Bearbeitet.tif"): every file with the same
+    capture second and the same name (copy suffixes ignored) is matched, so each item gives one match per file.
+    """
     by_id = {r["id"]: r for r in records if r.get("id")}
     by_second: dict[str, list[dict[str, Any]]] = {}
     by_stem: dict[str, list[dict[str, Any]]] = {}
@@ -76,33 +81,41 @@ def match(items: list[dict[str, Any]], records: list[dict[str, Any]]) -> dict[st
             by_second.setdefault(str(r["t"])[:19], []).append(r)
         if r.get("file"):
             by_stem.setdefault(file_stem(r["file"]), []).append(r)
+
+    def same_shot(sec: str | None, stem: str) -> list[dict[str, Any]]:
+        names = stem_variants(stem)
+        return [r for r in by_second.get(sec or "", []) if names & stem_variants(file_stem(r.get("file")))]
+
     matches, unmatched = [], []
     for item in items:
         keys = wanted(item)
         if not keys:
             continue
         sec, stem, cam = capture_second(item), file_stem(item.get("originalFileName")), (item.get("camera") or "").lower()
-        hit, how = None, None
+        hits: list[dict[str, Any]] = []
+        how = None
         if item.get("lightroomId") in by_id:
-            hit, how = by_id[item["lightroomId"]], "lightroom id"
-        if hit is None and sec:
-            same = by_second.get(sec, [])
-            named = [r for r in same if file_stem(r.get("file")) in stem_variants(stem)]
-            if len(named) == 1:
-                hit, how = named[0], "capture time + file name"
-            elif not named:
-                cams = [r for r in same if cam and (r.get("cam") or "").lower() == cam]
+            hit = by_id[item["lightroomId"]]
+            hits, how = [hit], "lightroom id"
+            if hit.get("t") and hit.get("file"):
+                hits += [r for r in same_shot(str(hit["t"])[:19], file_stem(hit["file"])) if r["id"] != hit["id"]]
+        if not hits and sec:
+            named = same_shot(sec, stem) if stem else []
+            if named:
+                hits, how = named, "capture time + file name"
+            else:
+                cams = [r for r in by_second.get(sec, []) if cam and (r.get("cam") or "").lower() == cam]
                 if len(cams) == 1:
-                    hit, how = cams[0], "capture time + camera"
-        if hit is None and sec and stem:
+                    hits, how = cams, "capture time + camera"
+        if not hits and sec and stem:
             near = [r for v in stem_variants(stem) for r in by_stem.get(v, []) if r.get("t") and
                     abs((date.fromisoformat(str(r["t"])[:10]) - date.fromisoformat(sec[:10])).days) <= 1]
             if len(near) == 1:
-                hit, how = near[0], "file name, capture day ±1"
+                hits, how = near, "file name, capture day ±1"
         base = {"item_id": item.get("id"), "file": item.get("originalFileName"), "keywords": keys}
-        if hit is None:
+        if not hits:
             unmatched.append({**base, "captured": sec})
-        else:
+        for hit in hits:
             matches.append({**base, "photo_id": hit["id"], "lightroom_file": hit.get("file"), "how": how,
                             "already_instagram": bool(hit.get("insta"))})
     return {"matches": matches, "unmatched": unmatched}
