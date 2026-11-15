@@ -18,6 +18,7 @@ INSTAGRAM_KEYWORD = "Instagram"
 SMART_PARENT = "MHPhotos"
 SMART_COLLECTIONS = {ONLINE_KEYWORD: "Online auf mhphotos.de", INSTAGRAM_KEYWORD: "Auf Instagram"}
 # Copy suffixes: "-2", " (3)", "-Bearbeitet", and the long number some exports append ("IMG_8493-113706907").
+_DERIVED = {".jpg", ".jpeg", ".tif", ".tiff", ".png", ".psd"}  # usually exports/edits of a RAW or HEIC original
 _COPY = re.compile(r"(?:[ _-]\d{1,2}|[ _-]\d{7,}|\s*\(\d+\)|[ _-]?(?:kopie|copy|edit|bearbeitet))$")
 
 
@@ -83,8 +84,12 @@ def match(items: list[dict[str, Any]], records: list[dict[str, Any]]) -> dict[st
             by_stem.setdefault(file_stem(r["file"]), []).append(r)
 
     def same_shot(sec: str | None, stem: str) -> list[dict[str, Any]]:
+        """Files of one shot, the original first (exact name, then RAW before JPG/TIFF) – callers that need one
+        photo, like shop_export, take the first."""
         names = stem_variants(stem)
-        return [r for r in by_second.get(sec or "", []) if names & stem_variants(file_stem(r.get("file")))]
+        found = [r for r in by_second.get(sec or "", []) if names & stem_variants(file_stem(r.get("file")))]
+        return sorted(found, key=lambda r: (file_stem(r.get("file")) not in names,
+                                            PurePosixPath(str(r.get("file") or "")).suffix.lower() in _DERIVED))
 
     matches, unmatched = [], []
     for item in items:

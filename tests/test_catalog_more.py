@@ -158,3 +158,29 @@ async def test_weekly_report_collects_every_part(app):  # noqa: F811
     assert "error" not in res["online"], res["online"]
     assert (await server.weekly_report(days=0))["error"]
     assert "error" not in res["new_photos"] and "error" not in res["spots"]
+
+
+# ---------------------------------------------------------------- shop export (Wandbilder)
+def test_shop_folder_names_follow_the_gallery_tree():
+    from mhphotos_lightroom_mcp import shop_export as se
+    gal = {"unterwegs/italien": {"id": "unterwegs/italien", "area": "unterwegs", "title": "Italien"},
+           "unterwegs/italien/brixen": {"id": "unterwegs/italien/brixen", "area": "unterwegs",
+                                        "parent": "unterwegs/italien", "title": "Brixen"},
+           "heimat/a": {"id": "heimat/a", "area": "heimat", "title": "Ems: Ufer/Brücke"}}
+    assert se.folder_for("unterwegs/italien/brixen", gal) == "Unterwegs/Italien/Brixen"
+    assert se.folder_for("heimat/a", gal) == "Heimat/Ems- Ufer-Brücke"
+    assert se.folder_for("gibt/es/nicht", gal) is None
+
+
+async def test_shop_export_only_exports_new_homepage_photos(app, monkeypatch, tmp_path):  # noqa: F811
+    monkeypatch.setenv("MHPHOTOS_EXPORT_DIR", str(tmp_path))
+    app.items["lr-3"]["captureDate"] = "2026-05-02T08:00:00.000Z"  # IMG_0003.jpg = p3
+    app.items["lr-3"]["homepagePhotoId"] = "hp-2"
+    dry = await server.shop_export()
+    assert dry["dry_run"] and dry["folders"] == {"Unterwegs/Städte": 1} and dry["not_in_lightroom"] == 1
+    done = await server.shop_export(confirm=True)
+    assert done["applied"] and done["exported"] == 1
+    assert list((tmp_path / "Wandbilder" / "Unterwegs" / "Städte").glob("*.jpg"))
+    again = await server.shop_export()
+    assert again["photos_to_export"] == 0 and again["already_exported"] == 1
+    assert (await server.shop_export(gallery="heimat"))["photos_to_export"] == 0

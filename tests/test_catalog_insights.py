@@ -241,6 +241,10 @@ def test_online_matching_marks_every_file_of_a_shot():
         got.setdefault(m["item_id"], set()).add(m["photo_id"])
     assert got == {"a": {"a1", "a2", "a3"}, "b": {"b1", "b2"}, "c": {"r1", "r2"}}
     assert res["unmatched"] == []
+    first = {}
+    for m in res["matches"]:
+        first.setdefault(m["item_id"], m["photo_id"])
+    assert first == {"a": "a1", "b": "b1", "c": "r1"}, "the original (exact name, RAW) comes first for shop_export"
 
 
 async def test_mark_online_in_lightroom(app, writes):
