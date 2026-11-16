@@ -444,6 +444,9 @@ class BridgeAdapter:
     def add_to_collection(self, collection_id, photo_ids):
         return self._write("add_to_collection", photo_ids, {"collection_id": collection_id})
 
+    def remove_from_collection(self, collection_id, photo_ids):
+        return self._write("remove_from_collection", photo_ids, {"collection_id": collection_id})
+
     def set_color_label(self, photo_ids, label):
         return self._write("set_color_label", photo_ids, {"label": label})
 

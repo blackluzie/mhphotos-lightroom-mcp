@@ -120,6 +120,8 @@ class FakePlugin:
             return b.move_collection(a["collection_id"], a["parent"])
         if name == "add_to_collection":
             return b.add_to_collection(a["collection_id"], a["photo_ids"])
+        if name == "remove_from_collection":
+            return b.remove_from_collection(a["collection_id"], a["photo_ids"])
         if name == "set_color_label":
             return b.set_color_label(a["photo_ids"], a["label"])
         if name == "set_title_caption":

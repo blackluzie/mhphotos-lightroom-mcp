@@ -211,6 +211,9 @@ class CatalogAdapter(Protocol):
 
     def add_to_collection(self, collection_id: str, photo_ids: list[str]) -> dict[str, Any]: ...
 
+    def remove_from_collection(self, collection_id: str, photo_ids: list[str]) -> dict[str, Any]:
+        """Take photos out of an album (they stay in the catalog): {"updated": n}."""
+
     def set_color_label(self, photo_ids: list[str], label: str) -> dict[str, Any]: ...
 
     def set_title_caption(
@@ -445,6 +448,15 @@ class MockAdapter:
             if c.id == collection_id:
                 merged = tuple(dict.fromkeys((*c.photo_ids, *(p.id for p in photos))))
                 self._collections[i] = dataclasses.replace(c, photo_ids=merged)
+                return {"updated": len(photos)}
+        raise NotFoundError(f"Collection not found: {collection_id}")
+
+    def remove_from_collection(self, collection_id, photo_ids):
+        photos = self._all(photo_ids)
+        gone = {p.id for p in photos}
+        for i, c in enumerate(self._collections):
+            if c.id == collection_id:
+                self._collections[i] = dataclasses.replace(c, photo_ids=tuple(p for p in c.photo_ids if p not in gone))
                 return {"updated": len(photos)}
         raise NotFoundError(f"Collection not found: {collection_id}")
 
