@@ -270,7 +270,9 @@ take presort_status().next[0] and work through up to 40 batches". Lightroom must
 ## 24. Mark in Lightroom what is online
 `mark_online_in_lightroom()` (dry run), then `confirm=true`: photos on mhphotos.de get the keyword "MHPhotos-Online", photos of
 Instagram posts "Instagram", and the smart collections "MHPhotos › Online auf mhphotos.de" / "MHPhotos › Auf Instagram" fill
-themselves. Matching uses the Lightroom id (uploads since 0.1.26), else capture time + file name or camera. Safe to repeat
+themselves. Matching uses the Lightroom id (uploads since 0.1.26), else capture time + file name or camera, against the
+last whole-catalog check (`catalog_audit_start`), so the dry run answers in seconds; photos imported after that check stay
+unmatched until the next check, or pass `live_check=true` to look just those up in Lightroom. Safe to repeat
 (e.g. weekly); `backlog_report` and `instagram_candidates` then skip what is already online.
 
 ## 25. Own photos at the MHPhotos spots
@@ -324,3 +326,17 @@ size (30×20 … 120×80 cm at 150 dpi). `print_candidates_collections(confirm=t
 `weekly_report(days=7)`: new photos (and how many are unreviewed), the unreviewed backlog with the next months for
 pre-sorting, what went online on mhphotos.de/Instagram, inbox items waiting, spots without a good own photo. Meant for a
 scheduled run every Monday; each part that cannot be read says why.
+
+## 34. Wall prints: homepage photos into gallery folders (Pictrs / Saal)
+`shop_export()` (dry run) → `shop_export(confirm=true)`: every photo on mhphotos.de that can be traced to its Lightroom
+original (via the Foto-Inbox) is exported in full resolution into `<MHPHOTOS_EXPORT_DIR>/Wandbilder/<Bereich>/<Galerie>`,
+e.g. `Unterwegs/Italien/Brixen`. A state file (`Wandbilder/.exportiert.json`) remembers what went where, so the next run
+only exports what is new; `again=true` exports everything once more (after re-editing), `gallery="unterwegs/italien"`
+limits it to one gallery and its sub-galleries.
+
+- **Pictrs**: upload the content of `Wandbilder/` into `autoimport/` on the Pictrs FTP server (sFTP port 222); Pictrs
+  creates galleries and sub-galleries with the same names within minutes.
+- **Saal Photo Portal**: upload each folder into the gallery of the same name (browser upload, Saal has no API).
+
+Then paste each shop gallery link into the MHPhotos admin ("Wandbilder", one field per gallery). The lightbox on
+mhphotos.de shows "Als Wandbild bestellen" for every photo of a linked gallery.

@@ -175,9 +175,12 @@ Der Eigentümer sieht morgens „Vorsortieren › <Monat> › Kandidat 5★ / Ka
 ## 8. Aufräumen und Verbinden (Plugin ab 0.1.26)
 - Nach einer Katalog-Prüfung über alles: `catalog_audit_overview`, `catalog_folder_moves` (ganze Ordner zuerst), `archive_candidates`.
 - Stichwörter: `keyword_check_start` → `keyword_check_results("duplicates")` → `merge_keywords` nach Freigabe, danach in Lightroom „Nicht verwendete Stichwörter löschen“.
-- Was online ist: `mark_online_in_lightroom` (Trockenlauf, dann `confirm=true`), z. B. einmal pro Woche.
+- Was online ist: `mark_online_in_lightroom` (Trockenlauf, dann `confirm=true`), z. B. einmal pro Woche. Abgleich gegen den
+  letzten Katalog-Check (schnell); Fotos, die danach importiert wurden, mit `live_check=true` oder neuem `catalog_audit_start`.
 - MHPhotos: `spot_photos` (Spots ohne gutes eigenes Foto für den Fotoplaner), `gear_usage`, `trip_outline` → `mhphotos_create_blog_draft` (bleibt Entwurf).
 - Ab 0.1.27: `duplicate_folders` (doppelt importierte Ordner), `missing_files_by_drive` (nach `catalog_audit_start(check_files=true)`), `gps_gaps` → `fill_gps_gaps` nach Freigabe, `print_candidates` → `print_candidates_collections`, `weekly_report`.
+- Wandbilder: `shop_export()` → `shop_export(confirm=true)` legt die Homepage-Fotos in Ordner nach Galerienamen (`Wandbilder/<Bereich>/<Galerie>`) für Pictrs-Autoimport oder Saal; danach Galerie-Links im MHPhotos-Admin eintragen.
+- Ab 0.1.29: `photo_stats` (Foto-Statistik als Offline-HTML-Seite aus dem Katalog-Schnappschuss: Kameras, Objektive, Brennweiten, Blende/ISO, Trefferquote, goldene Stunde, ungenutzte Objektive, Festbrennweiten-Tipp). Blende/ISO/Zeit brauchen Plugin 0.1.29 und eine neue `catalog_audit_start()`.
 
 ## 9. Fotokalender („Kalender 2027“, Plugin ab 0.1.27)
 1. `calendar_candidates(year=2027, per_month=8)`: pro Monat die besten Fotos aus diesem Monat (alle Jahre), quer, groß genug für A3.

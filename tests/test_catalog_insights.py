@@ -222,6 +222,31 @@ def test_online_matching_rules():
     assert online_marks.days_needed(items[:1]) == [("2026-04-30", "2026-05-02")]
 
 
+def test_online_matching_marks_every_file_of_a_shot():
+    items = [
+        {"id": "a", "status": "uebernommen", "originalFileName": "DT4A9803.jpg", "captureDate": "2026-04-25T20:05:19Z"},
+        {"id": "b", "status": "uebernommen", "originalFileName": "IMG_8493-113706907.jpg",
+         "captureDate": "2024-02-22T11:54:46Z", "camera": "Canon EOS R8"},
+        {"id": "c", "status": "uebernommen", "lightroomId": "r1"},
+    ]
+    t1, t2, t3 = "2026-04-25T20:05:19", "2024-02-22T11:54:46", "2023-01-01T09:00:00"
+    records = [{"id": "a1", "file": "DT4A9803.CR3", "t": t1}, {"id": "a2", "file": "DT4A9803.jpg", "t": t1},
+               {"id": "a3", "file": "DT4A9803-2.CR3", "t": t1}, {"id": "x", "file": "DT4A9804.CR3", "t": t1},
+               {"id": "b1", "file": "IMG_8493.CR3", "t": t2, "cam": "Canon EOS R8"},
+               {"id": "b2", "file": "IMG_8493-Bearbeitet.tif", "t": t2, "cam": "Canon EOS R8"},
+               {"id": "r1", "file": "R_1.CR3", "t": t3}, {"id": "r2", "file": "R_1.jpg", "t": t3}]
+    res = online_marks.match(items, records)
+    got: dict[str, set[str]] = {}
+    for m in res["matches"]:
+        got.setdefault(m["item_id"], set()).add(m["photo_id"])
+    assert got == {"a": {"a1", "a2", "a3"}, "b": {"b1", "b2"}, "c": {"r1", "r2"}}
+    assert res["unmatched"] == []
+    first = {}
+    for m in res["matches"]:
+        first.setdefault(m["item_id"], m["photo_id"])
+    assert first == {"a": "a1", "b": "b1", "c": "r1"}, "the original (exact name, RAW) comes first for shop_export"
+
+
 async def test_mark_online_in_lightroom(app, writes):
     app.items["lr-3"]["captureDate"] = "2026-05-02T08:00:00.000Z"  # IMG_0003.jpg = p3 (IMG_0003.dng)
     app.items["lr-5"] = {"id": "lr-5", "originalFileName": "x.jpg", "status": "wartet", "instagramId": "ig9",
@@ -233,6 +258,29 @@ async def test_mark_online_in_lightroom(app, writes):
     assert "MHPhotos-Online" in server._adapter.get_photo("p3").keywords
     assert "Instagram" in server._adapter.get_photo("p4").keywords
     assert done["smart_collections_created"] == ["MHPhotos/Online auf mhphotos.de", "MHPhotos/Auf Instagram"]
+    assert done["source"] == "lightroom", "without a catalog snapshot Lightroom is asked directly"
+
+
+async def test_mark_online_uses_catalog_snapshot(app, writes, monkeypatch):
+    app.items["lr-3"]["captureDate"] = "2026-05-02T08:00:00.000Z"
+    app.items["lr-5"] = {"id": "lr-5", "originalFileName": "x.jpg", "status": "wartet", "instagramId": "ig9",
+                         "lightroomId": "p4", "captureDate": "2025-06-12T05:42:10.000Z"}
+    save_snapshot([row("p3", "2026-05-02T08:00:00", file="IMG_0003.dng")])  # p4 imported after the check
+
+    async def no_lightroom(*_a, **_k):
+        raise AssertionError("the dry run must not ask Lightroom when the snapshot has the photos")
+
+    with monkeypatch.context() as m:
+        m.setattr(server, "_range", no_lightroom)
+        dry = await server.mark_online_in_lightroom()
+    assert dry["source"] == "catalog snapshot" and dry["checked_at"] == "2026-11-07 10:00:00"
+    assert dry["matched"] == 1 and dry["not_matched"] == 1 and "live_check=true" in dry["hint"]
+
+    dry = await server.mark_online_in_lightroom(live_check=True)
+    assert dry["matched"] == 2 and dry["not_matched"] == 0 and dry["live_checked"] == 1
+
+    save_snapshot([row("p3", "2026-05-02T08:00:00", file="IMG_0003.dng")], year=2026)
+    assert (await server.mark_online_in_lightroom())["source"] == "lightroom", "a one-year snapshot is not enough"
 
 
 def test_upload_sends_lightroom_id(app, tmp_path):

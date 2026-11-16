@@ -37,6 +37,8 @@ from . import (
     social_crop,
     trip_story,
 )
+from . import photo_stats as stats_page
+from . import shop_export as shop_export_mod
 from .adapters import (
     COLOR_LABELS,
     FLAGS,
@@ -52,6 +54,7 @@ from .bridge import (
     BridgeAdapter,
     BridgeError,
     BridgeUnavailable,
+    config_dir,
     write_plugin_config,
 )
 
@@ -3614,7 +3617,7 @@ async def merge_keywords(
 
 
 # ---------------------------------------------------------------- online on mhphotos.de / Instagram
-async def _online_plan() -> dict[str, Any]:
+async def _online_plan(live_check: bool = False) -> dict[str, Any]:
     cfg = _app_cfg()
     if isinstance(cfg, dict):
         return cfg
@@ -3622,18 +3625,42 @@ async def _online_plan() -> dict[str, Any]:
     if code != 200:
         return _app_error(code, data)
     items = [i for i in data.get("items", []) if online_marks.wanted(i)]
+    homepage_of = {str(i.get("id")): str(i["homepagePhotoId"]) for i in items if i.get("homepagePhotoId")}
+    # The catalog snapshot answers in seconds; asking Lightroom day by day can take minutes on a busy Mac and
+    # outlast the client's tool timeout. A snapshot of one year only would miss photos, so then ask Lightroom.
+    snap = await anyio.to_thread.run_sync(catalog_audit.load_snapshot)
+    if not snap or snap.get("year"):
+        live = await _online_live(items)
+        if _is_error(live):
+            return live
+        return {"items": len(items), "homepage_of": homepage_of, "source": "lightroom", **live}
+    res = await anyio.to_thread.run_sync(online_marks.match, items, snap["photos"])
+    out: dict[str, Any] = {"items": len(items), "homepage_of": homepage_of, "source": "catalog snapshot",
+                           "checked_at": snap.get("finished_at")}
+    if live_check and res["unmatched"]:
+        open_ids = {u["item_id"] for u in res["unmatched"]}
+        rest = await _online_live([i for i in items if i.get("id") in open_ids])
+        if _is_error(rest):
+            return rest
+        res = {"matches": res["matches"] + rest["matches"], "unmatched": rest["unmatched"]}
+        out["live_checked"] = len(open_ids)
+    return {**out, **res}
+
+
+async def _online_live(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Match items against Lightroom itself, reading the capture days they need."""
     records: list[dict[str, Any]] = []
     for start, end in online_marks.days_needed(items):
         recs = await _range(start, end)
         if isinstance(recs, dict):
             return recs
         records += recs
-    return {"items": len(items), **online_marks.match(items, records)}
+    return online_marks.match(items, records)
 
 
 @mcp.tool()
 async def mark_online_in_lightroom(
-    smart_collections: bool = True, confirm: bool = False, ctx: Context | None = None
+    smart_collections: bool = True, confirm: bool = False, live_check: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Mark in Lightroom which photos are online: keyword "MHPhotos-Online" for photos on mhphotos.de and
     "Instagram" for photos of Instagram posts, plus smart collections "MHPhotos › Online auf mhphotos.de" and
@@ -3641,10 +3668,13 @@ async def mark_online_in_lightroom(
 
     Source: the MHPhotos Foto-Inbox (published items and items linked to an Instagram post), matched to Lightroom
     by Lightroom id (uploads since 0.1.26), else capture time + file name, file name ± 1 day, or capture time +
-    camera. The dry run lists matches and items that could not be matched. Keywords are only added (safe to run
-    again, e.g. weekly). Needs the MHPhotos app config and the operator opt-in for writes.
+    camera. The Lightroom side comes from the last whole-catalog check (catalog_audit_start), so the dry run
+    answers in seconds; photos imported after that check stay unmatched until the next check, or pass
+    live_check=true to look up just the unmatched ones in Lightroom (slower). Without such a snapshot Lightroom is
+    asked directly. The dry run lists matches and items that could not be matched. Keywords are only added (safe
+    to run again, e.g. weekly). Needs the MHPhotos app config and the operator opt-in for writes.
     """
-    plan = await _online_plan()
+    plan = await _online_plan(live_check)
     if _is_error(plan):
         return plan
     by_kw: dict[str, list[str]] = {}
@@ -3652,11 +3682,17 @@ async def mark_online_in_lightroom(
         for kw in m["keywords"]:
             if m["photo_id"] not in by_kw.setdefault(kw, []):
                 by_kw[kw].append(m["photo_id"])
-    summary = {"inbox_items_online": plan["items"], "matched": len(plan["matches"]),
-               "not_matched": len(plan["unmatched"]), "photos_per_keyword": {k: len(v) for k, v in by_kw.items()}}
+    summary = {"inbox_items_online": plan["items"], "matched": len({m["item_id"] for m in plan["matches"]}),
+               "lightroom_files": len({m["photo_id"] for m in plan["matches"]}),
+               "not_matched": len(plan["unmatched"]), "photos_per_keyword": {k: len(v) for k, v in by_kw.items()},
+               **{k: plan[k] for k in ("source", "checked_at", "live_checked") if k in plan}}
     if not confirm:
+        hint = "Call again with confirm=true."
+        if plan["unmatched"] and plan.get("source") == "catalog snapshot" and "live_checked" not in plan:
+            hint += (" Photos imported after the catalog check stay unmatched: pass live_check=true or run "
+                     "catalog_audit_start again.")
         return {"dry_run": True, **summary, "matches_sample": plan["matches"][:20],
-                "not_matched_sample": plan["unmatched"][:20], "hint": "Call again with confirm=true."}
+                "not_matched_sample": plan["unmatched"][:20], "hint": hint}
     if not permissions.writes_enabled():
         return {"error": permissions.writes_disabled_message(), "code": "disabled"}
     approved, how = await gate.approve(
@@ -3684,6 +3720,74 @@ async def mark_online_in_lightroom(
     result = {"photos_tagged": tagged, "smart_collections_created": created}
     change_id = audit.record("mark_online_in_lightroom", [], summary, approved_by=how, result=result)
     return {"applied": True, "change_id": change_id, **summary, **result}
+
+
+@mcp.tool()
+async def shop_export(
+    gallery: str | None = None, again: bool = False, max_photos: int = 300,
+    confirm: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Export the photos on mhphotos.de in full resolution into folders named like their galleries, for a print
+    shop: <MHPHOTOS_EXPORT_DIR>/Wandbilder/<Bereich>/<Galerie>, e.g. "Unterwegs/Italien/Brixen".
+
+    Pictrs: upload the folder tree into "autoimport" on its FTP server and Pictrs creates the galleries itself.
+    Saal Photo Portal: upload each folder into the gallery of the same name. Then put the gallery links into the
+    MHPhotos admin ("Wandbilder"), so the lightbox offers "Als Wandbild bestellen".
+
+    Homepage photos are linked to Lightroom through the Foto-Inbox (like mark_online_in_lightroom). Only photos not
+    exported before go out (again=true exports all once more, e.g. after re-editing). gallery limits it to one
+    gallery and its sub-galleries (id like "unterwegs/italien"). Dry run unless confirm=true.
+    """
+    dest = permissions.export_dir()
+    if dest is None:
+        return {"error": permissions.export_disabled_message(), "code": "disabled"}
+    cfg = _app_cfg()
+    if isinstance(cfg, dict):
+        return cfg
+    code, site = await anyio.to_thread.run_sync(publishing.site_photos, cfg)
+    if code != 200:
+        return _app_error(code, site)
+    code, gal = await anyio.to_thread.run_sync(publishing.galleries, cfg)
+    if code != 200:
+        return _app_error(code, gal)
+    online = await _online_plan()
+    if _is_error(online):
+        return online
+    root = Path(dest) / shop_export_mod.SUBDIR
+    done = shop_export_mod.load_state(root)
+    lr_of = shop_export_mod.lightroom_ids(online["matches"], online.get("homepage_of") or {})
+    p = shop_export_mod.plan(site.get("photos") or [], gal.get("galleries") or [], lr_of, done, gallery, again)
+    summary = {"destination": str(root), "folders": {k: len(v) for k, v in p["folders"].items()},
+               "photos_to_export": p["photos"], "already_exported": p["already_exported"],
+               "not_in_lightroom": len(p["not_in_lightroom"]), "unknown_galleries": p["unknown_galleries"]}
+    if p["photos"] > max_photos:
+        return {"error": f"{p['photos']} photos is more than max_photos={max_photos}; raise it or pick a gallery",
+                "code": "too_many", **summary}
+    if not confirm:
+        return {"dry_run": True, **summary, "not_in_lightroom_sample": p["not_in_lightroom"][:20],
+                "hint": "Nothing was exported. Call again with confirm=true."}
+    if not p["photos"]:
+        return {"applied": True, **summary, "exported": 0}
+    approved, how = await gate.approve(
+        ctx, f"{p['photos']} Homepage-Foto(s) in voller Auflösung in {len(p['folders'])} Galerie-Ordner unter {root} "
+             "exportieren")
+    if not approved:
+        return gate.refusal(how)
+    exported = 0
+    for folder, ids in p["folders"].items():
+        target = root / folder
+        target.mkdir(parents=True, exist_ok=True)
+        for start in range(0, len(ids), MAX_BATCH):
+            chunk = ids[start:start + MAX_BATCH]
+            res = await _run(_adapter.export_photos, chunk, str(target), None)
+            if _is_error(res):
+                return {**res, "partly_done": {"photos_exported": exported}}
+            shop_export_mod.save_state(root, done, folder, chunk)
+            exported += len(chunk)
+    change_id = audit.record("shop_export", [], summary, approved_by=how, result={"exported": exported})
+    return {"applied": True, "change_id": change_id, **summary, "exported": exported,
+            "next_step": "Pictrs: Ordner-Inhalt von Wandbilder/ per FTP nach autoimport/ hochladen. "
+                         "Saal: Ordner in die gleichnamigen Galerien hochladen."}
 
 
 # ---------------------------------------------------------------- gear statistics
@@ -4255,6 +4359,48 @@ async def weekly_report(days: int = 7) -> dict[str, Any]:
     return out
 
 
+@mcp.tool()
+async def photo_stats(year: int | None = None, name: str | None = None) -> dict[str, Any]:
+    """Your photo statistics as one offline HTML page (0.1.29): photos and shooting days, strongest month,
+    weekday x hour heatmap, cameras and lenses, focal lengths, aperture, ISO, shutter, format and crop share, hit
+    rate, light (golden hour from time and place), lenses unused for a year, prime-lens suggestion, is the widest
+    aperture worth it, never-touched storage and short conclusions. German and English, light and dark.
+
+    Read-only, from the catalog snapshot (run catalog_audit_start without year first; aperture, ISO and shutter
+    need plug-in 0.1.29+). Nothing is uploaded: the page is written to the config folder on the Mac
+    (stats/foto-statistik.html) and its path returned together with the main numbers. year limits the numbers
+    in the result; the page always contains every year and switches between them.
+    """
+    if year is not None and not 1900 <= year <= 2200:
+        return {"error": "year must be four digits"}
+    snap = _snapshot()
+    if _is_error(snap):
+        return snap
+
+    def build() -> dict[str, Any]:
+        full = stats_page.compute_all(snap["photos"])
+        target = config_dir() / "stats"
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / "foto-statistik.html"
+        tmp = path.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(stats_page.render_html(full, name))
+        os.replace(tmp, path)
+        main = (full.get("by_year_stats") or {}).get(str(year)) if year else full
+        main = dict(main or {})
+        main.pop("by_year_stats", None)
+        main.pop("heatmap", None)
+        return {"page": str(path), "stats": main}
+
+    out = await anyio.to_thread.run_sync(build)
+    res = {**_scope_note(snap), **out}
+    if not any(p.get("ap") or p.get("iso") for p in snap["photos"][:5000]):
+        res["note"] = ("No aperture/ISO/shutter data in the snapshot: install plug-in 0.1.29+ and run "
+                       "catalog_audit_start again.")
+    return res
+
+
 # ---------------------------------------------------------------- toolsets
 # MHPHOTOS_TOOLSETS="read,develop" limits which tools are offered (fewer tools = fewer tokens,
 # smaller blast radius). Default: all. "read" is always on.
@@ -4268,7 +4414,7 @@ TOOLSETS: dict[str, set[str]] = {
         "catalog_audit_overview", "catalog_folder_moves", "archive_candidates", "presort_status", "presort_month",
         "keyword_check_start", "keyword_check_status", "keyword_check_results", "gear_usage", "trip_outline",
         "duplicate_folders", "missing_files_by_drive", "gps_gaps", "print_candidates", "calendar_candidates",
-        "weekly_report",
+        "weekly_report", "photo_stats",
     },
     "edit": {
         "set_rating", "set_flag", "add_keywords", "set_color_label", "set_title_caption",
@@ -4287,7 +4433,7 @@ TOOLSETS: dict[str, set[str]] = {
         "mhphotos_publish", "mhphotos_update_site_photo", "mhphotos_link_instagram", "mhphotos_sync_instagram", "mhphotos_instagram_posts", "mhphotos_instagram_images",
         "mhphotos_schedule_instagram", "mhphotos_instagram_queue", "mhphotos_cancel_instagram",
         "mhphotos_inbox_images", "mhphotos_inbox_contact_sheet", "mhphotos_edit_preview",
-        "mhphotos_best_times", "instagram_candidates", "mhphotos_site_photos", "mhphotos_reel_jobs",
+        "mhphotos_best_times", "instagram_candidates", "mhphotos_site_photos", "shop_export", "mhphotos_reel_jobs",
         "mhphotos_create_reel", "spot_photos", "mhphotos_sync_gear_usage", "mhphotos_sync_spot_photos",
         "mhphotos_create_blog_draft", "mhphotos_comments", "mhphotos_comment_draft", "mhphotos_comment_respond",
         "mhphotos_friend_posts", "mhphotos_friend_post", "mhphotos_friends", "mhphotos_set_friend",

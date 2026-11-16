@@ -37,20 +37,22 @@ def write_private(path, data):
     return True
 
 
-def make_agent(label, module, python, repo, home, exports):
+def make_agent(label, module, python, repo, home, exports, bridge_timeout=None):
     state = home / 'Library/Application Support/MHPhotosLightroom'
     log = home / 'Library/Logs/MHPhotos' / ('http.log' if module == 'http_service' else 'assets.log')
+    env = {'PYTHONPATH': str(repo / 'server'), 'PYTHONUNBUFFERED': '1', 'MHPHOTOS_EXPORT_DIR': str(exports)}
+    if bridge_timeout:
+        env['MHPHOTOS_BRIDGE_TIMEOUT'] = str(int(bridge_timeout))
     return {'Label': label, 'ProgramArguments': ['/bin/sh', '-c',
         'exec ' + shlex.quote(str(python)) + ' -m mhphotos_lightroom_mcp.' + module],
         'WorkingDirectory': str(state), 'RunAtLoad': True, 'KeepAlive': True,
         'ProcessType': 'Interactive', 'StandardOutPath': str(log), 'StandardErrorPath': str(log),
-        'EnvironmentVariables': {'PYTHONPATH': str(repo / 'server'), 'PYTHONUNBUFFERED': '1',
-            'MHPHOTOS_EXPORT_DIR': str(exports)}}
+        'EnvironmentVariables': env}
 
 
 def configure(home, repo, python, public_url=None, callbacks=(), secret_source=None, apply=False, github=None,
         n8n_webhook_url=None, allow_writes=None, mhphotos_site=None, allow_instagram=None, hot_folder=None, allow_file_edits=None,
-        allow_publish=None):
+        allow_publish=None, bridge_timeout=None):
     from urllib.parse import urlsplit
     config_dir = home / '.config/mhphotos-lightroom'
     config_path = config_dir / 'desktop.json'
@@ -103,6 +105,10 @@ def configure(home, repo, python, public_url=None, callbacks=(), secret_source=N
         if allow_publish and not config.get('mhphotos_url'):
             raise ValueError('--allow-publish needs --mhphotos-url')
         config['allow_publish'] = bool(allow_publish)
+    if bridge_timeout is not None:
+        if not 0 <= bridge_timeout <= 900:
+            raise ValueError('--bridge-timeout must be 0 (off) to 900 seconds')
+        config['bridge_timeout'] = int(bridge_timeout)
     if allow_file_edits is not None:
         if allow_file_edits and not (allow_writes or config.get('allow_writes')):
             raise ValueError('--allow-file-edits needs --allow-writes')
@@ -125,12 +131,12 @@ def configure(home, repo, python, public_url=None, callbacks=(), secret_source=N
             private_file(path)
     exports = home / 'Library/Application Support/MHPhotosLightroom/Exports'
     agents = {f'de.mhphotos.lightroom.{suffix}': make_agent(f'de.mhphotos.lightroom.{suffix}', module,
-        python, repo, home, exports) for suffix, module in [('http', 'http_service'), ('assets', 'asset_delivery')]}
+        python, repo, home, exports, config.get('bridge_timeout')) for suffix, module in [('http', 'http_service'), ('assets', 'asset_delivery')]}
     plan = {'public_mcp_url': issuer + '/mcp', 'callbacks': redirects,
         'n8n_webhook_url': config.get('n8n_webhook_url'), 'allow_writes': config.get('allow_writes', False),
         'mhphotos_url': config.get('mhphotos_url'), 'allow_instagram': config.get('allow_instagram', False),
         'hot_folder': config.get('hot_folder'), 'allow_file_edits': config.get('allow_file_edits', False),
-        'allow_publish': config.get('allow_publish', False),
+        'allow_publish': config.get('allow_publish', False), 'bridge_timeout': config.get('bridge_timeout', 0),
         **({'warning': 'The old inbox watcher (de.mhphotos.inbox-watcher) also watches a hot folder and uploads '
             'directly. Stop it so each JPEG takes one path: launchctl bootout gui/$(id -u)/de.mhphotos.inbox-watcher'}
            if config.get('hot_folder') and (home / 'Library/LaunchAgents/de.mhphotos.inbox-watcher.plist').exists()
@@ -234,6 +240,8 @@ def main():
         help='Offer writing a capture time into JPEG files (exiftool, backups first); needs --allow-writes')
     parser.add_argument('--no-allow-file-edits', dest='allow_file_edits', action='store_false',
         help='Remove file edits again')
+    parser.add_argument('--bridge-timeout', type=int, default=None, metavar='SECONDS',
+        help='Wait at least this long (0-900) for Lightroom per command; 0 = off. For a busy Mac, e.g. 120')
     parser.add_argument('--configure-routing', action='store_true', help='Validate/create only MCP 443 and private assets 9443 Tailscale routes')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--start', action='store_true', help='Restart only the two managed services; requires --apply')
@@ -247,7 +255,7 @@ def main():
     github = {'client_id': args.github_client_id, 'owner_id': args.github_owner_id, 'login': args.github_login}
     result = configure(home, repo, Path(sys.executable), args.public_url, args.callback,
         args.github_secret_file, False, github, args.n8n_webhook_url, args.allow_writes, args.mhphotos_url,
-        args.allow_instagram, args.hot_folder, args.allow_file_edits, args.allow_publish)
+        args.allow_instagram, args.hot_folder, args.allow_file_edits, args.allow_publish, args.bridge_timeout)
     commands = []
     if args.configure_routing:
         from urllib.parse import urlsplit
@@ -258,7 +266,7 @@ def main():
     if args.apply:
         configure(home, repo, Path(sys.executable), args.public_url, args.callback, args.github_secret_file, True, github,
             args.n8n_webhook_url, args.allow_writes, args.mhphotos_url, args.allow_instagram, args.hot_folder,
-            args.allow_file_edits, args.allow_publish)
+            args.allow_file_edits, args.allow_publish, args.bridge_timeout)
         result["apply"] = True
     print(json.dumps(result, indent=2))
     if args.start:
